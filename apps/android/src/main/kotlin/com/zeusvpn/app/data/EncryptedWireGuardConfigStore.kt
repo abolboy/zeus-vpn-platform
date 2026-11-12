@@ -48,15 +48,13 @@ class EncryptedWireGuardConfigStore(context: android.content.Context) {
         }
     }
 
-    fun read(): String? {
+    fun read(): ByteArray? {
         if (!file.baseFile.isFile) return null
         val payload = file.openRead().use { it.readBytes() }
-        val plaintext = decrypt(payload)
-        payload.fill(0)
         return try {
-            String(plaintext, Charsets.UTF_8)
+            decrypt(payload)
         } finally {
-            plaintext.fill(0)
+            payload.fill(0)
         }
     }
 

@@ -3,9 +3,7 @@ package com.zeusvpn.app.vpn
 import android.content.Context
 import com.wireguard.android.backend.GoBackend
 import com.wireguard.android.backend.Tunnel
-import com.wireguard.config.Config
 import com.zeusvpn.app.data.EncryptedWireGuardConfigStore
-import java.io.ByteArrayInputStream
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -20,7 +18,6 @@ enum class WireGuardState {
     DISCONNECTING,
 }
 
-class InvalidWireGuardProfileException : Exception()
 class MissingWireGuardProfileException : Exception()
 
 /**
@@ -57,20 +54,24 @@ class WireGuardEngine private constructor(context: Context) {
 
     suspend fun saveProfile(profileText: String) = withContext(Dispatchers.IO) {
         operationMutex.withLock {
-            if (mutableState.value == WireGuardState.ENGINE_UP) {
-                throw IllegalStateException("Disconnect before replacing the profile")
+            if (mutableState.value != WireGuardState.DISCONNECTED) {
+                throw IllegalStateException("Stop the tunnel before replacing the profile")
             }
-            val config = parseAndValidate(profileText)
-            // Parsing happens before writing. The private key never enters logs or DataStore.
-            if (config.getPeers().isEmpty()) throw InvalidWireGuardProfileException()
+            WireGuardProfileValidator.parse(profileText)
+            // The plaintext is validated before it is encrypted and written.
             profileStore.save(profileText)
         }
     }
 
     suspend fun connect() = withContext(Dispatchers.IO) {
         operationMutex.withLock {
-            val profileText = profileStore.read() ?: throw MissingWireGuardProfileException()
-            val config = parseAndValidate(profileText)
+            val profileBytes = profileStore.read() ?: throw MissingWireGuardProfileException()
+            val config = try {
+                WireGuardProfileValidator.parse(profileBytes)
+            } finally {
+                profileBytes.fill(0)
+            }
+
             mutableState.value = WireGuardState.CONNECTING
             try {
                 val stateAfterConnect = backend.setState(tunnel, Tunnel.State.UP, config)
@@ -90,9 +91,14 @@ class WireGuardEngine private constructor(context: Context) {
             if (mutableState.value == WireGuardState.ENGINE_UP) {
                 mutableState.value = WireGuardState.DISCONNECTING
                 try {
-                    backend.setState(tunnel, Tunnel.State.DOWN, null)
-                } finally {
+                    val finalState = backend.setState(tunnel, Tunnel.State.DOWN, null)
+                    if (finalState != Tunnel.State.DOWN) {
+                        throw IllegalStateException("WireGuard backend did not enter DOWN state")
+                    }
                     mutableState.value = WireGuardState.DISCONNECTED
+                } catch (error: Exception) {
+                    mutableState.value = WireGuardState.ENGINE_UP
+                    throw error
                 }
             } else {
                 mutableState.value = WireGuardState.DISCONNECTED
@@ -104,37 +110,25 @@ class WireGuardEngine private constructor(context: Context) {
         operationMutex.withLock {
             if (mutableState.value == WireGuardState.ENGINE_UP) {
                 mutableState.value = WireGuardState.DISCONNECTING
-                backend.setState(tunnel, Tunnel.State.DOWN, null)
-                mutableState.value = WireGuardState.DISCONNECTED
+                try {
+                    val finalState = backend.setState(tunnel, Tunnel.State.DOWN, null)
+                    if (finalState != Tunnel.State.DOWN) {
+                        throw IllegalStateException("WireGuard backend did not enter DOWN state")
+                    }
+                    mutableState.value = WireGuardState.DISCONNECTED
+                } catch (error: Exception) {
+                    mutableState.value = WireGuardState.ENGINE_UP
+                    throw error
+                }
+            } else if (mutableState.value != WireGuardState.DISCONNECTED) {
+                throw IllegalStateException("Wait for the tunnel operation to finish")
             }
             profileStore.clear()
         }
     }
 
-    private fun parseAndValidate(text: String): Config {
-        if (text.isBlank() || text.toByteArray(Charsets.UTF_8).size > MAX_PROFILE_BYTES) {
-            throw InvalidWireGuardProfileException()
-        }
-        return try {
-            val config = Config.parse(ByteArrayInputStream(text.toByteArray(Charsets.UTF_8)))
-            val interfaceSection = config.getInterface()
-            val peers = config.getPeers()
-            val hasEndpoint = peers.any { it.getEndpoint().isPresent }
-            val hasAllowedIps = peers.any { it.getAllowedIps().isNotEmpty() }
-            if (interfaceSection.getAddresses().isEmpty() || peers.isEmpty() || !hasEndpoint || !hasAllowedIps) {
-                throw InvalidWireGuardProfileException()
-            }
-            config
-        } catch (_: InvalidWireGuardProfileException) {
-            throw InvalidWireGuardProfileException()
-        } catch (_: Exception) {
-            throw InvalidWireGuardProfileException()
-        }
-    }
-
     companion object {
         private const val TUNNEL_NAME = "zeus-vpn"
-        private const val MAX_PROFILE_BYTES = 64 * 1024
 
         @Volatile
         private var instance: WireGuardEngine? = null

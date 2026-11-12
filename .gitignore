@@ -1,0 +1,32 @@
+# Secrets and local configuration
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+*.keystore
+*.jks
+secrets/
+private/
+config/production*
+
+# Build outputs
+.gradle/
+**/build/
+**/out/
+dist/
+target/
+coverage/
+*.apk
+*.aab
+*.class
+*.log
+
+# IDE and OS
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+local.properties

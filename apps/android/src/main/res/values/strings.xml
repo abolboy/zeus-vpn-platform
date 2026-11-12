@@ -1,0 +1,25 @@
+<resources>
+    <string name="app_name">ZEUS VPN</string>
+    <string name="brand_subtitle">SECURE NETWORK PLATFORM</string>
+    <string name="network_title">Device network status</string>
+    <string name="online">Online</string>
+    <string name="online_detail">Internet access is validated</string>
+    <string name="limited">Limited</string>
+    <string name="limited_detail">A network exists, but internet access is not verified</string>
+    <string name="offline">Offline</string>
+    <string name="offline_detail">No internet-capable network is available</string>
+    <string name="checking">Checking</string>
+    <string name="checking_detail">Reading device network state</string>
+    <string name="network_note">This is device internet state, not VPN tunnel state.</string>
+    <string name="engine_title">VPN ENGINE</string>
+    <string name="engine_heading">Connection engine foundation</string>
+    <string name="engine_body">The Android control interface is being prepared. Tunnel activation will be enabled only after the VPN engine and end-to-end tests are ready.</string>
+    <string name="engine_status">VPN tunnel is not implemented yet</string>
+    <string name="offline_title">Offline-ready foundation</string>
+    <string name="offline_body">The app shell and local preferences remain available without internet. Saved connection profiles will be cached in protected local storage in a later milestone.</string>
+    <string name="settings_title">Local preferences</string>
+    <string name="autoreconnect">Remember auto-reconnect preference</string>
+    <string name="autoreconnect_note">Saved on this device; it will control the engine after that feature is implemented.</string>
+    <string name="phase_footer">PHASE 1 · FOUNDATION</string>
+    <string name="disclaimer">This preview does not establish a VPN connection.</string>
+</resources>

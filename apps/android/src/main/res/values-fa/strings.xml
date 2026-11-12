@@ -1,0 +1,25 @@
+<resources>
+    <string name="app_name">زئوس وی‌پی‌ان</string>
+    <string name="brand_subtitle">پلتفرم امن شبکه</string>
+    <string name="network_title">وضعیت شبکه دستگاه</string>
+    <string name="online">متصل</string>
+    <string name="online_detail">دسترسی اینترنت تأیید شده است</string>
+    <string name="limited">محدود</string>
+    <string name="limited_detail">شبکه وجود دارد، اما دسترسی اینترنت تأیید نشده است</string>
+    <string name="offline">آفلاین</string>
+    <string name="offline_detail">شبکه دارای دسترسی اینترنت پیدا نشد</string>
+    <string name="checking">در حال بررسی</string>
+    <string name="checking_detail">وضعیت شبکه دستگاه در حال خواندن است</string>
+    <string name="network_note">این وضعیت اینترنت دستگاه است، نه وضعیت تونل VPN.</string>
+    <string name="engine_title">موتور VPN</string>
+    <string name="engine_heading">زیرساخت موتور اتصال</string>
+    <string name="engine_body">رابط مدیریتی اندروید در حال آماده‌سازی است. اتصال تونل پس از پیاده‌سازی موتور VPN و تست ارتباط واقعی فعال می‌شود.</string>
+    <string name="engine_status">تونل VPN هنوز پیاده‌سازی نشده است</string>
+    <string name="offline_title">پایه آماده برای حالت آفلاین</string>
+    <string name="offline_body">پوسته برنامه و تنظیمات محلی بدون اینترنت هم در دسترس می‌مانند. پروفایل‌های اتصال در مرحله بعد داخل فضای محافظت‌شده دستگاه ذخیره می‌شوند.</string>
+    <string name="settings_title">تنظیمات محلی</string>
+    <string name="autoreconnect">ذخیره ترجیح اتصال مجدد خودکار</string>
+    <string name="autoreconnect_note">روی همین دستگاه ذخیره می‌شود و پس از آماده‌شدن موتور، رفتار اتصال را کنترل می‌کند.</string>
+    <string name="phase_footer">فاز اول · زیرساخت</string>
+    <string name="disclaimer">این پیش‌نمایش هیچ اتصال VPN برقرار نمی‌کند.</string>
+</resources>

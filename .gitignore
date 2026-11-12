@@ -1,4 +1,4 @@
-# Secrets and local configuration
+# Local secrets
 .env
 .env.*
 !.env.example
@@ -10,23 +10,13 @@
 *.jks
 secrets/
 private/
-config/production*
-
-# Build outputs
 .gradle/
 **/build/
-**/out/
-dist/
-target/
-coverage/
+local.properties
 *.apk
 *.aab
-*.class
-*.log
-
-# IDE and OS
+*.hprof
 .idea/
 .vscode/
 .DS_Store
 Thumbs.db
-local.properties

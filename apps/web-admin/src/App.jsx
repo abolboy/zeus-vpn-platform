@@ -30,7 +30,14 @@ function Status({ value }) {
 }
 
 export default function App() {
-  const [theme, setTheme] = useState('core')
+  const [theme, setTheme] = useState(() => {
+    try {
+      const saved = window.localStorage.getItem('zeus.theme')
+      return themes.some(item => item.id === saved) ? saved : 'core'
+    } catch {
+      return 'core'
+    }
+  })
   const [page, setPage] = useState('overview')
   const [servers, setServers] = useState(initialServers)
   const [users, setUsers] = useState(initialUsers)
@@ -40,7 +47,9 @@ export default function App() {
   const [serverName, setServerName] = useState('')
   const [serverRegion, setServerRegion] = useState('')
   const [autoRefresh, setAutoRefresh] = useState(true)
-  const [compact, setCompact] = useState(false)
+  const [compact, setCompact] = useState(() => {
+    try { return window.localStorage.getItem('zeus.compact') === 'true' } catch { return false }
+  })
   const [apiStatus, setApiStatus] = useState('checking')
   const [apiMessage, setApiMessage] = useState('در حال بررسی اتصال کنترل‌پلین')
 
@@ -62,7 +71,16 @@ export default function App() {
     })
     return () => { active = false }
   }, [])
+  const todayLabel = useMemo(() => new Intl.DateTimeFormat('fa-IR', { dateStyle: 'full' }).format(new Date()), [])
   const filteredUsers = useMemo(() => users.filter(u => (u.name + u.id).toLowerCase().includes(query.toLowerCase())), [users, query])
+
+  useEffect(() => {
+    try { window.localStorage.setItem('zeus.theme', theme) } catch { /* Browser storage is optional. */ }
+  }, [theme])
+
+  useEffect(() => {
+    try { window.localStorage.setItem('zeus.compact', String(compact)) } catch { /* Browser storage is optional. */ }
+  }, [compact])
   const activePage = nav.find(n => n[0] === page)?.[2] ?? 'نمای کلی'
   const toast = (message) => { setNotice(message); window.setTimeout(() => setNotice(''), 2600) }
 
@@ -94,6 +112,27 @@ export default function App() {
       <section className="page-head"><div><div className="eyebrow"><span /> SYSTEM OVERVIEW / ۰۱</div><h1>{page === 'overview' ? 'مرکز فرماندهی' : activePage}<span className="heading-glow">.</span></h1><p>{page === 'overview' ? 'نمای زنده از زیرساخت، کاربران و سلامت شبکه ZEUS' : 'مدیریت و پایش بخش ' + activePage + ' در پنل ZEUS'}</p></div><div className="head-actions"><button className="button secondary" onClick={checkControlPlane}>↻ بررسی API</button><button className="button primary" onClick={() => { setPage('servers'); setShowServerForm(true) }}>＋ افزودن سرور</button></div></section>
 
       <section className="theme-strip glass"><div><b>ظاهر پنل را انتخاب کن</b><small>سه پوسته نئونی با تغییر زنده و بدون بارگذاری مجدد</small></div><div className="theme-options">{themes.map(t => <button key={t.id} onClick={() => setTheme(t.id)} className={theme === t.id ? 'theme-choice active' : 'theme-choice'}><i style={{ background: t.color, boxShadow: `0 0 14px ${t.color}` }} /><span><b>{t.name}</b><small>{t.sub}</small></span>{theme === t.id && <strong>✓</strong>}</button>)}</div></section>
+
+      {page === 'overview' && <section className="hero-panel glass">
+        <div className="hero-copy">
+          <div className="hero-kicker"><span /> ZEUS / SYSTEM CONTROL <b>PREVIEW</b></div>
+          <h2>زیرساختت، زیر کنترل تو.</h2>
+          <p>نمایی متمرکز از وضعیت پلتفرم، همراه با ابزارهای مدیریت و پایش در یک فضای یکپارچه.</p>
+          <div className="hero-meta">
+            <span className={`health-chip api-${apiStatus}`}><i /> {apiStatus === 'online' ? 'کنترل‌پلین پاسخ‌گوست' : apiStatus === 'offline' ? 'ارتباط با کنترل‌پلین برقرار نیست' : apiStatus === 'checking' ? 'در حال بررسی اتصال' : 'اتصال API پیکربندی نشده'}</span>
+            <span className="hero-date">{todayLabel}</span>
+          </div>
+        </div>
+        <div className="hero-art" aria-hidden="true">
+          <div className="hero-orbit orbit-outer" />
+          <div className="hero-orbit orbit-inner" />
+          <div className="hero-core"><span>Z</span><i /></div>
+          <div className="hero-satellite satellite-one" />
+          <div className="hero-satellite satellite-two" />
+          <div className="hero-satellite satellite-three" />
+        </div>
+        <div className="hero-index"><span>01</span><small>CONTROL<br/>LAYER</small></div>
+      </section>}
 
       {page === 'overview' && <><section className="metrics-grid"><Metric icon="⌘" label="سرورهای آنلاین" value="۰۲ / ۰۳" note="+۱ در این هفته" /><Metric icon="♙" label="کاربران فعال" value="۲۱۴" note="نمونه نمایشی" tone="purple" /><Metric icon="⇅" label="ترافیک مصرفی" value="۱.۲۸ TB" note="۳۰ روز اخیر" tone="blue" /><Metric icon="◷" label="میانگین تأخیر" value="۹۸ ms" note="از نودهای نمونه" tone="pink" /></section>
       <section className="content-grid"><article className="panel glass server-panel"><div className="panel-heading"><div><h2>وضعیت سرورها</h2><p>پایش سلامت نودهای ثبت‌شده</p></div><button className="text-link" onClick={() => setPage('servers')}>همه سرورها ←</button></div><div className="server-list">{servers.slice(0,3).map(server => <div className="server-row" key={server.id}><div className="server-symbol">⌘</div><div className="server-info"><b>{server.name}</b><small>{server.region} · {server.protocol}</small></div><div className="server-load"><div className="load-label"><span>بار سرور</span><b>{server.status === 'pending' ? '—' : server.load + '%'}</b></div><div className="progress"><i style={{ width: server.load + '%' }} /></div></div><Status value={server.status} /></div>)}</div></article>

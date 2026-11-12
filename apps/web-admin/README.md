@@ -26,7 +26,8 @@ npm run preview
 ## Current scope
 
 - Dashboard, sample server inventory, user list/search, subscription plan cards, activity feed and UI settings.
-- Three live themes: Neon Core, Cyberpunk and Aurora.
+- Three live themes: Neon Core, Cyberpunk and Aurora; selected theme and compact layout are saved locally in the browser.
+- Premium operations-style dashboard hero, stronger visual hierarchy, refined cards/tables, keyboard focus states and reduced-motion support.
 - Responsive desktop/mobile layouts.
 - Sample data only; UI mutations remain local.
 - Optional read-only Control Plane health check via `GET /healthz`.

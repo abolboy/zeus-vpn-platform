@@ -22,4 +22,9 @@
     <string name="autoreconnect_note">روی همین دستگاه ذخیره می‌شود و پس از آماده‌شدن موتور، رفتار اتصال را کنترل می‌کند.</string>
     <string name="phase_footer">فاز اول · زیرساخت</string>
     <string name="disclaimer">این پیش‌نمایش هیچ اتصال VPN برقرار نمی‌کند.</string>
+    <string name="hero_kicker">ZEUS • مرکز فرماندهی</string>
+    <string name="hero_heading">امنیت شبکه، با کنترل دقیق‌تر</string>
+    <string name="hero_description">یک نقطه شروع یکپارچه برای مدیریت اتصال و آماده‌سازی زیرساخت ZEUS.</string>
+    <string name="preview_badge">پیش‌نمایش فاز زیرساخت</string>
+    <string name="foundation_label">در حال آماده‌سازی</string>
 </resources>

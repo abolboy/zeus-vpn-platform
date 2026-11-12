@@ -22,4 +22,9 @@
     <string name="autoreconnect_note">Saved on this device; it will control the engine after that feature is implemented.</string>
     <string name="phase_footer">PHASE 1 · FOUNDATION</string>
     <string name="disclaimer">This preview does not establish a VPN connection.</string>
+    <string name="hero_kicker">ZEUS • CONTROL LAYER</string>
+    <string name="hero_heading">Network control, built with clarity</string>
+    <string name="hero_description">A unified starting point for connection controls and the ZEUS platform foundation.</string>
+    <string name="preview_badge">FOUNDATION PREVIEW</string>
+    <string name="foundation_label">Preparing</string>
 </resources>

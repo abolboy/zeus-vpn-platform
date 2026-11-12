@@ -52,3 +52,10 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
       - name: Build and test
         run: ./gradlew --no-daemon :apps:android:assembleDebug :apps:android:testDebugUnitTest
+      - name: Upload debug APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: zeus-vpn-debug-apk
+          path: apps/android/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
+          retention-days: 7

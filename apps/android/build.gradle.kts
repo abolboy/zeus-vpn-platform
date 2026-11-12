@@ -28,7 +28,8 @@ android {
     packaging { resources { excludes += "/META-INF/{AL2.0,LGPL2.1}" } }
 }
 dependencies {
-    val composeBom = platform("androidx.compose:compose-bom:2026.09.00")
+    // Stable Compose 1.11.4 line, compatible with the stable Android API 36 build target.
+    val composeBom = platform("androidx.compose:compose-bom:2026.06.01")
     implementation(composeBom)
     androidTestImplementation(composeBom)
     implementation("androidx.activity:activity-compose:1.13.0")

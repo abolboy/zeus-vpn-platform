@@ -1,4 +1,5 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
+import { getControlPlaneHealth } from './api.js'
 
 const initialServers = [
   { id: 1, name: 'ZEUS • Frankfurt', region: 'آلمان', ip: '185.220.101.14', protocol: 'WireGuard', load: 38, latency: 82, status: 'online', users: 128 },
@@ -40,6 +41,27 @@ export default function App() {
   const [serverRegion, setServerRegion] = useState('')
   const [autoRefresh, setAutoRefresh] = useState(true)
   const [compact, setCompact] = useState(false)
+  const [apiStatus, setApiStatus] = useState('checking')
+  const [apiMessage, setApiMessage] = useState('در حال بررسی اتصال کنترل‌پلین')
+
+  async function checkControlPlane() {
+    setApiStatus('checking')
+    setApiMessage('در حال بررسی اتصال کنترل‌پلین')
+    const result = await getControlPlaneHealth()
+    setApiStatus(result.state)
+    setApiMessage(result.message)
+    if (result.state === 'online') toast('ارتباط با Control Plane برقرار است؛ فقط سلامت سرویس تأیید شد.')
+    else if (result.state === 'offline') toast('Control Plane پاسخ معتبر نداد.')
+    else toast('نشانی API تنظیم نشده است.')
+  }
+
+  useEffect(() => {
+    let active = true
+    getControlPlaneHealth().then(result => {
+      if (active) { setApiStatus(result.state); setApiMessage(result.message) }
+    })
+    return () => { active = false }
+  }, [])
   const filteredUsers = useMemo(() => users.filter(u => (u.name + u.id).toLowerCase().includes(query.toLowerCase())), [users, query])
   const activePage = nav.find(n => n[0] === page)?.[2] ?? 'نمای کلی'
   const toast = (message) => { setNotice(message); window.setTimeout(() => setNotice(''), 2600) }
@@ -67,9 +89,9 @@ export default function App() {
     </aside>
 
     <main className="main">
-      <header className="topbar"><div className="crumb">ZEUS <span>/</span> {activePage}</div><div className="top-actions"><span className="live-indicator"><i /> محیط نمایشی</span><button className="icon-btn" aria-label="اعلان‌ها" onClick={() => setPage('activity')}>♧<b className="notification-dot" /></button><button className="language-btn" onClick={() => toast('رابط فارسی فعال است؛ زبان انگلیسی در برنامه توسعه قرار دارد.')}>فا <span>⌄</span></button></div></header>
+      <header className="topbar"><div className="crumb">ZEUS <span>/</span> {activePage}</div><div className="top-actions"><span className={`live-indicator api-${apiStatus}`}><i /> {apiStatus === "online" ? "Control Plane متصل" : apiStatus === "offline" ? "Control Plane قطع" : apiStatus === "checking" ? "در حال بررسی API" : "API تنظیم نشده"}</span><button className="icon-btn" aria-label="اعلان‌ها" onClick={() => setPage('activity')}>♧<b className="notification-dot" /></button><button className="language-btn" onClick={() => toast('رابط فارسی فعال است؛ زبان انگلیسی در برنامه توسعه قرار دارد.')}>فا <span>⌄</span></button></div></header>
 
-      <section className="page-head"><div><div className="eyebrow"><span /> SYSTEM OVERVIEW / ۰۱</div><h1>{page === 'overview' ? 'مرکز فرماندهی' : activePage}<span className="heading-glow">.</span></h1><p>{page === 'overview' ? 'نمای زنده از زیرساخت، کاربران و سلامت شبکه ZEUS' : 'مدیریت و پایش بخش ' + activePage + ' در پنل ZEUS'}</p></div><div className="head-actions"><button className="button secondary" onClick={() => toast('داده‌های این نسخه نمونه هستند و از سرور دریافت نمی‌شوند.')}>↻ بروزرسانی</button><button className="button primary" onClick={() => { setPage('servers'); setShowServerForm(true) }}>＋ افزودن سرور</button></div></section>
+      <section className="page-head"><div><div className="eyebrow"><span /> SYSTEM OVERVIEW / ۰۱</div><h1>{page === 'overview' ? 'مرکز فرماندهی' : activePage}<span className="heading-glow">.</span></h1><p>{page === 'overview' ? 'نمای زنده از زیرساخت، کاربران و سلامت شبکه ZEUS' : 'مدیریت و پایش بخش ' + activePage + ' در پنل ZEUS'}</p></div><div className="head-actions"><button className="button secondary" onClick={checkControlPlane}>↻ بررسی API</button><button className="button primary" onClick={() => { setPage('servers'); setShowServerForm(true) }}>＋ افزودن سرور</button></div></section>
 
       <section className="theme-strip glass"><div><b>ظاهر پنل را انتخاب کن</b><small>سه پوسته نئونی با تغییر زنده و بدون بارگذاری مجدد</small></div><div className="theme-options">{themes.map(t => <button key={t.id} onClick={() => setTheme(t.id)} className={theme === t.id ? 'theme-choice active' : 'theme-choice'}><i style={{ background: t.color, boxShadow: `0 0 14px ${t.color}` }} /><span><b>{t.name}</b><small>{t.sub}</small></span>{theme === t.id && <strong>✓</strong>}</button>)}</div></section>
 
@@ -86,7 +108,7 @@ export default function App() {
 
       {page === 'activity' && <section className="panel glass full-panel"><div className="panel-heading"><div><h2>گزارش رویدادها</h2><p>رخدادهای نمونه؛ لاگ واقعی هنوز به پنل متصل نیست</p></div><span className="live-indicator"><i/> DEMO LOG</span></div><div className="activity-list large"><div><i className="activity-icon green">✓</i><span><b>Health check موفق برای Frankfurt</b><small>۲۰۲۶/۱۱/۱۳ · ۰۹:۴۲ · سیستم پایش</small></span><Status value="online"/></div><div><i className="activity-icon purple">♙</i><span><b>ورود مدیر نمونه</b><small>۲۰۲۶/۱۱/۱۳ · ۰۹:۲۱ · پنل محلی</small></span><Status value="active"/></div><div><i className="activity-icon orange">!</i><span><b>نود Warsaw هنوز پیکربندی نشده</b><small>۲۰۲۶/۱۱/۱۳ · ۰۸:۵۵ · زیرساخت</small></span><Status value="pending"/></div></div></section>}
 
-      {page === 'settings' && <section className="panel glass full-panel settings-panel"><div className="panel-heading"><div><h2>تنظیمات پنل</h2><p>ترجیحات رابط کاربری و رفتار نمایشی</p></div></div><div className="setting-row"><span><b>بروزرسانی خودکار رابط</b><small>در نسخه متصل، داده‌ها به‌صورت دوره‌ای از API خوانده می‌شوند.</small></span><button className={autoRefresh?'switch on':'switch'} onClick={()=>setAutoRefresh(v=>!v)} aria-label="تغییر بروزرسانی خودکار"><i/></button></div><div className="setting-row"><span><b>حالت فشرده</b><small>کاهش فاصله‌ها برای نمایش اطلاعات بیشتر.</small></span><button className={compact?'switch on':'switch'} onClick={()=>setCompact(v=>!v)} aria-label="تغییر حالت فشرده"><i/></button></div><div className="setting-row"><span><b>پوسته فعلی</b><small>{themes.find(t=>t.id===theme).name}</small></span><button className="button secondary" onClick={()=>setTheme(themes[(themes.findIndex(t=>t.id===theme)+1)%themes.length].id)}>تغییر پوسته</button></div><div className="notice-box">امنیت: این نسخه به API واقعی، احراز هویت یا داده تولیدی متصل نیست. پیش از اتصال عمومی باید ورود امن، نقش‌ها، CSRF/CORS، اعتبارسنجی ورودی و ثبت ممیزی پیاده‌سازی شوند.</div></section>}
+      {page === 'settings' && <section className="panel glass full-panel settings-panel"><div className="panel-heading"><div><h2>تنظیمات پنل</h2><p>ترجیحات رابط کاربری و رفتار نمایشی</p></div></div><div className="setting-row"><span><b>بروزرسانی خودکار رابط</b><small>در نسخه متصل، داده‌ها به‌صورت دوره‌ای از API خوانده می‌شوند.</small></span><button className={autoRefresh?'switch on':'switch'} onClick={()=>setAutoRefresh(v=>!v)} aria-label="تغییر بروزرسانی خودکار"><i/></button></div><div className="setting-row"><span><b>وضعیت Control Plane</b><small>{apiMessage} — این بررسی فقط GET /healthz را می‌خواند و به معنی اتصال داده‌های مدیریتی نیست.</small></span><button className="button secondary" onClick={checkControlPlane}>بررسی دوباره</button></div><div className="setting-row"><span><b>حالت فشرده</b><small>کاهش فاصله‌ها برای نمایش اطلاعات بیشتر.</small></span><button className={compact?'switch on':'switch'} onClick={()=>setCompact(v=>!v)} aria-label="تغییر حالت فشرده"><i/></button></div><div className="setting-row"><span><b>پوسته فعلی</b><small>{themes.find(t=>t.id===theme).name}</small></span><button className="button secondary" onClick={()=>setTheme(themes[(themes.findIndex(t=>t.id===theme)+1)%themes.length].id)}>تغییر پوسته</button></div><div className="notice-box">امنیت: این نسخه به API واقعی، احراز هویت یا داده تولیدی متصل نیست. پیش از اتصال عمومی باید ورود امن، نقش‌ها، CSRF/CORS، اعتبارسنجی ورودی و ثبت ممیزی پیاده‌سازی شوند.</div></section>}
 
       <footer className="footer"><span>© ۲۰۲۶ ZEUS VPN PLATFORM</span><span>ساخته‌شده برای کنترل دقیق‌تر <i>✦</i></span><span className="footer-version">FRONTEND PREVIEW 0.1.0</span></footer>
     </main>

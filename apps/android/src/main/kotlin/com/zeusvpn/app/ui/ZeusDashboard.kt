@@ -22,6 +22,14 @@ import com.zeusvpn.app.R
 import com.zeusvpn.app.data.SettingsRepository
 import com.zeusvpn.app.network.NetworkCondition
 import com.zeusvpn.app.network.NetworkMonitor
+import com.zeusvpn.app.vpn.InvalidWireGuardProfileException
+import com.zeusvpn.app.vpn.MissingWireGuardProfileException
+import com.zeusvpn.app.vpn.WireGuardEngine
+import com.zeusvpn.app.vpn.WireGuardState
+import android.app.Activity
+import android.net.VpnService
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
 
@@ -37,12 +45,104 @@ fun ZeusDashboard() {
     val context = LocalContext.current.applicationContext
     val monitor = remember(context) { NetworkMonitor(context) }
     val settings = remember(context) { SettingsRepository(context) }
+    val wireGuard = remember(context) { WireGuardEngine.getInstance(context) }
+    val wireGuardState by wireGuard.state.collectAsState()
+    var profileSaved by remember { mutableStateOf(false) }
+    var profileDraft by remember { mutableStateOf("") }
+    var wireGuardMessage by remember { mutableStateOf("") }
     val scope = rememberCoroutineScope()
     val network by produceState(NetworkCondition.UNKNOWN, monitor) {
         monitor.observe().collect { value = it }
     }
     val autoReconnect by produceState(true, settings) {
         settings.autoReconnectEnabled.collect { value = it }
+    }
+
+    val connectingMessage = stringResource(R.string.wg_connecting)
+    val connectedMessage = stringResource(R.string.wg_engine_started)
+    val connectionFailedMessage = stringResource(R.string.wg_connect_failed)
+    val permissionDeniedMessage = stringResource(R.string.wg_permission_denied)
+    val profileSavedMessage = stringResource(R.string.wg_profile_saved_message)
+    val invalidProfileMessage = stringResource(R.string.wg_invalid_profile)
+    val missingProfileMessage = stringResource(R.string.wg_missing_profile)
+    val disconnectedMessage = stringResource(R.string.wg_disconnected_message)
+    val profileDeletedMessage = stringResource(R.string.wg_profile_deleted)
+
+    LaunchedEffect(wireGuard) {
+        profileSaved = runCatching { wireGuard.hasProfile() }.getOrDefault(false)
+    }
+
+    val connectWireGuard: () -> Unit = {
+        scope.launch {
+            wireGuardMessage = connectingMessage
+            try {
+                wireGuard.connect()
+                wireGuardMessage = connectedMessage
+            } catch (_: MissingWireGuardProfileException) {
+                profileSaved = false
+                wireGuardMessage = missingProfileMessage
+            } catch (_: Exception) {
+                wireGuardMessage = connectionFailedMessage
+            }
+        }
+    }
+
+    val vpnPermissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.StartActivityForResult(),
+    ) { result ->
+        if (result.resultCode == Activity.RESULT_OK) {
+            connectWireGuard()
+        } else {
+            wireGuardMessage = permissionDeniedMessage
+        }
+    }
+
+    val requestWireGuardConnection: () -> Unit = {
+        val permissionIntent = VpnService.prepare(context)
+        if (permissionIntent == null) {
+            connectWireGuard()
+        } else {
+            vpnPermissionLauncher.launch(permissionIntent)
+        }
+    }
+
+    val saveWireGuardProfile: () -> Unit = {
+        scope.launch {
+            try {
+                wireGuard.saveProfile(profileDraft)
+                profileSaved = true
+                profileDraft = ""
+                wireGuardMessage = profileSavedMessage
+            } catch (_: InvalidWireGuardProfileException) {
+                wireGuardMessage = invalidProfileMessage
+            } catch (_: Exception) {
+                wireGuardMessage = invalidProfileMessage
+            }
+        }
+    }
+
+    val disconnectWireGuard: () -> Unit = {
+        scope.launch {
+            try {
+                wireGuard.disconnect()
+                wireGuardMessage = disconnectedMessage
+            } catch (_: Exception) {
+                wireGuardMessage = connectionFailedMessage
+            }
+        }
+    }
+
+    val forgetWireGuardProfile: () -> Unit = {
+        scope.launch {
+            try {
+                wireGuard.forgetProfile()
+                profileSaved = false
+                profileDraft = ""
+                wireGuardMessage = profileDeletedMessage
+            } catch (_: Exception) {
+                wireGuardMessage = connectionFailedMessage
+            }
+        }
     }
 
     Box(
@@ -75,6 +175,17 @@ fun ZeusDashboard() {
             HeroCard()
             NetworkCard(network)
             EngineCard()
+            WireGuardCard(
+                state = wireGuardState,
+                profileSaved = profileSaved,
+                profileDraft = profileDraft,
+                message = wireGuardMessage,
+                onProfileDraftChange = { profileDraft = it },
+                onSaveProfile = saveWireGuardProfile,
+                onConnect = requestWireGuardConnection,
+                onDisconnect = disconnectWireGuard,
+                onForgetProfile = forgetWireGuardProfile,
+            )
             OfflineCard()
             SettingsCard(
                 enabled = autoReconnect,
@@ -218,6 +329,133 @@ private fun EngineCard() {
         Text(stringResource(R.string.engine_body), color = SoftText,
             style = MaterialTheme.typography.bodyMedium, lineHeight = 22.sp)
         StatusPill(Color(0xFFFFC46B), stringResource(R.string.engine_status))
+    }
+}
+
+@Composable
+private fun WireGuardCard(
+    state: WireGuardState,
+    profileSaved: Boolean,
+    profileDraft: String,
+    message: String,
+    onProfileDraftChange: (String) -> Unit,
+    onSaveProfile: () -> Unit,
+    onConnect: () -> Unit,
+    onDisconnect: () -> Unit,
+    onForgetProfile: () -> Unit,
+) {
+    val (statusLabel, statusColor) = when (state) {
+        WireGuardState.DISCONNECTED -> stringResource(R.string.wg_disconnected) to SoftText
+        WireGuardState.CONNECTING -> stringResource(R.string.wg_connecting) to Color(0xFFFFC46B)
+        WireGuardState.ENGINE_UP -> stringResource(R.string.wg_engine_up) to Mint
+        WireGuardState.DISCONNECTING -> stringResource(R.string.wg_disconnecting) to Color(0xFFFFC46B)
+    }
+
+    PanelCard {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Text(
+                    stringResource(R.string.wg_title),
+                    color = Mint,
+                    style = MaterialTheme.typography.labelMedium,
+                    letterSpacing = 1.0.sp,
+                )
+                Text(
+                    stringResource(R.string.wg_subtitle),
+                    color = Color.White,
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold,
+                )
+            }
+            StatusPill(statusColor, statusLabel)
+        }
+
+        Text(
+            if (profileSaved) stringResource(R.string.wg_profile_is_saved)
+            else stringResource(R.string.wg_profile_required),
+            color = SoftText,
+            style = MaterialTheme.typography.bodySmall,
+            lineHeight = 20.sp,
+        )
+
+        OutlinedTextField(
+            value = profileDraft,
+            onValueChange = onProfileDraftChange,
+            modifier = Modifier.fillMaxWidth(),
+            label = { Text(stringResource(R.string.wg_profile_label)) },
+            placeholder = { Text(stringResource(R.string.wg_profile_placeholder)) },
+            minLines = 6,
+            maxLines = 10,
+            textStyle = MaterialTheme.typography.bodySmall,
+        )
+
+        Text(
+            stringResource(R.string.wg_profile_security_note),
+            color = SoftText,
+            style = MaterialTheme.typography.bodySmall,
+            lineHeight = 19.sp,
+        )
+
+        Row(
+            Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(9.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Button(
+                onClick = onSaveProfile,
+                enabled = profileDraft.isNotBlank() && state != WireGuardState.ENGINE_UP,
+                modifier = Modifier.weight(1f),
+                colors = ButtonDefaults.buttonColors(containerColor = Mint, contentColor = Ink),
+            ) {
+                Text(
+                    if (profileSaved) stringResource(R.string.wg_replace_profile)
+                    else stringResource(R.string.wg_save_profile),
+                    fontWeight = FontWeight.SemiBold,
+                )
+            }
+            OutlinedButton(
+                onClick = if (state == WireGuardState.ENGINE_UP) onDisconnect else onConnect,
+                enabled = when (state) {
+                    WireGuardState.ENGINE_UP -> true
+                    WireGuardState.CONNECTING, WireGuardState.DISCONNECTING -> false
+                    WireGuardState.DISCONNECTED -> profileSaved
+                },
+                modifier = Modifier.weight(1f),
+                border = BorderStroke(1.dp, statusColor.copy(alpha = 0.55f)),
+            ) {
+                Text(
+                    if (state == WireGuardState.ENGINE_UP) stringResource(R.string.wg_disconnect)
+                    else stringResource(R.string.wg_connect),
+                    color = Color.White,
+                )
+            }
+        }
+
+        if (profileSaved) {
+            TextButton(
+                onClick = onForgetProfile,
+                enabled = state == WireGuardState.DISCONNECTED,
+                modifier = Modifier.align(Alignment.End),
+            ) {
+                Text(stringResource(R.string.wg_delete_profile), color = Color(0xFFFF9BA8))
+            }
+        }
+
+        if (message.isNotBlank()) {
+            Text(
+                message,
+                color = if (state == WireGuardState.ENGINE_UP) Mint else Color(0xFFFFC879),
+                style = MaterialTheme.typography.bodySmall,
+                lineHeight = 19.sp,
+            )
+        }
+
+        Text(
+            stringResource(R.string.wg_handshake_note),
+            color = SoftText,
+            style = MaterialTheme.typography.bodySmall,
+            lineHeight = 19.sp,
+        )
     }
 }
 

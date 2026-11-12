@@ -5,7 +5,7 @@ plugins {
 }
 android {
     namespace = "com.zeusvpn.app"
-    compileSdk = 37
+    compileSdk = 36
     defaultConfig {
         applicationId = "com.zeusvpn.app"
         minSdk = 24

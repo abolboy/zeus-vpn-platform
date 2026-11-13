@@ -1,0 +1,52 @@
+name: ZEUS Database Migration Check
+
+on:
+  push:
+    paths:
+      - "services/control-plane/migrations/**"
+      - ".github/workflows/migration-check.yml"
+  pull_request:
+    paths:
+      - "services/control-plane/migrations/**"
+      - ".github/workflows/migration-check.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  postgres-migration:
+    name: PostgreSQL schema migration
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: zeus_test
+          POSTGRES_PASSWORD: zeus_ci_only_password
+          POSTGRES_DB: zeus_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U zeus_test -d zeus_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install PostgreSQL client
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes postgresql-client
+      - name: Apply migration twice (idempotency check)
+        env:
+          PGPASSWORD: zeus_ci_only_password
+        run: |
+          psql --host 127.0.0.1 --username zeus_test --dbname zeus_test --set ON_ERROR_STOP=1 --file services/control-plane/migrations/0001_initial.sql
+          psql --host 127.0.0.1 --username zeus_test --dbname zeus_test --set ON_ERROR_STOP=1 --file services/control-plane/migrations/0001_initial.sql
+      - name: Verify expected tables and constraints
+        env:
+          PGPASSWORD: zeus_ci_only_password
+        run: |
+          actual="$(psql --host 127.0.0.1 --username zeus_test --dbname zeus_test --tuples-only --no-align --command "SELECT count(*) FROM information_schema.tables WHERE table_schema = 'public' AND table_name IN ('operators', 'operator_sessions', 'vpn_users', 'vpn_nodes', 'vpn_devices', 'wireguard_peers', 'audit_events');")"
+          test "$actual" = "7"
+          echo "Verified $actual ZEUS tables and successful repeat migration."

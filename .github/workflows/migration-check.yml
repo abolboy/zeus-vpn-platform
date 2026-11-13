@@ -42,11 +42,13 @@ jobs:
           PGPASSWORD: zeus_ci_only_password
         run: |
           psql --host 127.0.0.1 --username zeus_test --dbname zeus_test --set ON_ERROR_STOP=1 --single-transaction --file services/control-plane/migrations/0001_initial.sql
-          psql --host 127.0.0.1 --username zeus_test --dbname zeus_test --set ON_ERROR_STOP=1 --file services/control-plane/migrations/0001_initial.sql
+          psql --host 127.0.0.1 --username zeus_test --dbname zeus_test --set ON_ERROR_STOP=1 --single-transaction --file services/control-plane/migrations/0002_idempotency_records.sql
+          psql --host 127.0.0.1 --username zeus_test --dbname zeus_test --set ON_ERROR_STOP=1 --single-transaction --file services/control-plane/migrations/0001_initial.sql
+          psql --host 127.0.0.1 --username zeus_test --dbname zeus_test --set ON_ERROR_STOP=1 --single-transaction --file services/control-plane/migrations/0002_idempotency_records.sql
       - name: Verify expected tables and constraints
         env:
           PGPASSWORD: zeus_ci_only_password
         run: |
-          actual="$(psql --host 127.0.0.1 --username zeus_test --dbname zeus_test --tuples-only --no-align --command "SELECT count(*) FROM information_schema.tables WHERE table_schema = 'public' AND table_name IN ('operators', 'operator_sessions', 'vpn_users', 'vpn_nodes', 'vpn_devices', 'wireguard_peers', 'audit_events');")"
-          test "$actual" = "7"
+          actual="$(psql --host 127.0.0.1 --username zeus_test --dbname zeus_test --tuples-only --no-align --command "SELECT count(*) FROM information_schema.tables WHERE table_schema = 'public' AND table_name IN ('operators', 'operator_sessions', 'vpn_users', 'vpn_nodes', 'vpn_devices', 'wireguard_peers', 'audit_events', 'idempotency_records');")"
+          test "$actual" = "8"
           echo "Verified $actual ZEUS tables and successful repeat migration."

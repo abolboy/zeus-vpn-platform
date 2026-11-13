@@ -2,7 +2,13 @@ package main
 
 import (
 	"context"
+	"errors"
 	"time"
+)
+
+var (
+	ErrIdempotencyConflict = errors.New("idempotency key was already used with a different request")
+	ErrVPNUserNotFound     = errors.New("VPN user not found")
 )
 
 type Operator struct {
@@ -26,6 +32,17 @@ type UserCursor struct {
 	ID        string
 }
 
+type CreateUserInput struct {
+	DisplayName string `json:"display_name"`
+	MaxDevices  int    `json:"max_devices"`
+}
+
+type UpdateUserInput struct {
+	DisplayName *string `json:"display_name,omitempty"`
+	Status      *string `json:"status,omitempty"`
+	MaxDevices  *int    `json:"max_devices,omitempty"`
+}
+
 type ControlStore interface {
 	Ping(context.Context) error
 	FindOperatorByLogin(context.Context, string) (Operator, error)
@@ -36,4 +53,10 @@ type ControlStore interface {
 	RevokeSession(context.Context, []byte) error
 	ListUsers(context.Context, int, *UserCursor) ([]VPNUser, error)
 	RecordAudit(context.Context, *string, *string, string, string, string, *string) error
+}
+
+type UserMutationStore interface {
+	GetVPNUser(context.Context, string) (VPNUser, error)
+	CreateVPNUser(context.Context, string, string, string, []byte, CreateUserInput, string, *string) (VPNUser, bool, error)
+	UpdateVPNUser(context.Context, string, string, string, string, []byte, UpdateUserInput, string, *string) (VPNUser, bool, error)
 }

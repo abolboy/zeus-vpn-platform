@@ -14,6 +14,8 @@ import (
 	"net/http"
 	"regexp"
 	"strconv"
+	"unicode"
+	"unicode/utf8"
 	"strings"
 	"time"
 
@@ -73,7 +75,162 @@ type cursorPayload struct {
 	ID        string    `json:"id"`
 }
 
-var uuidPattern = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$`)
+var uuidPattern = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}package main
+
+import (
+	"context"
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"log/slog"
+	"net"
+	"net/http"
+	"regexp"
+	"strconv"
+	"unicode"
+	"unicode/utf8"
+	"strings"
+	"time"
+
+	"github.com/jackc/pgx/v5"
+)
+
+type API struct {
+	version      string
+	store        ControlStore
+	logger       *slog.Logger
+	limiter      *loginLimiter
+	hashSlots    chan struct{}
+	dummyHash    string
+	allowedOrigin map[string]struct{}
+}
+
+type contextKey string
+
+const operatorContextKey contextKey = "zeus_operator"
+const requestIDContextKey contextKey = "zeus_request_id"
+
+type loginRequest struct {
+	Login    string `json:"login"`
+	Password string `json:"password"`
+}
+
+type sessionResponse struct {
+	AccessToken string         `json:"access_token"`
+	TokenType   string         `json:"token_type"`
+	ExpiresAt   time.Time      `json:"expires_at"`
+	Operator    operatorPublic `json:"operator"`
+}
+
+type operatorPublic struct {
+	ID    string `json:"id"`
+	Login string `json:"login"`
+	Role  string `json:"role"`
+}
+
+type errorEnvelope struct {
+	Error apiError `json:"error"`
+}
+
+type apiError struct {
+	Code      string `json:"code"`
+	Message   string `json:"message"`
+	RequestID string `json:"request_id"`
+}
+
+type userPage struct {
+	Items      []VPNUser `json:"items"`
+	NextCursor string    `json:"next_cursor,omitempty"`
+}
+
+type cursorPayload struct {
+	CreatedAt time.Time `json:"created_at"`
+	ID        string    `json:"id"`
+}
+
+)
+var idempotencyKeyPattern = regexp.MustCompile(`^[A-Za-z0-9._~-]{16,128}package main
+
+import (
+	"context"
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"log/slog"
+	"net"
+	"net/http"
+	"regexp"
+	"strconv"
+	"unicode"
+	"unicode/utf8"
+	"strings"
+	"time"
+
+	"github.com/jackc/pgx/v5"
+)
+
+type API struct {
+	version      string
+	store        ControlStore
+	logger       *slog.Logger
+	limiter      *loginLimiter
+	hashSlots    chan struct{}
+	dummyHash    string
+	allowedOrigin map[string]struct{}
+}
+
+type contextKey string
+
+const operatorContextKey contextKey = "zeus_operator"
+const requestIDContextKey contextKey = "zeus_request_id"
+
+type loginRequest struct {
+	Login    string `json:"login"`
+	Password string `json:"password"`
+}
+
+type sessionResponse struct {
+	AccessToken string         `json:"access_token"`
+	TokenType   string         `json:"token_type"`
+	ExpiresAt   time.Time      `json:"expires_at"`
+	Operator    operatorPublic `json:"operator"`
+}
+
+type operatorPublic struct {
+	ID    string `json:"id"`
+	Login string `json:"login"`
+	Role  string `json:"role"`
+}
+
+type errorEnvelope struct {
+	Error apiError `json:"error"`
+}
+
+type apiError struct {
+	Code      string `json:"code"`
+	Message   string `json:"message"`
+	RequestID string `json:"request_id"`
+}
+
+type userPage struct {
+	Items      []VPNUser `json:"items"`
+	NextCursor string    `json:"next_cursor,omitempty"`
+}
+
+type cursorPayload struct {
+	CreatedAt time.Time `json:"created_at"`
+	ID        string    `json:"id"`
+}
+
+)
 
 func NewAPI(version string, store ControlStore, logger *slog.Logger, allowedOrigins []string) (*API, error) {
 	if logger == nil {
@@ -110,6 +267,9 @@ func (a *API) Handler() http.Handler {
 	mux.HandleFunc("GET /v1/auth/me", a.handleMe)
 	mux.HandleFunc("POST /v1/auth/logout", a.handleLogout)
 	mux.HandleFunc("GET /v1/users", a.handleListUsers)
+	mux.HandleFunc("POST /v1/users", a.handleCreateUser)
+	mux.HandleFunc("GET /v1/users/{userID}", a.handleGetUser)
+	mux.HandleFunc("PATCH /v1/users/{userID}", a.handleUpdateUser)
 	return a.middleware(mux)
 }
 
@@ -141,7 +301,7 @@ func (a *API) middleware(next http.Handler) http.Handler {
 			w.Header().Set("Access-Control-Allow-Origin", origin)
 			w.Header().Set("Vary", "Origin")
 			if r.Method == http.MethodOptions {
-				w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+				w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PATCH, OPTIONS")
 				w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type, Idempotency-Key")
 				w.Header().Set("Access-Control-Max-Age", "600")
 				w.WriteHeader(http.StatusNoContent)
@@ -334,6 +494,194 @@ func (a *API) handleListUsers(w http.ResponseWriter, r *http.Request) {
 		page.NextCursor = base64.RawURLEncoding.EncodeToString(payload)
 	}
 	writeJSON(w, http.StatusOK, page)
+}
+
+
+func (a *API) handleGetUser(w http.ResponseWriter, r *http.Request) {
+	operator, _, ok := a.authenticate(w, r)
+	if !ok {
+		return
+	}
+	switch operator.Role {
+	case "owner", "admin", "support", "read_only":
+	default:
+		writeError(w, http.StatusForbidden, "forbidden", "دسترسی کافی نیست", requestIDFrom(r))
+		return
+	}
+	if !uuidPattern.MatchString(r.PathValue("userID")) {
+		writeError(w, http.StatusBadRequest, "invalid_user_id", "شناسه کاربر معتبر نیست", requestIDFrom(r))
+		return
+	}
+	store, ok := a.store.(UserMutationStore)
+	if !ok {
+		writeError(w, http.StatusServiceUnavailable, "not_ready", "ذخیره‌ساز مدیریت کاربران آماده نیست", requestIDFrom(r))
+		return
+	}
+	user, err := store.GetVPNUser(r.Context(), r.PathValue("userID"))
+	if errors.Is(err, ErrVPNUserNotFound) {
+		writeError(w, http.StatusNotFound, "user_not_found", "کاربر پیدا نشد", requestIDFrom(r))
+		return
+	}
+	if err != nil {
+		a.logger.Error("user lookup failed", "request_id", requestIDFrom(r))
+		writeError(w, http.StatusInternalServerError, "internal_error", "دریافت کاربر انجام نشد", requestIDFrom(r))
+		return
+	}
+	writeJSON(w, http.StatusOK, user)
+}
+
+func (a *API) handleCreateUser(w http.ResponseWriter, r *http.Request) {
+	operator, _, ok := a.authenticate(w, r)
+	if !ok {
+		return
+	}
+	if !canManageUsers(operator.Role) {
+		a.recordAudit(r, &operator.ID, "user.create", "denied")
+		writeError(w, http.StatusForbidden, "forbidden", "فقط مدیران مجاز به ایجاد کاربر هستند", requestIDFrom(r))
+		return
+	}
+	store, ok := a.store.(UserMutationStore)
+	if !ok {
+		writeError(w, http.StatusServiceUnavailable, "not_ready", "ذخیره‌ساز مدیریت کاربران آماده نیست", requestIDFrom(r))
+		return
+	}
+	var input CreateUserInput
+	if err := decodeJSON(w, r, &input, 16*1024); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_request", "اطلاعات کاربر معتبر نیست", requestIDFrom(r))
+		return
+	}
+	input.DisplayName = strings.TrimSpace(input.DisplayName)
+	if !validDisplayName(input.DisplayName) {
+		writeError(w, http.StatusBadRequest, "invalid_display_name", "نام کاربر باید بین ۱ تا ۸۰ نویسه باشد", requestIDFrom(r))
+		return
+	}
+	if input.MaxDevices == 0 {
+		input.MaxDevices = 3
+	}
+	if input.MaxDevices < 1 || input.MaxDevices > 20 {
+		writeError(w, http.StatusBadRequest, "invalid_device_limit", "سقف دستگاه باید بین ۱ تا ۲۰ باشد", requestIDFrom(r))
+		return
+	}
+	key := r.Header.Get("Idempotency-Key")
+	if !idempotencyKeyPattern.MatchString(key) {
+		writeError(w, http.StatusBadRequest, "idempotency_key_required", "کلید یکتای درخواست معتبر نیست", requestIDFrom(r))
+		return
+	}
+	fingerprint, err := json.Marshal(input)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_request", "اطلاعات کاربر معتبر نیست", requestIDFrom(r))
+		return
+	}
+	hash := sha256.Sum256(fingerprint)
+	user, replayed, err := store.CreateVPNUser(r.Context(), operator.ID, "POST:/v1/users", key, hash[:], input, requestIDFrom(r), remoteIP(r.RemoteAddr))
+	if errors.Is(err, ErrIdempotencyConflict) {
+		writeError(w, http.StatusConflict, "idempotency_conflict", "این کلید قبلاً برای درخواست دیگری استفاده شده است", requestIDFrom(r))
+		return
+	}
+	if err != nil {
+		a.logger.Error("user creation failed", "request_id", requestIDFrom(r))
+		writeError(w, http.StatusInternalServerError, "internal_error", "ایجاد کاربر انجام نشد", requestIDFrom(r))
+		return
+	}
+	if replayed {
+		w.Header().Set("Idempotency-Replayed", "true")
+	}
+	writeJSON(w, http.StatusCreated, user)
+}
+
+func (a *API) handleUpdateUser(w http.ResponseWriter, r *http.Request) {
+	operator, _, ok := a.authenticate(w, r)
+	if !ok {
+		return
+	}
+	if !canManageUsers(operator.Role) {
+		a.recordAudit(r, &operator.ID, "user.update", "denied")
+		writeError(w, http.StatusForbidden, "forbidden", "فقط مدیران مجاز به ویرایش کاربر هستند", requestIDFrom(r))
+		return
+	}
+	userID := r.PathValue("userID")
+	if !uuidPattern.MatchString(userID) {
+		writeError(w, http.StatusBadRequest, "invalid_user_id", "شناسه کاربر معتبر نیست", requestIDFrom(r))
+		return
+	}
+	store, ok := a.store.(UserMutationStore)
+	if !ok {
+		writeError(w, http.StatusServiceUnavailable, "not_ready", "ذخیره‌ساز مدیریت کاربران آماده نیست", requestIDFrom(r))
+		return
+	}
+	var input UpdateUserInput
+	if err := decodeJSON(w, r, &input, 16*1024); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_request", "اطلاعات ویرایش کاربر معتبر نیست", requestIDFrom(r))
+		return
+	}
+	if input.DisplayName != nil {
+		value := strings.TrimSpace(*input.DisplayName)
+		if !validDisplayName(value) {
+			writeError(w, http.StatusBadRequest, "invalid_display_name", "نام کاربر باید بین ۱ تا ۸۰ نویسه باشد", requestIDFrom(r))
+			return
+		}
+		input.DisplayName = &value
+	}
+	if input.Status != nil {
+		if *input.Status != "active" && *input.Status != "suspended" && *input.Status != "disabled" {
+			writeError(w, http.StatusBadRequest, "invalid_status", "وضعیت کاربر معتبر نیست", requestIDFrom(r))
+			return
+		}
+	}
+	if input.MaxDevices != nil && (*input.MaxDevices < 1 || *input.MaxDevices > 20) {
+		writeError(w, http.StatusBadRequest, "invalid_device_limit", "سقف دستگاه باید بین ۱ تا ۲۰ باشد", requestIDFrom(r))
+		return
+	}
+	if input.DisplayName == nil && input.Status == nil && input.MaxDevices == nil {
+		writeError(w, http.StatusBadRequest, "empty_update", "حداقل یک فیلد برای ویرایش لازم است", requestIDFrom(r))
+		return
+	}
+	key := r.Header.Get("Idempotency-Key")
+	if !idempotencyKeyPattern.MatchString(key) {
+		writeError(w, http.StatusBadRequest, "idempotency_key_required", "کلید یکتای درخواست معتبر نیست", requestIDFrom(r))
+		return
+	}
+	fingerprint, err := json.Marshal(input)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_request", "اطلاعات ویرایش کاربر معتبر نیست", requestIDFrom(r))
+		return
+	}
+	hash := sha256.Sum256(fingerprint)
+	route := "PATCH:/v1/users/" + userID
+	user, replayed, err := store.UpdateVPNUser(r.Context(), operator.ID, userID, route, key, hash[:], input, requestIDFrom(r), remoteIP(r.RemoteAddr))
+	if errors.Is(err, ErrIdempotencyConflict) {
+		writeError(w, http.StatusConflict, "idempotency_conflict", "این کلید قبلاً برای درخواست دیگری استفاده شده است", requestIDFrom(r))
+		return
+	}
+	if errors.Is(err, ErrVPNUserNotFound) {
+		writeError(w, http.StatusNotFound, "user_not_found", "کاربر پیدا نشد", requestIDFrom(r))
+		return
+	}
+	if err != nil {
+		a.logger.Error("user update failed", "request_id", requestIDFrom(r))
+		writeError(w, http.StatusInternalServerError, "internal_error", "ویرایش کاربر انجام نشد", requestIDFrom(r))
+		return
+	}
+	if replayed {
+		w.Header().Set("Idempotency-Replayed", "true")
+	}
+	writeJSON(w, http.StatusOK, user)
+}
+
+func canManageUsers(role string) bool {
+	return role == "owner" || role == "admin"
+}
+
+func validDisplayName(value string) bool {
+	if value == "" || len(value) > 320 || utf8.RuneCountInString(value) > 80 {
+		return false
+	}
+	for _, character := range value {
+		if unicode.IsControl(character) {
+			return false
+		}
+	}
+	return true
 }
 
 func (a *API) authenticate(w http.ResponseWriter, r *http.Request) (Operator, []byte, bool) {

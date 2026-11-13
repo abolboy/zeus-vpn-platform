@@ -1,7 +1,9 @@
 package main
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/url"
@@ -177,6 +179,144 @@ func (s *PostgresStore) ListUsers(ctx context.Context, limit int, cursor *UserCu
 		users = append(users, user)
 	}
 	return users, rows.Err()
+}
+
+func (s *PostgresStore) GetVPNUser(ctx context.Context, userID string) (VPNUser, error) {
+	var user VPNUser
+	err := s.pool.QueryRow(ctx, `
+		SELECT id::text, display_name, status, max_devices, created_at
+		FROM vpn_users WHERE id = $1::uuid
+	`, userID).Scan(&user.ID, &user.DisplayName, &user.Status, &user.MaxDevices, &user.CreatedAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return VPNUser{}, ErrVPNUserNotFound
+	}
+	return user, err
+}
+
+func (s *PostgresStore) CreateVPNUser(ctx context.Context, actorID, route, key string, requestHash []byte, input CreateUserInput, requestID string, sourceIP *string) (VPNUser, bool, error) {
+	return s.runIdempotentUserMutation(ctx, actorID, route, key, requestHash, "user.create", requestID, sourceIP, func(tx pgx.Tx) (VPNUser, error) {
+		var user VPNUser
+		err := tx.QueryRow(ctx, `
+			INSERT INTO vpn_users (display_name, max_devices)
+			VALUES ($1, $2::smallint)
+			RETURNING id::text, display_name, status, max_devices, created_at
+		`, input.DisplayName, int16(input.MaxDevices)).Scan(&user.ID, &user.DisplayName, &user.Status, &user.MaxDevices, &user.CreatedAt)
+		return user, err
+	})
+}
+
+func (s *PostgresStore) UpdateVPNUser(ctx context.Context, actorID, userID, route, key string, requestHash []byte, input UpdateUserInput, requestID string, sourceIP *string) (VPNUser, bool, error) {
+	return s.runIdempotentUserMutation(ctx, actorID, route, key, requestHash, "user.update", requestID, sourceIP, func(tx pgx.Tx) (VPNUser, error) {
+		var displayName any
+		var status any
+		var maxDevices any
+		if input.DisplayName != nil {
+			displayName = *input.DisplayName
+		}
+		if input.Status != nil {
+			status = *input.Status
+		}
+		if input.MaxDevices != nil {
+			maxDevices = int16(*input.MaxDevices)
+		}
+		var user VPNUser
+		err := tx.QueryRow(ctx, `
+			UPDATE vpn_users
+			SET display_name = COALESCE($1::text, display_name),
+			    status = COALESCE($2::text, status),
+			    max_devices = COALESCE($3::smallint, max_devices),
+			    updated_at = now()
+			WHERE id = $4::uuid
+			RETURNING id::text, display_name, status, max_devices, created_at
+		`, displayName, status, maxDevices, userID).Scan(&user.ID, &user.DisplayName, &user.Status, &user.MaxDevices, &user.CreatedAt)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return VPNUser{}, ErrVPNUserNotFound
+		}
+		return user, err
+	})
+}
+
+func (s *PostgresStore) runIdempotentUserMutation(ctx context.Context, actorID, route, key string, requestHash []byte, action, requestID string, sourceIP *string, mutate func(pgx.Tx) (VPNUser, error)) (VPNUser, bool, error) {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return VPNUser{}, false, err
+	}
+	defer tx.Rollback(ctx)
+
+	_, err = tx.Exec(ctx, `
+		DELETE FROM idempotency_records
+		WHERE actor_operator_id = $1::uuid AND expires_at <= now()
+	`, actorID, route, key)
+	if err != nil {
+		return VPNUser{}, false, err
+	}
+
+	var reserved bool
+	err = tx.QueryRow(ctx, `
+		INSERT INTO idempotency_records (actor_operator_id, route, idempotency_key, request_hash)
+		VALUES ($1::uuid, $2, $3, $4)
+		ON CONFLICT (actor_operator_id, route, idempotency_key) DO NOTHING
+		RETURNING true
+	`, actorID, route, key, requestHash).Scan(&reserved)
+	if errors.Is(err, pgx.ErrNoRows) {
+		var existingHash, responseBody []byte
+		var responseStatus *int16
+		err = tx.QueryRow(ctx, `
+			SELECT request_hash, response_body, response_status
+			FROM idempotency_records
+			WHERE actor_operator_id = $1::uuid AND route = $2 AND idempotency_key = $3
+		`, actorID, route, key).Scan(&existingHash, &responseBody, &responseStatus)
+		if err != nil {
+			return VPNUser{}, false, err
+		}
+		if !bytes.Equal(existingHash, requestHash) {
+			return VPNUser{}, false, ErrIdempotencyConflict
+		}
+		if len(responseBody) == 0 || responseStatus == nil {
+			return VPNUser{}, false, errors.New("idempotency record is incomplete")
+		}
+		var user VPNUser
+		if err := json.Unmarshal(responseBody, &user); err != nil {
+			return VPNUser{}, false, err
+		}
+		if err := tx.Commit(ctx); err != nil {
+			return VPNUser{}, false, err
+		}
+		return user, true, nil
+	}
+	if err != nil {
+		return VPNUser{}, false, err
+	}
+
+	user, err := mutate(tx)
+	if err != nil {
+		return VPNUser{}, false, err
+	}
+	body, err := json.Marshal(user)
+	if err != nil {
+		return VPNUser{}, false, err
+	}
+	_, err = tx.Exec(ctx, `
+		UPDATE idempotency_records
+		SET response_status = CASE WHEN $4 = 'user.create' THEN 201 ELSE 200 END,
+		    response_body = $5::jsonb
+		WHERE actor_operator_id = $1::uuid AND route = $2 AND idempotency_key = $3
+	`, actorID, route, key, action, string(body))
+	if err != nil {
+		return VPNUser{}, false, err
+	}
+	_, err = tx.Exec(ctx, `
+		INSERT INTO audit_events
+			(actor_operator_id, subject_user_id, action, outcome, request_id, source_ip, metadata)
+		VALUES ($1::uuid, $2::uuid, $3, 'success', $4, $5::inet, '{}'::jsonb)
+	`, actorID, user.ID, action, requestID, sourceIP)
+	if err != nil {
+		return VPNUser{}, false, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return VPNUser{}, false, err
+	}
+	return user, false, nil
 }
 
 func (s *PostgresStore) RecordAudit(ctx context.Context, actorID, subjectID *string, action, outcome, requestID string, sourceIP *string) error {

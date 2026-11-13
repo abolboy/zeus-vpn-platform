@@ -18,6 +18,7 @@ Turn the Phase 1 foundation into a secure, multi-user management plane without c
 - [x] Define API conventions, role boundaries, error envelopes, and node trust boundary.
 - [x] Add a checksum-tracked migration runner with a PostgreSQL advisory lock.
 - [x] Verify migration idempotency and schema application in CI.
+- [x] Add an idempotency-record table with request fingerprints and 24-hour expiry.
 - No migration has been applied to the production AWS database.
 
 ### 2B — Control-plane persistence and operator authentication
@@ -28,15 +29,18 @@ Turn the Phase 1 foundation into a secure, multi-user management plane without c
 - [x] First-owner bootstrap that never overwrites an existing account.
 - [x] Exact-origin CORS allowlist, request IDs, security headers, bounded JSON bodies, and structured error envelopes.
 - [x] Per-source-IP login throttling and bounded concurrent Argon2 work.
-- [x] Server-side role checks for the authenticated read-only user listing.
+- [x] Server-side role checks for authenticated API reads and mutations.
 - [x] Go unit and PostgreSQL integration tests in GitHub Actions.
 - Remaining: password-reset workflow, operator lifecycle/role-management endpoints, distributed rate limiting, session cleanup, and deeper threat-model review.
 
-### 2C — User/device lifecycle (not implemented)
-- Add transactional user and device create/update/revoke operations.
-- Enforce device limits, uniqueness, address allocation, and idempotency.
-- Create immutable audit records for every state-changing operation.
-- Do not change host WireGuard configuration from the API process.
+### 2C — User lifecycle (partially implemented)
+- [x] Transactional VPN-user create/read/update endpoints.
+- [x] Owner/admin-only mutation authorization; support and read-only roles cannot mutate users.
+- [x] Idempotency keys, payload fingerprints, safe replay, and conflict detection.
+- [x] Mutation and audit event stored in the same database transaction.
+- [ ] Device registration/revocation, device-limit enforcement, address allocation, and idempotent peer lifecycle.
+- [ ] Immutable audit policy and audit-log viewing/retention controls.
+- The API does not change host WireGuard configuration.
 
 ### 2D — VPN node agent (not implemented)
 - Implement a separate least-privilege agent with a mutually authenticated control channel.
@@ -48,6 +52,7 @@ Turn the Phase 1 foundation into a secure, multi-user management plane without c
 - [x] Web operator login against the Go API.
 - [x] Keep the bearer token in browser memory only; require login again after a page reload.
 - [x] Load authenticated VPN users from PostgreSQL through the API, with cursor pagination.
+- [ ] Connect the user create/edit forms to the authenticated API endpoints.
 - [ ] Replace remaining demo server, traffic, subscription, and activity data with real APIs.
 - [ ] Add operator role-management screens.
 - [ ] Connect Android provisioning only after the API and node lifecycle have passed integration tests.
@@ -63,6 +68,6 @@ Turn the Phase 1 foundation into a secure, multi-user management plane without c
 
 ## Current status
 - Branch: `phase2-multiplayer-control-plane`.
-- Latest completed milestone: 2B authentication and PostgreSQL-backed read-only API.
-- The web-admin build and Go/PostgreSQL test suites run in GitHub Actions.
+- Latest milestone: PostgreSQL-backed operator authentication and transactional VPN user management API.
+- GitHub Actions validates Go, PostgreSQL migrations/integration tests, web build, and repository structure.
 - No live server, AWS resource, firewall rule, or production VPN peer has been changed.

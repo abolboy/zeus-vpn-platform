@@ -30,15 +30,23 @@ Do not return stack traces, SQL errors, secrets, private keys, or internal host 
 - `GET /v1/auth/me`: returns the authenticated operator identity.
 - `POST /v1/auth/logout`: revokes the current bearer session.
 - `GET /v1/users?limit=25&cursor=...`: authenticated, cursor-paginated user listing.
+- `GET /v1/users/{userID}`: read one user record.
+- `POST /v1/users`: create a VPN user.
+- `PATCH /v1/users/{userID}`: update display name, status, or maximum device count.
 
+All user endpoints require an operator bearer session. `owner` and `admin` may create or update users. `support` and `read_only` are read-only. The API enforces permissions server-side.
+
+## Mutation safety
+- Every create/update requires an `Idempotency-Key` (16–128 characters from `A-Z a-z 0-9 . _ ~ -`).
+- The server scopes keys to operator and route, stores a SHA-256 request fingerprint, and replays the original response for an identical request.
+- Reusing a key with a different request body returns `409 idempotency_conflict`.
+- Idempotency responses expire after 24 hours; expired entries are removed when the key is reused.
+- User mutation, idempotency response, and audit event are committed in one PostgreSQL transaction.
+- Display names are limited to 1–80 Unicode characters; device limit is 1–20; statuses are `active`, `suspended`, or `disabled`.
+- No device, peer, node, payment, subscription, or WireGuard host mutation endpoint is implemented.
+
+## Session and password security
 Operator routes require a short-lived opaque bearer session. Store only a cryptographic hash of the session token; never log bearer tokens. Sessions expire after eight hours. A revoked, expired, disabled, or unknown session is rejected. The browser SPA keeps the token in memory only and requires a new login after reload.
-
-## Current authorization
-- `owner`, `admin`, `support`, and `read_only` may read the current user list.
-- No user/device/node mutation endpoint is enabled yet.
-- Hiding a button in the dashboard is not authorization; the API checks roles server-side.
-
-## Authentication and password storage
 - Operator passwords use Argon2id with 64 MiB memory, 3 iterations, and 2 lanes.
 - Session tokens contain 256 bits of cryptographic randomness; only SHA-256 token hashes are stored.
 - The first owner is created from bootstrap environment variables. Existing accounts are never overwritten by bootstrap.
@@ -62,9 +70,8 @@ Operator routes require a short-lived opaque bearer session. Store only a crypto
 Use `limit` (default 25, maximum 100) and an opaque base64url cursor. Return `items` and `next_cursor`. Reject invalid filters or cursors instead of silently broadening a query.
 
 ## Planned, not implemented
-- `POST /v1/users`, `PATCH /v1/users/{userID}`, and `GET /v1/users/{userID}`.
-- `POST /v1/users/{userID}/devices` and `DELETE /v1/devices/{deviceID}`.
-- `GET /v1/nodes` and node-agent heartbeat/desired-state endpoints.
+- Device register/revoke endpoints and enforcement against WireGuard peer lifecycle.
+- Node inventory, node-agent heartbeat/desired-state endpoints, and live traffic telemetry.
 - Operator creation, role changes, password reset, billing, subscriptions, and peer provisioning.
 
-Every future mutation must validate role, scope, device limits, node state, and address allocation inside a transaction, support idempotency, and create an audit event before any node command is issued.
+Every future mutation affecting devices or nodes must validate role, scope, device limits, node state, and address allocation inside a transaction, support idempotency, and create an audit event before any node command is issued.

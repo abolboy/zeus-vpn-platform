@@ -4,8 +4,8 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
-	"net/url"
 	"errors"
+	"net/url"
 	"fmt"
 	"log"
 	"os"
@@ -13,9 +13,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/abolboy/zeus-vpn-platform/services/control-plane/migrations"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
-	"github.com/abolboy/zeus-vpn-platform/services/control-plane/migrations"
 )
 
 const advisoryLockID int64 = 726198430021
@@ -104,7 +104,7 @@ func migrate(ctx context.Context, pool *pgxpool.Pool) error {
 		if err != nil {
 			return err
 		}
-		if _, err = connection.Conn().PgConn().Exec(ctx, string(content)).ReadAll(); err != nil {
+		if _, err = tx.Conn().PgConn().Exec(ctx, string(content)).ReadAll(); err != nil {
 			_ = tx.Rollback(ctx)
 			return fmt.Errorf("apply %s: %w", entry.Name(), err)
 		}

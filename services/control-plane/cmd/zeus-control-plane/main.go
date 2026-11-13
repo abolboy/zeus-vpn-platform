@@ -17,7 +17,7 @@ func main() {
 	slog.SetDefault(logger)
 
 	address := envOrDefault("ZEUS_HTTP_ADDR", ":8080")
-	version := envOrDefault("ZEUS_VERSION", "0.2.0-alpha")
+	version := envOrDefault("ZEUS_VERSION", "0.3.0-alpha")
 	production := strings.EqualFold(os.Getenv("ZEUS_ENV"), "production")
 
 	var store ControlStore

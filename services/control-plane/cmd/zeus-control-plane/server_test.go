@@ -269,4 +269,101 @@ func TestPostgresStoreIntegration(t *testing.T) {
 	if _, err := store.FindOperatorForSession(ctx, tokenHash); !errors.Is(err, pgx.ErrNoRows) {
 		t.Fatalf("revoked session lookup error = %v, want no rows", err)
 	}
+
+	// Exercise authenticated user creation, idempotent replay, conflict detection,
+	// status update, and readback against the real PostgreSQL service in CI.
+	api, err := NewAPI("integration-test", store, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	token, sessionHash, err := generateSessionToken()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.CreateSession(ctx, operator.ID, sessionHash, time.Now().Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	handler := api.Handler()
+	createKey := newRequestID()
+	createBody := `{"display_name":"ZEUS Integration User","max_devices":4}`
+	createRequest := func(body string) *httptest.ResponseRecorder {
+		request := httptest.NewRequest(http.MethodPost, "/v1/users", bytes.NewBufferString(body))
+		request.Header.Set("Authorization", "Bearer "+token)
+		request.Header.Set("Idempotency-Key", createKey)
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, request)
+		return response
+	}
+	created := createRequest(createBody)
+	if created.Code != http.StatusCreated {
+		t.Fatalf("create user status=%d body=%s", created.Code, created.Body.String())
+	}
+	var createdUser VPNUser
+	if err := json.Unmarshal(created.Body.Bytes(), &createdUser); err != nil {
+		t.Fatal(err)
+	}
+	replayed := createRequest(createBody)
+	var replayedUser VPNUser
+	if replayed.Code != http.StatusCreated || json.Unmarshal(replayed.Body.Bytes(), &replayedUser) != nil || replayedUser.ID != createdUser.ID {
+		t.Fatalf("idempotent replay did not return original user: status=%d body=%s", replayed.Code, replayed.Body.String())
+	}
+	if replayed.Header().Get("Idempotency-Replayed") != "true" {
+		t.Fatal("expected Idempotency-Replayed response header")
+	}
+	conflict := createRequest(`{"display_name":"Different Payload","max_devices":4}`)
+	if conflict.Code != http.StatusConflict {
+		t.Fatalf("idempotency conflict status=%d, want 409", conflict.Code)
+	}
+
+	updateKey := newRequestID()
+	updateBody := `{"status":"suspended","max_devices":5}`
+	updateRequest := httptest.NewRequest(http.MethodPatch, "/v1/users/"+createdUser.ID, bytes.NewBufferString(updateBody))
+	updateRequest.Header.Set("Authorization", "Bearer "+token)
+	updateRequest.Header.Set("Idempotency-Key", updateKey)
+	updateResponse := httptest.NewRecorder()
+	handler.ServeHTTP(updateResponse, updateRequest)
+	if updateResponse.Code != http.StatusOK {
+		t.Fatalf("update user status=%d body=%s", updateResponse.Code, updateResponse.Body.String())
+	}
+	var updatedUser VPNUser
+	if err := json.Unmarshal(updateResponse.Body.Bytes(), &updatedUser); err != nil {
+		t.Fatal(err)
+	}
+	if updatedUser.Status != "suspended" || updatedUser.MaxDevices != 5 {
+		t.Fatalf("unexpected updated user: %+v", updatedUser)
+	}
+	updateReplayRequest := httptest.NewRequest(http.MethodPatch, "/v1/users/"+createdUser.ID, bytes.NewBufferString(updateBody))
+	updateReplayRequest.Header.Set("Authorization", "Bearer "+token)
+	updateReplayRequest.Header.Set("Idempotency-Key", updateKey)
+	updateReplayResponse := httptest.NewRecorder()
+	handler.ServeHTTP(updateReplayResponse, updateReplayRequest)
+	if updateReplayResponse.Code != http.StatusOK || updateReplayResponse.Header().Get("Idempotency-Replayed") != "true" {
+		t.Fatalf("update idempotent replay status=%d body=%s", updateReplayResponse.Code, updateReplayResponse.Body.String())
+	}
+
+	getRequest := httptest.NewRequest(http.MethodGet, "/v1/users/"+createdUser.ID, nil)
+	getRequest.Header.Set("Authorization", "Bearer "+token)
+	getResponse := httptest.NewRecorder()
+	handler.ServeHTTP(getResponse, getRequest)
+	if getResponse.Code != http.StatusOK {
+		t.Fatalf("get user status=%d body=%s", getResponse.Code, getResponse.Body.String())
+	}
+	if _, err := store.GetVPNUser(ctx, createdUser.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := store.pool.Exec(ctx, "UPDATE operators SET role='support' WHERE id=$1::uuid", operator.ID); err != nil {
+		t.Fatal(err)
+	}
+	deniedRequest := httptest.NewRequest(http.MethodPost, "/v1/users", bytes.NewBufferString(`{"display_name":"Forbidden User","max_devices":2}`))
+	deniedRequest.Header.Set("Authorization", "Bearer "+token)
+	deniedRequest.Header.Set("Idempotency-Key", newRequestID())
+	deniedResponse := httptest.NewRecorder()
+	handler.ServeHTTP(deniedResponse, deniedRequest)
+	if deniedResponse.Code != http.StatusForbidden {
+		t.Fatalf("support role create status=%d, want 403", deniedResponse.Code)
+	}
+	if _, err := store.pool.Exec(ctx, "UPDATE operators SET role='owner' WHERE id=$1::uuid", operator.ID); err != nil {
+		t.Fatal(err)
+	}
 }

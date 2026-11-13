@@ -725,6 +725,25 @@ func allocateNodeAddress(prefix netip.Prefix, used map[netip.Addr]struct{}, ipv4
 	return netip.Addr{}, ErrAddressPoolExhausted
 }
 
+
+func isIPv4Broadcast(address netip.Addr, prefix netip.Prefix) bool {
+	if !address.Is4() || prefix.Addr().Is6() || prefix.Bits() >= 31 {
+		return false
+	}
+	masked := prefix.Masked().Addr().As4()
+	current := address.As4()
+	var network, value uint32
+	for _, octet := range masked {
+		network = (network << 8) | uint32(octet)
+	}
+	for _, octet := range current {
+		value = (value << 8) | uint32(octet)
+	}
+	hostBits := uint(32 - prefix.Bits())
+	hostMask := uint32((uint64(1) << hostBits) - 1)
+	return value == (network | hostMask)
+}
+
 func validWireGuardPublicKey(value string) bool {
 	decoded, err := base64.StdEncoding.DecodeString(value)
 	return err == nil && len(decoded) == 32 && base64.StdEncoding.EncodeToString(decoded) == value

@@ -449,7 +449,6 @@ func TestPostgresStoreIntegration(t *testing.T) {
 		t.Fatal(err)
 	}
 	deviceKey := newRequestID()
-	deviceHash := sha256.Sum256(deviceBody)
 	deviceCreateRequest := httptest.NewRequest(http.MethodPost, "/v1/users/"+deviceUserID+"/devices", bytes.NewReader(deviceBody))
 	deviceCreateRequest.Header.Set("Authorization", "Bearer "+token)
 	deviceCreateRequest.Header.Set("Idempotency-Key", deviceKey)
@@ -508,7 +507,7 @@ func TestPostgresStoreIntegration(t *testing.T) {
 	}
 
 	secondHash := sha256.Sum256([]byte("second-device"))
-	_, err = store.CreateVPNDevice(ctx, operator.ID, deviceUserID, deviceRoute, newRequestID(),
+	_, _, err = store.CreateVPNDevice(ctx, operator.ID, deviceUserID, deviceRoute, newRequestID(),
 		secondHash[:], CreateDeviceInput{
 			DeviceRef: "ci-device-reference-0002", DeviceName: "Second Android",
 			Platform: "android", PublicKey: "AwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAw=",
@@ -569,12 +568,12 @@ func TestPostgresStoreIntegration(t *testing.T) {
 		PublicKey: "BAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQ=",
 	}
 	replacementHash := sha256.Sum256([]byte("replacement-device-payload"))
-	replacementDevice, replayed, err := store.CreateVPNDevice(
+	replacementDevice, replacementReplayed, err := store.CreateVPNDevice(
 		ctx, operator.ID, deviceUserID, deviceRoute, newRequestID(), replacementHash[:],
 		replacementInput, newRequestID(), nil,
 	)
-	if err != nil || replayed {
-		t.Fatalf("replacement device create failed: replay=%v device=%+v err=%v", replayed, replacementDevice, err)
+	if err != nil || replacementReplayed {
+		t.Fatalf("replacement device create failed: replay=%v device=%+v err=%v", replacementReplayed, replacementDevice, err)
 	}
 	if replacementDevice.Peer.AssignedIPv4 != device.Peer.AssignedIPv4 ||
 		replacementDevice.Peer.AssignedIPv6 != device.Peer.AssignedIPv6 {

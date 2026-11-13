@@ -72,7 +72,7 @@ jobs:
         run: go vet ./...
 
   vpn-node:
-    name: VPN node executor tests
+    name: VPN node agent and executor tests
     runs-on: ubuntu-latest
     defaults:
       run:

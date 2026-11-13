@@ -22,7 +22,7 @@ type nodeAckRequest struct {
 	ErrorCode string "json:\"error_code,omitempty\""
 }
 
-var commandErrorCodePattern = regexp.MustCompile("^(validation_failed|config_rejected|wg_apply_failed|command_expired|internal_error)$")
+var commandErrorCodePattern = regexp.MustCompile("^(validation_failed|config_rejected|wg_apply_failed|command_expired|internal_error|mutation_disabled)$")
 
 func NewNodeAgentHandler(store NodeAgentStore, logger *slog.Logger) http.Handler {
 	if logger == nil {

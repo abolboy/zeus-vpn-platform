@@ -1,86 +1,95 @@
-# ZEUS VPN Node Agent Protocol — Design Draft
+# ZEUS VPN Node Agent Protocol
 
-Status: architecture/design only. No node-agent command endpoint or WireGuard mutation is enabled by this document.
+Status: server-side mTLS listener, certificate-to-node lookup, command polling/leases, and acknowledgements are implemented behind explicit opt-in TLS configuration. The standalone node polling client, enrollment/rotation tooling, and live WireGuard command dispatch are not implemented. The current AWS VPN node is not connected to this listener.
 
 ## Security boundary
 
-- The control plane never opens an inbound management connection to a VPN node.
-- Each node agent initiates outbound HTTPS connections to the control plane.
-- A node uses a dedicated client certificate signed by a ZEUS node CA. The certificate's SHA-256 fingerprint is registered to exactly one `vpn_nodes` row.
-- The node listener is a separate HTTPS listener from the human admin API. It requires and verifies client certificates; it is not exposed through a browser-facing reverse-proxy route.
-- The API maps the verified leaf-certificate fingerprint to a node ID on every request. Headers such as `X-Forwarded-Client-Cert`, `X-Node-ID`, and `X-Forwarded-For` are not identity sources.
-- Certificate rotation is an explicit operation: enroll the replacement fingerprint, validate the new certificate, then revoke the old fingerprint. A node with no registered fingerprint cannot poll or acknowledge commands.
-- The agent private key stays on its own Linux node, file permissions root-only. It is never uploaded to GitHub, the Android app, or the control-plane database.
+- The control plane never opens an inbound management connection to a VPN node. A node will initiate outbound HTTPS polling when the client is implemented.
+- The node-agent listener is separate from the browser/admin HTTP listener.
+- The listener requires TLS 1.2 or newer and a verified client certificate signed by the configured node CA.
+- The leaf certificate must have ClientAuth EKU, must not be a CA certificate, and its SHA-256 fingerprint must match exactly one non-disabled vpn_nodes row.
+- Headers such as X-Forwarded-Client-Cert, X-Node-ID, and X-Forwarded-For are not identity sources.
+- A certificate fingerprint can be revoked by clearing the stored fingerprint or disabling the node. Rotation is a separate controlled operation.
+- The agent private key stays on its Linux node with root-only permissions. The server listener key must also be owner-only and is opened without following symlinks.
+- The listener is disabled unless all three ZEUS_NODE_TLS_CERT_FILE, ZEUS_NODE_TLS_KEY_FILE, and ZEUS_NODE_CA_FILE settings are supplied. Its default bind address is 127.0.0.1:8443; remote access requires an intentional bind-address and firewall decision. No firewall change has been made.
 
-## Transport and command delivery
+## Implemented mTLS endpoints
 
-The agent polls over mTLS and receives commands only for its authenticated node. Polling is outbound and can be retried after transient network loss. The database queue provides at-least-once delivery; every operation must therefore be idempotent.
+These endpoints are available only on the separate mTLS listener:
 
-Planned command envelope:
+- GET /agent/v1/commands/next — leases one command for the node identified by the verified certificate; returns 204 when no command is ready.
+- POST /agent/v1/commands/{commandID}/ack — acknowledges a leased command with status succeeded or failed.
 
-```json
-{
-  "id": "command UUID",
-  "node_id": "authenticated node UUID",
-  "type": "peer.ensure",
-  "payload": {
-    "public_key": "base64 WireGuard public key",
-    "ipv4": "assigned-address",
-    "ipv6": "assigned-address"
-  },
-  "issued_at": "RFC3339 UTC",
-  "expires_at": "RFC3339 UTC",
-  "attempt": 1
-}
-```
+Acknowledgements accept only a small error-code allowlist: validation_failed, config_rejected, wg_apply_failed, command_expired, and internal_error. They do not accept arbitrary logs, shell text, file paths, or commands.
+
+## Command envelope
+
+A command currently contains:
+
+    {
+      "id": "command UUID",
+      "node_id": "authenticated node UUID",
+      "type": "peer.ensure",
+      "payload": {
+        "public_key": "base64 WireGuard public key",
+        "ipv4": "assigned-address",
+        "ipv6": "assigned-address"
+      },
+      "attempt": 1,
+      "expires_at": "RFC3339 UTC"
+    }
 
 Allowed command types are a closed enum:
-- `peer.ensure`: ensure one public key has exactly its assigned host routes.
-- `peer.remove`: remove one known public key.
+- peer.ensure: ensure one public key has exactly its assigned host routes.
+- peer.remove: remove one known public key.
 
-The protocol never accepts shell commands, executable paths, arbitrary interface names, arbitrary routes, firewall scripts, or opaque command strings. The node agent constructs a fixed argv list itself and never invokes a shell.
+No arbitrary shell command, executable path, interface name, firewall script, or opaque command string is part of the schema.
 
-## Peer validation
+## Queue lifecycle
 
-Before applying a command, the agent validates:
+- Commands are persisted in PostgreSQL and scoped to one vpn_nodes row.
+- A successful poll leases one command for 45 seconds.
+- Commands expire after their configured expiry; the schema default is 10 minutes.
+- A command can be delivered at least once; the agent must therefore be idempotent.
+- The maximum attempt count is 10.
+- Acknowledgements are scoped to both authenticated node ID and command ID. Duplicate identical acknowledgements are accepted; conflicting acknowledgements are rejected.
+- An expired lease can be re-leased after its deadline. Expired commands are not executed.
+- Node polling updates the node last-seen heartbeat, but a heartbeat does not prove a successful peer mutation.
+
+## Peer validation and executor boundary
+
+The local Go executor validates public keys and pool membership, checks existing AllowedIPs routes and interface address collisions, and writes only the target [Peer] block. Its AllowMutations setting defaults to false. The executor is not yet invoked by the network command handler.
+
+Before dispatch is enabled, the agent must validate:
 - Public key decodes to exactly 32 bytes and is canonical base64.
-- IPv4 and IPv6 values are valid host addresses inside the configured per-node client pools.
-- IPv4 is encoded as a single `/32`; IPv6 as a single `/128`.
-- The assigned addresses are not the interface address, subnet/network address, broadcast address, or already assigned to another peer.
+- IPv4 and IPv6 are valid host addresses inside the configured per-node client pools.
+- IPv4 is a single /32; IPv6 is a single /128.
+- Assigned addresses are not interface, network, broadcast, multicast, link-local, or already allocated addresses.
 - The command is for the configured WireGuard interface and has not expired.
-- Duplicate delivery of the same command produces the same final peer state.
+- Duplicate delivery produces the same final peer state.
 
 Private keys never appear in the command payload or agent logs.
 
 ## Durable WireGuard configuration
 
-A runtime-only `wg set` is insufficient because peers would disappear after reboot. The eventual executor must make the persistent configuration and live interface converge:
+The local executor:
+1. Takes a process and file lock.
+2. Reads the config through an O_NOFOLLOW file descriptor and requires owner-only permissions.
+3. Preserves the existing Interface section and unrelated Peer blocks.
+4. Writes a same-directory temporary file with mode 0600, fsyncs it, atomically renames it, and fsyncs the directory.
+5. Uses a fixed wg set argv; it never invokes a shell.
+6. Restores the previous file on runtime failure and attempts a safe runtime compensation where supported.
 
-1. Acquire a per-interface lock and verify the config file is a regular, root-owned file with restrictive permissions.
-2. Read and preserve the existing file. The interface section, server private key, addresses, MTU, and existing unmanaged peers must remain byte-for-byte unchanged.
-3. Modify only the matching `[Peer]` block (or append/remove a peer block) using validated public-key and host-route values.
-4. Write a same-directory temporary file with mode `0600`, fsync it, atomically rename it, and fsync the directory.
-5. Apply the fixed `wg set` argv to the already-existing interface.
-6. If runtime application fails, restore the prior file atomically and report a failed command. Never run `wg-quick down`, replace the interface, or use an unreviewed whole-interface sync.
-
-This persistence strategy requires fixture tests against representative existing `wg0.conf` files and a staging node before production enablement. No current AWS configuration is modified by this design task.
-
-## Queue lifecycle
-
-- Commands are created in the same database transaction as the device/peer desired-state change.
-- A node leases only commands belonging to its certificate identity. Lease expiry allows safe redelivery.
-- An acknowledgement contains command ID, outcome, and a bounded, sanitized result. It cannot change the identity or payload of a command.
-- Success moves the corresponding desired state to applied. Failure records a bounded error category and can be retried up to a fixed attempt ceiling.
-- Expired commands are never executed. Replayed acknowledgements are idempotent.
-- Node heartbeats update last-seen state but never imply a successful peer mutation.
+This strategy has unit tests with an injected runner. It has not yet been tested against a real isolated WireGuard interface or a staging VPS. Remove-peer rollback and crash-reconciliation still require additional failure-injection tests.
 
 ## Operational rollout gates
 
-1. Unit tests with a fake command runner and filesystem fixtures.
-2. Property tests for route containment, duplicate addresses, malformed keys, and malformed peer blocks.
-3. Integration tests on an isolated WireGuard test interface.
-4. Failure-injection tests for config write, fsync, rename, `wg set`, timeout, replay, and lease expiry.
-5. Staging node backup/restore and reboot persistence test.
-6. Explicit production deployment approval after the above checks.
+1. Implement the standalone mTLS poller and a persistent node service.
+2. Implement secure certificate enrollment, rotation, and revocation.
+3. Add a reviewed path from device/peer desired state to command enqueue.
+4. Test the executor on an isolated WireGuard interface and representative config fixtures.
+5. Run failure-injection tests for config write, fsync, rename, wg set, timeout, replay, and lease expiry.
+6. Run staging node backup/restore and reboot-persistence tests.
+7. Obtain explicit production deployment approval before enabling mutations on any live node.
 
-Until these gates pass, the control plane may store node metadata and pending command records, but no agent command is sent to the live AWS node.
+Until these gates pass, no command is dispatched to the current AWS VPN node and no existing tunnel or firewall configuration is changed.

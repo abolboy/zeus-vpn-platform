@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -365,5 +366,62 @@ func TestPostgresStoreIntegration(t *testing.T) {
 	}
 	if _, err := store.pool.Exec(ctx, "UPDATE operators SET role='owner' WHERE id=$1::uuid", operator.ID); err != nil {
 		t.Fatal(err)
+	}
+
+	// Verify certificate fingerprint binding, durable command leasing, and idempotent acknowledgements.
+	fingerprint := sha256.Sum256([]byte("ZEUS node certificate " + newRequestID()))
+	var nodeID string
+	err = store.pool.QueryRow(ctx, `
+		INSERT INTO vpn_nodes (name, region, endpoint_host, endpoint_port, public_key, interface_name, status, agent_cert_sha256)
+		VALUES ($1, 'ci', '127.0.0.1', 51820, 'ci-node-public-key', 'wg0', 'pending', $2)
+		RETURNING id::text
+	`, "ci-node-"+newRequestID(), fingerprint[:]).Scan(&nodeID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	node, err := store.FindNodeByCertFingerprint(ctx, fingerprint[:])
+	if err != nil || node.ID != nodeID {
+		t.Fatalf("node certificate binding failed: node=%+v err=%v", node, err)
+	}
+	if _, err := store.FindNodeByCertFingerprint(ctx, []byte("not a fingerprint")); !errors.Is(err, ErrNodeNotFound) {
+		t.Fatalf("invalid node fingerprint error=%v, want ErrNodeNotFound", err)
+	}
+
+	commandPayload := []byte("{\"public_key\":\"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=\",\"ipv4\":\"10.77.77.3\",\"ipv6\":\"fd77:77:77::3\"}")
+	commandHash := sha256.Sum256(commandPayload)
+	var commandID string
+	err = store.pool.QueryRow(ctx, `
+		INSERT INTO node_commands (node_id, created_by_operator_id, command_type, payload, request_hash, idempotency_key, expires_at)
+		VALUES ($1::uuid, $2::uuid, 'peer.ensure', $3::jsonb, $4, $5, now() + interval '5 minutes')
+		RETURNING id::text
+	`, nodeID, operator.ID, string(commandPayload), commandHash[:], newRequestID()).Scan(&commandID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	command, err := store.LeaseNodeCommand(ctx, nodeID, 45*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if command.ID != commandID || command.NodeID != nodeID || command.Type != "peer.ensure" || command.Attempt != 1 {
+		t.Fatalf("unexpected node command lease: %+v", command)
+	}
+	if _, err := store.LeaseNodeCommand(ctx, nodeID, 45*time.Second); !errors.Is(err, ErrNoNodeCommand) {
+		t.Fatalf("second poll error=%v, want ErrNoNodeCommand while lease is active", err)
+	}
+	if err := store.AcknowledgeNodeCommand(ctx, nodeID, commandID, "succeeded", ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.AcknowledgeNodeCommand(ctx, nodeID, commandID, "succeeded", ""); err != nil {
+		t.Fatalf("replayed acknowledgement should be idempotent: %v", err)
+	}
+	if err := store.AcknowledgeNodeCommand(ctx, nodeID, commandID, "failed", "wg_apply_failed"); !errors.Is(err, ErrNodeCommandConflict) {
+		t.Fatalf("conflicting acknowledgement error=%v, want ErrNodeCommandConflict", err)
+	}
+	var commandStatus string
+	if err := store.pool.QueryRow(ctx, "SELECT status FROM node_commands WHERE id=$1::uuid", commandID).Scan(&commandStatus); err != nil {
+		t.Fatal(err)
+	}
+	if commandStatus != "succeeded" {
+		t.Fatalf("node command status=%s, want succeeded", commandStatus)
 	}
 }

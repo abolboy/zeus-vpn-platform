@@ -7,7 +7,7 @@ Current stage: Phase 0 scaffold on main; Phase 1 development is isolated on phas
 ## Layout
 - apps/android — Android management app (Kotlin, Jetpack Compose).
 - services/control-plane — Go control API foundation.
-- services/vpn-node — isolated WireGuard peer executor foundation (dry-run by default); mTLS agent and command-poll lifecycle are not implemented yet.
+- services/vpn-node — isolated WireGuard peer executor foundation (dry-run by default); server-side node mTLS and command queue endpoints are implemented, while the standalone node poller remains in development.
 - packages/protocols — planned versioned API and event contracts.
 - infra — planned deployment templates.
 - docs — architecture, security baseline, decisions, and delivery plans.

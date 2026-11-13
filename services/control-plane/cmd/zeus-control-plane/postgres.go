@@ -331,3 +331,184 @@ func (s *PostgresStore) RecordAudit(ctx context.Context, actorID, subjectID *str
 func isNoRows(err error) bool {
 	return errors.Is(err, pgx.ErrNoRows)
 }
+
+
+func (s *PostgresStore) FindNodeByCertFingerprint(ctx context.Context, fingerprint []byte) (NodeIdentity, error) {
+	if len(fingerprint) != 32 {
+		return NodeIdentity{}, ErrNodeNotFound
+	}
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return NodeIdentity{}, err
+	}
+	defer tx.Rollback(ctx)
+
+	var node NodeIdentity
+	err = tx.QueryRow(ctx, `
+		SELECT id::text
+		FROM vpn_nodes
+		WHERE agent_cert_sha256 = $1
+		  AND status <> 'disabled'
+		FOR UPDATE
+	`, fingerprint).Scan(&node.ID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return NodeIdentity{}, ErrNodeNotFound
+	}
+	if err != nil {
+		return NodeIdentity{}, err
+	}
+	if _, err := tx.Exec(ctx, `
+		UPDATE vpn_nodes
+		SET status = 'online', last_seen_at = now(), updated_at = now()
+		WHERE id = $1::uuid
+	`, node.ID); err != nil {
+		return NodeIdentity{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return NodeIdentity{}, err
+	}
+	return node, nil
+}
+
+func (s *PostgresStore) LeaseNodeCommand(ctx context.Context, nodeID string, leaseDuration time.Duration) (NodeCommand, error) {
+	if leaseDuration < 5*time.Second || leaseDuration > 2*time.Minute {
+		return NodeCommand{}, errors.New("node command lease duration is out of range")
+	}
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return NodeCommand{}, err
+	}
+	defer tx.Rollback(ctx)
+
+	if _, err := tx.Exec(ctx, `
+		UPDATE node_commands
+		SET status = 'expired', lease_expires_at = NULL, completed_at = COALESCE(completed_at, now())
+		WHERE node_id = $1::uuid
+		  AND status IN ('queued', 'leased')
+		  AND (expires_at <= now() OR attempts >= 10)
+	`, nodeID); err != nil {
+		return NodeCommand{}, err
+	}
+
+	var command NodeCommand
+	err = tx.QueryRow(ctx, `
+		SELECT id::text, node_id::text, command_type, payload, attempts + 1, expires_at
+		FROM node_commands
+		WHERE node_id = $1::uuid
+		  AND status IN ('queued', 'leased')
+		  AND expires_at > now()
+		  AND attempts < 10
+		  AND (status = 'queued' OR lease_expires_at <= now())
+		ORDER BY created_at ASC, id ASC
+		FOR UPDATE SKIP LOCKED
+		LIMIT 1
+	`, nodeID).Scan(&command.ID, &command.NodeID, &command.Type, &command.Payload, &command.Attempt, &command.ExpiresAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		if err := tx.Commit(ctx); err != nil {
+			return NodeCommand{}, err
+		}
+		return NodeCommand{}, ErrNoNodeCommand
+	}
+	if err != nil {
+		return NodeCommand{}, err
+	}
+	leaseUntil := time.Now().UTC().Add(leaseDuration)
+	if _, err := tx.Exec(ctx, `
+		UPDATE node_commands
+		SET status = 'leased',
+		    attempts = attempts + 1,
+		    lease_expires_at = LEAST($2::timestamptz, expires_at),
+		    started_at = COALESCE(started_at, now())
+		WHERE id = $1::uuid
+	`, command.ID, leaseUntil); err != nil {
+		return NodeCommand{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return NodeCommand{}, err
+	}
+	return command, nil
+}
+
+func (s *PostgresStore) AcknowledgeNodeCommand(ctx context.Context, nodeID, commandID, status, errorCode string) error {
+	if status != "succeeded" && status != "failed" {
+		return errors.New("invalid node command acknowledgement status")
+	}
+	if (status == "succeeded" && errorCode != "") || len(errorCode) > 64 {
+		return errors.New("invalid node command acknowledgement error code")
+	}
+
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+
+	var currentStatus string
+	var currentError *string
+	var leaseExpiresAt *time.Time
+	var expiresAt time.Time
+	err = tx.QueryRow(ctx, `
+		SELECT status, last_error, lease_expires_at, expires_at
+		FROM node_commands
+		WHERE id = $1::uuid AND node_id = $2::uuid
+		FOR UPDATE
+	`, commandID, nodeID).Scan(&currentStatus, &currentError, &leaseExpiresAt, &expiresAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ErrNodeCommandNotFound
+	}
+	if err != nil {
+		return err
+	}
+
+	if currentStatus == status {
+		currentCode := ""
+		if currentError != nil {
+			currentCode = *currentError
+		}
+		if currentCode == errorCode {
+			return tx.Commit(ctx)
+		}
+		return ErrNodeCommandConflict
+	}
+	if currentStatus != "leased" {
+		return ErrNodeCommandConflict
+	}
+	now := time.Now().UTC()
+	if !expiresAt.After(now) {
+		if _, err := tx.Exec(ctx, `
+			UPDATE node_commands
+			SET status = 'expired', lease_expires_at = NULL, completed_at = COALESCE(completed_at, now())
+			WHERE id = $1::uuid
+		`, commandID); err != nil {
+			return err
+		}
+		if err := tx.Commit(ctx); err != nil {
+			return err
+		}
+		return ErrNodeCommandLeaseExpired
+	}
+	if leaseExpiresAt == nil || !leaseExpiresAt.After(now) {
+		return ErrNodeCommandLeaseExpired
+	}
+
+	result, err := json.Marshal(map[string]string{"status": status, "error_code": errorCode})
+	if err != nil {
+		return err
+	}
+	var lastError any
+	if errorCode != "" {
+		lastError = errorCode
+	}
+	if _, err := tx.Exec(ctx, `
+		UPDATE node_commands
+		SET status = $2,
+		    last_error = $3,
+		    result = $4::jsonb,
+		    lease_expires_at = NULL,
+		    completed_at = now()
+		WHERE id = $1::uuid
+	`, commandID, status, lastError, string(result)); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}

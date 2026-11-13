@@ -73,11 +73,13 @@ Operator routes require a short-lived opaque bearer session. Store only a crypto
 ## Pagination
 Use `limit` (default 25, maximum 100) and an opaque base64url cursor. Return `items` and `next_cursor`. Reject invalid filters or cursors instead of silently broadening a query.
 
-## Node-agent boundary
-- Migration schema records a nullable SHA-256 client-certificate fingerprint per node and a durable command queue.
-- The queue accepts only `peer.ensure` and `peer.remove` command types. There is no arbitrary command or shell payload.
-- The node-agent HTTPS listener, certificate-to-node authentication, polling, acknowledgement, and peer execution are not implemented yet.
-- No command from this table is currently dispatched to any VPN node.
+## Node-agent mTLS endpoints (separate listener)
+- `GET /agent/v1/commands/next`: leases a command for the node identified by its verified mTLS certificate; 204 means no command is ready.
+- `POST /agent/v1/commands/{commandID}/ack`: acknowledges succeeded/failed with a constrained error-code allowlist.
+- The separate TLS listener requires ClientAuth certificates, rejects CA certificates, checks the ClientAuth EKU, and maps the SHA-256 leaf-certificate fingerprint to one non-disabled node row.
+- The listener is disabled unless the three node TLS environment settings are configured. Default bind is loopback.
+- Queue delivery is at least once with a 45-second lease, expiry, 10-attempt ceiling, and idempotent acknowledgement.
+- The standalone node client and network-triggered WireGuard execution are not implemented yet. No command is dispatched to the current AWS VPN node.
 
 ## Planned, not implemented
 - Device register/revoke endpoints and enforcement against WireGuard peer lifecycle.

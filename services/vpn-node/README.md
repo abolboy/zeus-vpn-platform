@@ -1,6 +1,6 @@
 # ZEUS VPN Node Agent — WireGuard Executor Foundation
 
-This module contains a constrained WireGuard peer executor foundation. It is not a complete running node agent yet: mTLS enrollment, certificate rotation, the separate node-agent listener, command polling/leases/acknowledgements, and a service entrypoint remain unimplemented.
+This module contains a constrained WireGuard peer executor foundation. It is not a complete running node agent yet. Server-side mTLS listener, certificate fingerprint mapping, durable queue leases, and acknowledgements now exist in the control plane. The standalone node poller, certificate enrollment/rotation, service entrypoint, and network-triggered WireGuard dispatch remain unimplemented.
 
 ## Safety defaults
 

@@ -660,6 +660,7 @@ func selectProvisioningNode(ctx context.Context, tx pgx.Tx) (provisioningNode, e
 		       n.endpoint_host, n.endpoint_port
 		FROM vpn_nodes n
 		WHERE n.status = 'online'
+		  AND n.last_seen_at > now() - interval '90 seconds'
 		  AND n.agent_cert_sha256 IS NOT NULL
 		  AND n.client_ipv4_pool IS NOT NULL
 		  AND n.client_ipv6_pool IS NOT NULL

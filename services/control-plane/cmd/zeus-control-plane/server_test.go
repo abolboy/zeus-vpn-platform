@@ -444,6 +444,16 @@ func TestPostgresStoreIntegration(t *testing.T) {
 		PublicKey: "AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgI=",
 	}
 	deviceRoute := "POST:/v1/users/" + deviceUserID + "/devices"
+	if _, err := store.pool.Exec(ctx, "UPDATE vpn_nodes SET last_seen_at = now() - interval '3 minutes' WHERE id = $1::uuid", nodeID); err != nil {
+		t.Fatal(err)
+	}
+	staleHash := sha256.Sum256([]byte("stale-node-request"))
+	if _, _, err := store.CreateVPNDevice(ctx, operator.ID, deviceUserID, deviceRoute, newRequestID(), staleHash[:], deviceInput, newRequestID(), nil); !errors.Is(err, ErrNoProvisioningNode) {
+		t.Fatalf("stale node should not receive a device: err=%v", err)
+	}
+	if _, err := store.FindNodeByCertFingerprint(ctx, fingerprint[:]); err != nil {
+		t.Fatalf("fresh node heartbeat lookup failed: %v", err)
+	}
 	deviceBody, err := json.Marshal(deviceInput)
 	if err != nil {
 		t.Fatal(err)

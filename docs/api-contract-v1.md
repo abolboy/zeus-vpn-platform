@@ -73,6 +73,12 @@ Operator routes require a short-lived opaque bearer session. Store only a crypto
 ## Pagination
 Use `limit` (default 25, maximum 100) and an opaque base64url cursor. Return `items` and `next_cursor`. Reject invalid filters or cursors instead of silently broadening a query.
 
+## Node-agent boundary
+- Migration schema records a nullable SHA-256 client-certificate fingerprint per node and a durable command queue.
+- The queue accepts only `peer.ensure` and `peer.remove` command types. There is no arbitrary command or shell payload.
+- The node-agent HTTPS listener, certificate-to-node authentication, polling, acknowledgement, and peer execution are not implemented yet.
+- No command from this table is currently dispatched to any VPN node.
+
 ## Planned, not implemented
 - Device register/revoke endpoints and enforcement against WireGuard peer lifecycle.
 - Node inventory, node-agent heartbeat/desired-state endpoints, and live traffic telemetry.

@@ -70,11 +70,11 @@ func (s *PostgresStore) Ping(ctx context.Context) error {
 		FROM information_schema.tables
 		WHERE table_schema = 'public'
 		  AND table_name = ANY($1::text[])
-	`, []string{"operators", "operator_sessions", "vpn_users", "vpn_nodes", "vpn_devices", "wireguard_peers", "audit_events"}).Scan(&count)
+	`, []string{"operators", "operator_sessions", "vpn_users", "vpn_nodes", "vpn_devices", "wireguard_peers", "audit_events", "idempotency_records", "node_commands"}).Scan(&count)
 	if err != nil {
 		return err
 	}
-	if count != 7 {
+	if count != 9 {
 		return errors.New("database schema is not migrated")
 	}
 	return nil

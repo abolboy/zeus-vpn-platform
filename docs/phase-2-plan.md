@@ -44,11 +44,15 @@ Turn the Phase 1 foundation into a secure, multi-user management plane without c
 - [ ] Immutable audit policy and audit-log viewing/retention controls.
 - The API does not change host WireGuard configuration.
 
-### 2D — VPN node agent (not implemented)
-- Implement a separate least-privilege agent with a mutually authenticated control channel.
-- Accept only narrowly scoped desired-state commands.
-- Validate and apply peer changes atomically; report observed state and counters.
-- Support credential rotation, revocation, replay protection, and bounded command expiry.
+### 2D — VPN node agent (design accepted; implementation not yet enabled)
+- [x] Define outbound mTLS trust boundary and per-node certificate fingerprint registration.
+- [x] Add durable, bounded node-command queue schema with a closed peer-command enum.
+- [x] Document idempotent delivery, leasing, expiry, and acknowledgement behavior.
+- [ ] Implement separate mTLS listener and bind each client certificate to exactly one node.
+- [ ] Implement the node poller and command acknowledgement lifecycle.
+- [ ] Implement a constrained WireGuard executor with persistent config updates, atomic rollback, and no shell invocation.
+- [ ] Test a staging node through add/remove, command replay, process failure, and reboot persistence.
+- Production peer changes remain disabled until all gates pass.
 
 ### 2E — Dashboard and Android integration (partially implemented)
 - [x] Web operator login against the Go API.

@@ -7,7 +7,7 @@ Current stage: Phase 0 scaffold on main; Phase 1 development is isolated on phas
 ## Layout
 - apps/android — Android management app (Kotlin, Jetpack Compose).
 - services/control-plane — Go control API foundation.
-- services/vpn-node — planned Linux VPN node agent and engine integration.
+- services/vpn-node — isolated WireGuard peer executor foundation (dry-run by default); mTLS agent and command-poll lifecycle are not implemented yet.
 - packages/protocols — planned versioned API and event contracts.
 - infra — planned deployment templates.
 - docs — architecture, security baseline, decisions, and delivery plans.
@@ -19,7 +19,8 @@ A VPN tunnel still needs a usable network route to a reachable endpoint. No app 
 
 ## Build and test
     ./gradlew :apps:android:assembleDebug :apps:android:testDebugUnitTest
-    cd services/control-plane && go test ./... && go vet ./...
+    cd services/control-plane && go test -race ./... && go vet ./...
+    cd ../vpn-node && go test -race ./... && go vet ./...
     bash scripts/verify-repository.sh
 
-See docs/phase-1-plan.md and docs/offline-and-network-resilience.md.
+See docs/phase-1-plan.md, docs/offline-and-network-resilience.md, and docs/node-agent-protocol.md.

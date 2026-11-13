@@ -492,7 +492,7 @@ func TestPostgresStoreIntegration(t *testing.T) {
 
 	secondDeviceBody, err := json.Marshal(CreateDeviceInput{
 		DeviceRef: "ci-device-reference-0002", DeviceName: "Second Android",
-		Platform: "android", PublicKey: "AwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAw=",
+		Platform: "android", PublicKey: "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE=",
 	})
 	if err != nil {
 		t.Fatal(err)

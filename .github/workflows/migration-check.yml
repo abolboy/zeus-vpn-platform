@@ -41,7 +41,7 @@ jobs:
         env:
           PGPASSWORD: zeus_ci_only_password
         run: |
-          psql --host 127.0.0.1 --username zeus_test --dbname zeus_test --set ON_ERROR_STOP=1 --file services/control-plane/migrations/0001_initial.sql
+          psql --host 127.0.0.1 --username zeus_test --dbname zeus_test --set ON_ERROR_STOP=1 --single-transaction --file services/control-plane/migrations/0001_initial.sql
           psql --host 127.0.0.1 --username zeus_test --dbname zeus_test --set ON_ERROR_STOP=1 --file services/control-plane/migrations/0001_initial.sql
       - name: Verify expected tables and constraints
         env:

@@ -99,5 +99,3 @@ CREATE TABLE IF NOT EXISTS audit_events (
 );
 CREATE INDEX IF NOT EXISTS audit_events_created_idx ON audit_events (created_at DESC);
 CREATE INDEX IF NOT EXISTS audit_events_subject_idx ON audit_events (subject_user_id, created_at DESC);
-
-COMMIT;

@@ -15,6 +15,12 @@ var (
 	ErrNodeCommandNotFound     = errors.New("node command not found")
 	ErrNodeCommandConflict     = errors.New("node command is not in an acknowledgeable state")
 	ErrNodeCommandLeaseExpired = errors.New("node command lease expired")
+	ErrDeviceNotFound          = errors.New("VPN device not found")
+	ErrDeviceConflict          = errors.New("VPN device already exists or is not in a mutable state")
+	ErrUserNotActive           = errors.New("VPN user is not active")
+	ErrDeviceLimitReached      = errors.New("VPN user has reached the device limit")
+	ErrNoProvisioningNode      = errors.New("no eligible online VPN node is available")
+	ErrAddressPoolExhausted    = errors.New("VPN node address pool is exhausted")
 )
 
 type Operator struct {
@@ -49,6 +55,39 @@ type UpdateUserInput struct {
 	MaxDevices  *int    "json:\"max_devices,omitempty\""
 }
 
+
+
+type CreateDeviceInput struct {
+	DeviceRef string "json:\"device_ref\""
+	DeviceName string "json:\"device_name\""
+	Platform string "json:\"platform\""
+	PublicKey string "json:\"public_key\""
+}
+
+type VPNPeerProfile struct {
+	ID string "json:\"id\""
+	NodeID string "json:\"node_id\""
+	PublicKey string "json:\"public_key\""
+	AssignedIPv4 string "json:\"assigned_ipv4\""
+	AssignedIPv6 string "json:\"assigned_ipv6\""
+	ServerPublicKey string "json:\"server_public_key\""
+	EndpointHost string "json:\"endpoint_host\""
+	EndpointPort int "json:\"endpoint_port\""
+	Status string "json:\"status\""
+}
+
+type VPNDevice struct {
+	ID string "json:\"id\""
+	UserID string "json:\"user_id\""
+	DeviceRef string "json:\"device_ref\""
+	DeviceName string "json:\"device_name\""
+	Platform string "json:\"platform\""
+	Status string "json:\"status\""
+	CreatedAt time.Time "json:\"created_at\""
+	LastError string "json:\"last_error,omitempty\""
+	Peer VPNPeerProfile "json:\"peer\""
+}
+
 type NodeIdentity struct {
 	ID string
 }
@@ -78,6 +117,12 @@ type UserMutationStore interface {
 	GetVPNUser(context.Context, string) (VPNUser, error)
 	CreateVPNUser(context.Context, string, string, string, []byte, CreateUserInput, string, *string) (VPNUser, bool, error)
 	UpdateVPNUser(context.Context, string, string, string, string, []byte, UpdateUserInput, string, *string) (VPNUser, bool, error)
+}
+
+type DeviceMutationStore interface {
+	ListVPNDevices(context.Context, string) ([]VPNDevice, error)
+	CreateVPNDevice(context.Context, string, string, string, string, []byte, CreateDeviceInput, string, *string) (VPNDevice, bool, error)
+	RevokeVPNDevice(context.Context, string, string, string, string, string, []byte, string, *string) (VPNDevice, bool, error)
 }
 
 type NodeAgentStore interface {

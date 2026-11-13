@@ -77,6 +77,7 @@ type cursorPayload struct {
 
 var uuidPattern = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$`)
 var idempotencyKeyPattern = regexp.MustCompile(`^[A-Za-z0-9._~-]{16,128}$`)
+var deviceRefPattern = regexp.MustCompile(`^[A-Za-z0-9._~-]{16,128}$`)
 
 func NewAPI(version string, store ControlStore, logger *slog.Logger, allowedOrigins []string) (*API, error) {
 	if logger == nil {
@@ -116,6 +117,9 @@ func (a *API) Handler() http.Handler {
 	mux.HandleFunc("POST /v1/users", a.handleCreateUser)
 	mux.HandleFunc("GET /v1/users/{userID}", a.handleGetUser)
 	mux.HandleFunc("PATCH /v1/users/{userID}", a.handleUpdateUser)
+	mux.HandleFunc("GET /v1/users/{userID}/devices", a.handleListDevices)
+	mux.HandleFunc("POST /v1/users/{userID}/devices", a.handleCreateDevice)
+	mux.HandleFunc("POST /v1/users/{userID}/devices/{deviceID}/revoke", a.handleRevokeDevice)
 	return a.middleware(mux)
 }
 
@@ -527,6 +531,187 @@ func validDisplayName(value string) bool {
 		}
 	}
 	return true
+}
+
+func (a *API) handleListDevices(w http.ResponseWriter, r *http.Request) {
+	operator, _, ok := a.authenticate(w, r)
+	if !ok {
+		return
+	}
+	switch operator.Role {
+	case "owner", "admin", "support", "read_only":
+	default:
+		writeError(w, http.StatusForbidden, "forbidden", "دسترسی کافی نیست", requestIDFrom(r))
+		return
+	}
+	userID := r.PathValue("userID")
+	if !uuidPattern.MatchString(userID) {
+		writeError(w, http.StatusBadRequest, "invalid_user_id", "شناسه کاربر معتبر نیست", requestIDFrom(r))
+		return
+	}
+	users, ok := a.store.(UserMutationStore)
+	devices, devicesOK := a.store.(DeviceMutationStore)
+	if !ok || !devicesOK {
+		writeError(w, http.StatusServiceUnavailable, "not_ready", "ذخیره‌ساز دستگاه‌ها آماده نیست", requestIDFrom(r))
+		return
+	}
+	if _, err := users.GetVPNUser(r.Context(), userID); errors.Is(err, ErrVPNUserNotFound) {
+		writeError(w, http.StatusNotFound, "user_not_found", "کاربر پیدا نشد", requestIDFrom(r))
+		return
+	} else if err != nil {
+		a.logger.Error("device owner lookup failed", "request_id", requestIDFrom(r), "error", err)
+		writeError(w, http.StatusInternalServerError, "internal_error", "دریافت دستگاه‌ها انجام نشد", requestIDFrom(r))
+		return
+	}
+	items, err := devices.ListVPNDevices(r.Context(), userID)
+	if err != nil {
+		a.logger.Error("device list failed", "request_id", requestIDFrom(r), "error", err)
+		writeError(w, http.StatusInternalServerError, "internal_error", "دریافت دستگاه‌ها انجام نشد", requestIDFrom(r))
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"items": items})
+}
+
+func (a *API) handleCreateDevice(w http.ResponseWriter, r *http.Request) {
+	operator, _, ok := a.authenticate(w, r)
+	if !ok {
+		return
+	}
+	if !canManageUsers(operator.Role) {
+		a.recordAudit(r, &operator.ID, "device.create", "denied")
+		writeError(w, http.StatusForbidden, "forbidden", "فقط مدیران مجاز به ثبت دستگاه هستند", requestIDFrom(r))
+		return
+	}
+	userID := r.PathValue("userID")
+	if !uuidPattern.MatchString(userID) {
+		writeError(w, http.StatusBadRequest, "invalid_user_id", "شناسه کاربر معتبر نیست", requestIDFrom(r))
+		return
+	}
+	store, ok := a.store.(DeviceMutationStore)
+	if !ok {
+		writeError(w, http.StatusServiceUnavailable, "not_ready", "ذخیره‌ساز دستگاه‌ها آماده نیست", requestIDFrom(r))
+		return
+	}
+	var input CreateDeviceInput
+	if err := decodeJSON(w, r, &input, 16*1024); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_request", "اطلاعات دستگاه معتبر نیست", requestIDFrom(r))
+		return
+	}
+	input.DeviceRef = strings.TrimSpace(input.DeviceRef)
+	input.DeviceName = strings.TrimSpace(input.DeviceName)
+	input.Platform = strings.ToLower(strings.TrimSpace(input.Platform))
+	input.PublicKey = strings.TrimSpace(input.PublicKey)
+	if !deviceRefPattern.MatchString(input.DeviceRef) {
+		writeError(w, http.StatusBadRequest, "invalid_device_ref", "شناسه دستگاه باید بین ۱۶ تا ۱۲۸ نویسه مجاز باشد", requestIDFrom(r))
+		return
+	}
+	if !validDisplayName(input.DeviceName) {
+		writeError(w, http.StatusBadRequest, "invalid_device_name", "نام دستگاه باید بین ۱ تا ۸۰ نویسه باشد", requestIDFrom(r))
+		return
+	}
+	switch input.Platform {
+	case "android", "ios", "windows", "macos", "linux", "other":
+	default:
+		writeError(w, http.StatusBadRequest, "invalid_platform", "سیستم‌عامل دستگاه معتبر نیست", requestIDFrom(r))
+		return
+	}
+	if !validWireGuardPublicKey(input.PublicKey) {
+		writeError(w, http.StatusBadRequest, "invalid_public_key", "کلید عمومی WireGuard معتبر نیست", requestIDFrom(r))
+		return
+	}
+	key := r.Header.Get("Idempotency-Key")
+	if !idempotencyKeyPattern.MatchString(key) {
+		writeError(w, http.StatusBadRequest, "idempotency_key_required", "کلید یکتای درخواست معتبر نیست", requestIDFrom(r))
+		return
+	}
+	requestBody, err := json.Marshal(input)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_request", "اطلاعات دستگاه معتبر نیست", requestIDFrom(r))
+		return
+	}
+	hash := sha256.Sum256(requestBody)
+	device, replayed, err := store.CreateVPNDevice(r.Context(), operator.ID, userID, "POST:/v1/users/"+userID+"/devices", key, hash[:], input, requestIDFrom(r), remoteIP(r.RemoteAddr))
+	switch {
+	case errors.Is(err, ErrIdempotencyConflict):
+		writeError(w, http.StatusConflict, "idempotency_conflict", "این کلید قبلاً برای درخواست دیگری استفاده شده است", requestIDFrom(r))
+		return
+	case errors.Is(err, ErrVPNUserNotFound):
+		writeError(w, http.StatusNotFound, "user_not_found", "کاربر پیدا نشد", requestIDFrom(r))
+		return
+	case errors.Is(err, ErrUserNotActive):
+		writeError(w, http.StatusConflict, "user_not_active", "برای کاربر غیرفعال نمی‌توان دستگاه جدید ثبت کرد", requestIDFrom(r))
+		return
+	case errors.Is(err, ErrDeviceLimitReached):
+		writeError(w, http.StatusConflict, "device_limit_reached", "سقف تعداد دستگاه‌های این کاربر تکمیل شده است", requestIDFrom(r))
+		return
+	case errors.Is(err, ErrDeviceConflict):
+		writeError(w, http.StatusConflict, "device_conflict", "این شناسه یا کلید عمومی قبلاً ثبت شده است", requestIDFrom(r))
+		return
+	case errors.Is(err, ErrNoProvisioningNode):
+		writeError(w, http.StatusServiceUnavailable, "node_unavailable", "نود آنلاین و آمادهٔ تخصیص دستگاه موجود نیست", requestIDFrom(r))
+		return
+	case errors.Is(err, ErrAddressPoolExhausted):
+		writeError(w, http.StatusServiceUnavailable, "address_pool_exhausted", "محدوده آدرس نود ظرفیت آزاد ندارد", requestIDFrom(r))
+		return
+	case err != nil:
+		a.logger.Error("device provisioning request failed", "request_id", requestIDFrom(r), "error", err)
+		writeError(w, http.StatusInternalServerError, "internal_error", "ثبت دستگاه انجام نشد", requestIDFrom(r))
+		return
+	}
+	if replayed {
+		w.Header().Set("Idempotency-Replayed", "true")
+	}
+	writeJSON(w, http.StatusAccepted, device)
+}
+
+func (a *API) handleRevokeDevice(w http.ResponseWriter, r *http.Request) {
+	operator, _, ok := a.authenticate(w, r)
+	if !ok {
+		return
+	}
+	if !canManageUsers(operator.Role) {
+		a.recordAudit(r, &operator.ID, "device.revoke", "denied")
+		writeError(w, http.StatusForbidden, "forbidden", "فقط مدیران مجاز به لغو دستگاه هستند", requestIDFrom(r))
+		return
+	}
+	userID := r.PathValue("userID")
+	deviceID := r.PathValue("deviceID")
+	if !uuidPattern.MatchString(userID) || !uuidPattern.MatchString(deviceID) {
+		writeError(w, http.StatusBadRequest, "invalid_identifier", "شناسه کاربر یا دستگاه معتبر نیست", requestIDFrom(r))
+		return
+	}
+	store, ok := a.store.(DeviceMutationStore)
+	if !ok {
+		writeError(w, http.StatusServiceUnavailable, "not_ready", "ذخیره‌ساز دستگاه‌ها آماده نیست", requestIDFrom(r))
+		return
+	}
+	key := r.Header.Get("Idempotency-Key")
+	if !idempotencyKeyPattern.MatchString(key) {
+		writeError(w, http.StatusBadRequest, "idempotency_key_required", "کلید یکتای درخواست معتبر نیست", requestIDFrom(r))
+		return
+	}
+	hash := sha256.Sum256([]byte("zeus-device-revoke-v1"))
+	route := "POST:/v1/users/" + userID + "/devices/" + deviceID + "/revoke"
+	device, replayed, err := store.RevokeVPNDevice(r.Context(), operator.ID, userID, deviceID, route, key, hash[:], requestIDFrom(r), remoteIP(r.RemoteAddr))
+	switch {
+	case errors.Is(err, ErrIdempotencyConflict):
+		writeError(w, http.StatusConflict, "idempotency_conflict", "این کلید قبلاً برای درخواست دیگری استفاده شده است", requestIDFrom(r))
+		return
+	case errors.Is(err, ErrDeviceNotFound):
+		writeError(w, http.StatusNotFound, "device_not_found", "دستگاه پیدا نشد", requestIDFrom(r))
+		return
+	case errors.Is(err, ErrDeviceConflict):
+		writeError(w, http.StatusConflict, "device_state_conflict", "وضعیت فعلی دستگاه اجازه لغو آن را نمی‌دهد", requestIDFrom(r))
+		return
+	case err != nil:
+		a.logger.Error("device revocation request failed", "request_id", requestIDFrom(r), "error", err)
+		writeError(w, http.StatusInternalServerError, "internal_error", "لغو دستگاه انجام نشد", requestIDFrom(r))
+		return
+	}
+	if replayed {
+		w.Header().Set("Idempotency-Replayed", "true")
+	}
+	writeJSON(w, http.StatusAccepted, device)
 }
 
 func (a *API) authenticate(w http.ResponseWriter, r *http.Request) (Operator, []byte, bool) {

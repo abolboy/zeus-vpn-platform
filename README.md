@@ -5,7 +5,7 @@ Android-first hybrid VPN platform with a Kotlin Android app, Linux WireGuard nod
 ## Layout
 - apps/android — Android management app (Kotlin, Jetpack Compose).
 - apps/web-admin — Persian-first operator dashboard.
-- services/control-plane — Go API, PostgreSQL, operator auth, user lifecycle, and optional mTLS node command listener.
+- services/control-plane — Go API, PostgreSQL, operator auth, user/device lifecycle, peer command queue, and optional mTLS node command listener.
 - services/vpn-node — mTLS client, command worker, and dry-run-first WireGuard peer executor.
 - docs — architecture, security baseline, decisions, protocol contracts, and delivery plans.
 
@@ -25,4 +25,4 @@ See docs/phase-1-plan.md, docs/offline-and-network-resilience.md, docs/phase-2-p
 
 ## Production boundary
 
-The mTLS listener is disabled unless its dedicated certificate and CA files are configured. The node process defaults to dry-run, and its mutation flag must be explicitly enabled. No production node, AWS resource, firewall, or WireGuard peer has been changed by this branch.
+Device registration requires an online, mTLS-registered node with explicit address pools and interface IPs. Import pre-existing WireGuard peers before enabling a node for allocation. The mTLS listener is disabled unless its dedicated certificate and CA files are configured. The node process defaults to dry-run, and its mutation flag must be explicitly enabled. No production node, AWS resource, firewall, or WireGuard peer has been changed by this branch.

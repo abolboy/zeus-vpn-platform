@@ -3,13 +3,18 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/netip"
 	"net/url"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -76,6 +81,18 @@ func (s *PostgresStore) Ping(ctx context.Context) error {
 	}
 	if count != 9 {
 		return errors.New("database schema is not migrated")
+	}
+	var poolColumns int
+	if err := s.pool.QueryRow(ctx, `
+		SELECT count(*)
+		FROM information_schema.columns
+		WHERE table_schema = 'public' AND table_name = 'vpn_nodes'
+		  AND column_name IN ('client_ipv4_pool', 'client_ipv6_pool', 'interface_ipv4', 'interface_ipv6')
+	`).Scan(&poolColumns); err != nil {
+		return err
+	}
+	if poolColumns != 4 {
+		return errors.New("device provisioning schema is not migrated")
 	}
 	return nil
 }
@@ -319,6 +336,408 @@ func (s *PostgresStore) runIdempotentUserMutation(ctx context.Context, actorID, 
 	return user, false, nil
 }
 
+
+
+type provisioningNode struct {
+	id string
+	ipv4Pool netip.Prefix
+	ipv6Pool netip.Prefix
+	interfaceIPv4 netip.Addr
+	interfaceIPv6 netip.Addr
+	serverPublicKey string
+	endpointHost string
+	endpointPort int
+}
+
+func (s *PostgresStore) ListVPNDevices(ctx context.Context, userID string) ([]VPNDevice, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT d.id::text, d.user_id::text, d.device_ref, d.device_name, d.platform,
+		       d.status, d.created_at, COALESCE(d.last_error, ''),
+		       p.id::text, p.node_id::text, p.public_key, host(p.assigned_ipv4),
+		       COALESCE(host(p.assigned_ipv6), ''), n.public_key, n.endpoint_host,
+		       n.endpoint_port, p.status
+		FROM vpn_devices d
+		JOIN wireguard_peers p ON p.device_id = d.id
+		JOIN vpn_nodes n ON n.id = p.node_id
+		WHERE d.user_id = $1::uuid
+		ORDER BY d.created_at DESC, d.id DESC
+	`, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	devices := make([]VPNDevice, 0)
+	for rows.Next() {
+		var device VPNDevice
+		if err := rows.Scan(
+			&device.ID, &device.UserID, &device.DeviceRef, &device.DeviceName,
+			&device.Platform, &device.Status, &device.CreatedAt, &device.LastError,
+			&device.Peer.ID, &device.Peer.NodeID, &device.Peer.PublicKey,
+			&device.Peer.AssignedIPv4, &device.Peer.AssignedIPv6,
+			&device.Peer.ServerPublicKey, &device.Peer.EndpointHost,
+			&device.Peer.EndpointPort, &device.Peer.Status,
+		); err != nil {
+			return nil, err
+		}
+		devices = append(devices, device)
+	}
+	return devices, rows.Err()
+}
+
+func (s *PostgresStore) CreateVPNDevice(ctx context.Context, actorID, userID, route, key string, requestHash []byte, input CreateDeviceInput, requestID string, sourceIP *string) (VPNDevice, bool, error) {
+	return s.runIdempotentDeviceMutation(ctx, actorID, route, key, requestHash, "device.create", requestID, sourceIP, func(tx pgx.Tx) (VPNDevice, error) {
+		var userStatus string
+		var maxDevices int
+		if err := tx.QueryRow(ctx, `
+			SELECT status, max_devices FROM vpn_users
+			WHERE id = $1::uuid
+			FOR UPDATE
+		`, userID).Scan(&userStatus, &maxDevices); errors.Is(err, pgx.ErrNoRows) {
+			return VPNDevice{}, ErrVPNUserNotFound
+		} else if err != nil {
+			return VPNDevice{}, err
+		}
+		if userStatus != "active" {
+			return VPNDevice{}, ErrUserNotActive
+		}
+		var activeDevices int
+		if err := tx.QueryRow(ctx, `
+			SELECT count(*) FROM vpn_devices
+			WHERE user_id = $1::uuid
+			  AND status IN ('provisioning', 'active', 'revoking', 'error')
+		`, userID).Scan(&activeDevices); err != nil {
+			return VPNDevice{}, err
+		}
+		if activeDevices >= maxDevices {
+			return VPNDevice{}, ErrDeviceLimitReached
+		}
+		var exists bool
+		if err := tx.QueryRow(ctx, `
+			SELECT EXISTS (
+				SELECT 1 FROM vpn_devices WHERE user_id = $1::uuid AND device_ref = $2
+			) OR EXISTS (
+				SELECT 1 FROM wireguard_peers WHERE public_key = $3
+			)
+		`, userID, input.DeviceRef, input.PublicKey).Scan(&exists); err != nil {
+			return VPNDevice{}, err
+		}
+		if exists {
+			return VPNDevice{}, ErrDeviceConflict
+		}
+
+		node, err := selectProvisioningNode(ctx, tx)
+		if err != nil {
+			return VPNDevice{}, err
+		}
+		usedIPv4 := map[netip.Addr]struct{}{node.interfaceIPv4: {}}
+		usedIPv6 := map[netip.Addr]struct{}{node.interfaceIPv6: {}}
+		rows, err := tx.Query(ctx, `
+			SELECT host(assigned_ipv4), COALESCE(host(assigned_ipv6), '')
+			FROM wireguard_peers
+			WHERE node_id = $1::uuid AND status <> 'revoked'
+		`, node.id)
+		if err != nil {
+			return VPNDevice{}, err
+		}
+		for rows.Next() {
+			var v4Text, v6Text string
+			if err := rows.Scan(&v4Text, &v6Text); err != nil {
+				rows.Close()
+				return VPNDevice{}, err
+			}
+			if address, parseErr := netip.ParseAddr(v4Text); parseErr == nil {
+				usedIPv4[address] = struct{}{}
+			}
+			if address, parseErr := netip.ParseAddr(v6Text); parseErr == nil {
+				usedIPv6[address] = struct{}{}
+			}
+		}
+		if err := rows.Err(); err != nil {
+			rows.Close()
+			return VPNDevice{}, err
+		}
+		rows.Close()
+
+		ipv4, err := allocateNodeAddress(node.ipv4Pool, usedIPv4, true)
+		if err != nil {
+			return VPNDevice{}, err
+		}
+		ipv6, err := allocateNodeAddress(node.ipv6Pool, usedIPv6, false)
+		if err != nil {
+			return VPNDevice{}, err
+		}
+
+		device := VPNDevice{
+			UserID: userID, DeviceRef: input.DeviceRef, DeviceName: input.DeviceName,
+			Platform: input.Platform, Status: "provisioning",
+			Peer: VPNPeerProfile{
+				NodeID: node.id, PublicKey: input.PublicKey,
+				AssignedIPv4: ipv4.String(), AssignedIPv6: ipv6.String(),
+				ServerPublicKey: node.serverPublicKey, EndpointHost: node.endpointHost,
+				EndpointPort: node.endpointPort, Status: "pending",
+			},
+		}
+		err = tx.QueryRow(ctx, `
+			INSERT INTO vpn_devices (user_id, device_ref, device_name, platform, status)
+			VALUES ($1::uuid, $2, $3, $4, 'provisioning')
+			RETURNING id::text, created_at
+		`, userID, input.DeviceRef, input.DeviceName, input.Platform).Scan(&device.ID, &device.CreatedAt)
+		if err != nil {
+			return VPNDevice{}, mapDeviceInsertError(err)
+		}
+		err = tx.QueryRow(ctx, `
+			INSERT INTO wireguard_peers (device_id, node_id, public_key, assigned_ipv4, assigned_ipv6, status)
+			VALUES ($1::uuid, $2::uuid, $3, $4::inet, $5::inet, 'pending')
+			RETURNING id::text
+		`, device.ID, node.id, input.PublicKey, ipv4.String(), ipv6.String()).Scan(&device.Peer.ID)
+		if err != nil {
+			return VPNDevice{}, mapDeviceInsertError(err)
+		}
+
+		payload, err := json.Marshal(map[string]string{
+			"public_key": input.PublicKey, "ipv4": ipv4.String(), "ipv6": ipv6.String(),
+		})
+		if err != nil {
+			return VPNDevice{}, err
+		}
+		commandHash := sha256.Sum256(payload)
+		if _, err := tx.Exec(ctx, `
+			INSERT INTO node_commands
+				(node_id, created_by_operator_id, command_type, payload, request_hash, idempotency_key)
+			VALUES ($1::uuid, $2::uuid, 'peer.ensure', $3::jsonb, $4, $5)
+		`, node.id, actorID, string(payload), commandHash[:], newRequestID()); err != nil {
+			return VPNDevice{}, err
+		}
+		return device, nil
+	})
+}
+
+func (s *PostgresStore) RevokeVPNDevice(ctx context.Context, actorID, userID, deviceID, route, key string, requestHash []byte, requestID string, sourceIP *string) (VPNDevice, bool, error) {
+	return s.runIdempotentDeviceMutation(ctx, actorID, route, key, requestHash, "device.revoke", requestID, sourceIP, func(tx pgx.Tx) (VPNDevice, error) {
+		var device VPNDevice
+		err := tx.QueryRow(ctx, `
+			SELECT d.id::text, d.user_id::text, d.device_ref, d.device_name, d.platform,
+			       d.status, d.created_at, COALESCE(d.last_error, ''),
+			       p.id::text, p.node_id::text, p.public_key, host(p.assigned_ipv4),
+			       COALESCE(host(p.assigned_ipv6), ''), n.public_key, n.endpoint_host,
+			       n.endpoint_port, p.status
+			FROM vpn_devices d
+			JOIN wireguard_peers p ON p.device_id = d.id
+			JOIN vpn_nodes n ON n.id = p.node_id
+			WHERE d.id = $1::uuid AND d.user_id = $2::uuid
+			FOR UPDATE OF d, p
+		`, deviceID, userID).Scan(
+			&device.ID, &device.UserID, &device.DeviceRef, &device.DeviceName,
+			&device.Platform, &device.Status, &device.CreatedAt, &device.LastError,
+			&device.Peer.ID, &device.Peer.NodeID, &device.Peer.PublicKey,
+			&device.Peer.AssignedIPv4, &device.Peer.AssignedIPv6,
+			&device.Peer.ServerPublicKey, &device.Peer.EndpointHost,
+			&device.Peer.EndpointPort, &device.Peer.Status,
+		)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return VPNDevice{}, ErrDeviceNotFound
+		}
+		if err != nil {
+			return VPNDevice{}, err
+		}
+		if device.Status == "revoked" || device.Status == "revoking" {
+			return device, nil
+		}
+		if device.Status != "provisioning" && device.Status != "active" && device.Status != "error" {
+			return VPNDevice{}, ErrDeviceConflict
+		}
+		payload, err := json.Marshal(map[string]string{"public_key": device.Peer.PublicKey})
+		if err != nil {
+			return VPNDevice{}, err
+		}
+		commandHash := sha256.Sum256(payload)
+		if _, err := tx.Exec(ctx, `
+			INSERT INTO node_commands
+				(node_id, created_by_operator_id, command_type, payload, request_hash, idempotency_key)
+			VALUES ($1::uuid, $2::uuid, 'peer.remove', $3::jsonb, $4, $5)
+		`, device.Peer.NodeID, actorID, string(payload), commandHash[:], newRequestID()); err != nil {
+			return VPNDevice{}, err
+		}
+		if _, err := tx.Exec(ctx, `
+			UPDATE vpn_devices SET status = 'revoking', updated_at = now(), last_error = NULL
+			WHERE id = $1::uuid
+		`, device.ID); err != nil {
+			return VPNDevice{}, err
+		}
+		if _, err := tx.Exec(ctx, `
+			UPDATE wireguard_peers SET status = 'revoking'
+			WHERE id = $1::uuid
+		`, device.Peer.ID); err != nil {
+			return VPNDevice{}, err
+		}
+		device.Status = "revoking"
+		device.Peer.Status = "revoking"
+		device.LastError = ""
+		return device, nil
+	})
+}
+
+func (s *PostgresStore) runIdempotentDeviceMutation(ctx context.Context, actorID, route, key string, requestHash []byte, action, requestID string, sourceIP *string, mutate func(pgx.Tx) (VPNDevice, error)) (VPNDevice, bool, error) {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return VPNDevice{}, false, err
+	}
+	defer tx.Rollback(ctx)
+
+	if _, err := tx.Exec(ctx, `
+		DELETE FROM idempotency_records
+		WHERE actor_operator_id = $1::uuid AND expires_at <= now()
+	`, actorID); err != nil {
+		return VPNDevice{}, false, err
+	}
+	var reserved bool
+	err = tx.QueryRow(ctx, `
+		INSERT INTO idempotency_records (actor_operator_id, route, idempotency_key, request_hash)
+		VALUES ($1::uuid, $2, $3, $4)
+		ON CONFLICT (actor_operator_id, route, idempotency_key) DO NOTHING
+		RETURNING true
+	`, actorID, route, key, requestHash).Scan(&reserved)
+	if errors.Is(err, pgx.ErrNoRows) {
+		var existingHash, responseBody []byte
+		var responseStatus *int16
+		err = tx.QueryRow(ctx, `
+			SELECT request_hash, response_body, response_status
+			FROM idempotency_records
+			WHERE actor_operator_id = $1::uuid AND route = $2 AND idempotency_key = $3
+		`, actorID, route, key).Scan(&existingHash, &responseBody, &responseStatus)
+		if err != nil {
+			return VPNDevice{}, false, err
+		}
+		if !bytes.Equal(existingHash, requestHash) {
+			return VPNDevice{}, false, ErrIdempotencyConflict
+		}
+		if len(responseBody) == 0 || responseStatus == nil {
+			return VPNDevice{}, false, errors.New("idempotency record is incomplete")
+		}
+		var device VPNDevice
+		if err := json.Unmarshal(responseBody, &device); err != nil {
+			return VPNDevice{}, false, err
+		}
+		if err := tx.Commit(ctx); err != nil {
+			return VPNDevice{}, false, err
+		}
+		return device, true, nil
+	}
+	if err != nil {
+		return VPNDevice{}, false, err
+	}
+	device, err := mutate(tx)
+	if err != nil {
+		return VPNDevice{}, false, err
+	}
+	body, err := json.Marshal(device)
+	if err != nil {
+		return VPNDevice{}, false, err
+	}
+	if _, err := tx.Exec(ctx, `
+		UPDATE idempotency_records SET response_status = 202, response_body = $4::jsonb
+		WHERE actor_operator_id = $1::uuid AND route = $2 AND idempotency_key = $3
+	`, actorID, route, key, string(body)); err != nil {
+		return VPNDevice{}, false, err
+	}
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO audit_events
+			(actor_operator_id, subject_user_id, action, outcome, request_id, source_ip, metadata)
+		VALUES ($1::uuid, $2::uuid, $3, 'success', $4, $5::inet, '{}'::jsonb)
+	`, actorID, device.UserID, action, requestID, sourceIP); err != nil {
+		return VPNDevice{}, false, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return VPNDevice{}, false, err
+	}
+	return device, false, nil
+}
+
+func selectProvisioningNode(ctx context.Context, tx pgx.Tx) (provisioningNode, error) {
+	rows, err := tx.Query(ctx, `
+		SELECT n.id::text, n.client_ipv4_pool::text, n.client_ipv6_pool::text,
+		       host(n.interface_ipv4), host(n.interface_ipv6), n.public_key,
+		       n.endpoint_host, n.endpoint_port
+		FROM vpn_nodes n
+		WHERE n.status = 'online'
+		  AND n.agent_cert_sha256 IS NOT NULL
+		  AND n.client_ipv4_pool IS NOT NULL
+		  AND n.client_ipv6_pool IS NOT NULL
+		  AND n.interface_ipv4 IS NOT NULL
+		  AND n.interface_ipv6 IS NOT NULL
+		ORDER BY (
+			SELECT count(*) FROM wireguard_peers p
+			WHERE p.node_id = n.id AND p.status <> 'revoked'
+		) ASC, n.last_seen_at DESC NULLS LAST
+		FOR UPDATE OF n SKIP LOCKED
+	`)
+	if err != nil {
+		return provisioningNode{}, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var node provisioningNode
+		var ipv4PoolText, ipv6PoolText, interfaceIPv4Text, interfaceIPv6Text string
+		if err := rows.Scan(
+			&node.id, &ipv4PoolText, &ipv6PoolText,
+			&interfaceIPv4Text, &interfaceIPv6Text, &node.serverPublicKey,
+			&node.endpointHost, &node.endpointPort,
+		); err != nil {
+			return provisioningNode{}, err
+		}
+		node.ipv4Pool, err = netip.ParsePrefix(ipv4PoolText)
+		if err != nil || !node.ipv4Pool.Addr().Is4() || node.ipv4Pool.Bits() < 16 || node.ipv4Pool.Bits() > 30 {
+			continue
+		}
+		node.ipv6Pool, err = netip.ParsePrefix(ipv6PoolText)
+		if err != nil || !node.ipv6Pool.Addr().Is6() || node.ipv6Pool.Bits() < 48 || node.ipv6Pool.Bits() > 120 {
+			continue
+		}
+		node.interfaceIPv4, err = netip.ParseAddr(interfaceIPv4Text)
+		if err != nil || !node.ipv4Pool.Contains(node.interfaceIPv4) {
+			continue
+		}
+		node.interfaceIPv6, err = netip.ParseAddr(interfaceIPv6Text)
+		if err != nil || !node.ipv6Pool.Contains(node.interfaceIPv6) {
+			continue
+		}
+		if !validWireGuardPublicKey(node.serverPublicKey) || strings.TrimSpace(node.endpointHost) == "" || node.endpointPort < 1 || node.endpointPort > 65535 {
+			continue
+		}
+		return node, nil
+	}
+	if err := rows.Err(); err != nil {
+		return provisioningNode{}, err
+	}
+	return provisioningNode{}, ErrNoProvisioningNode
+}
+
+func allocateNodeAddress(prefix netip.Prefix, used map[netip.Addr]struct{}, ipv4 bool) (netip.Addr, error) {
+	candidate := prefix.Masked().Addr().Next()
+	for probes := 0; probes < 65536 && candidate.IsValid() && prefix.Contains(candidate); probes++ {
+		_, occupied := used[candidate]
+		if !occupied && candidate.IsGlobalUnicast() && !candidate.IsLinkLocalUnicast() &&
+			(!ipv4 || !isIPv4Broadcast(candidate, prefix)) {
+			return candidate, nil
+		}
+		candidate = candidate.Next()
+	}
+	return netip.Addr{}, ErrAddressPoolExhausted
+}
+
+func validWireGuardPublicKey(value string) bool {
+	decoded, err := base64.StdEncoding.DecodeString(value)
+	return err == nil && len(decoded) == 32 && base64.StdEncoding.EncodeToString(decoded) == value
+}
+
+func mapDeviceInsertError(err error) error {
+	var pgError *pgconn.PgError
+	if errors.As(err, &pgError) && pgError.Code == "23505" {
+		return ErrDeviceConflict
+	}
+	return err
+}
+
 func (s *PostgresStore) RecordAudit(ctx context.Context, actorID, subjectID *string, action, outcome, requestID string, sourceIP *string) error {
 	_, err := s.pool.Exec(ctx, `
 		INSERT INTO audit_events
@@ -389,6 +808,9 @@ func (s *PostgresStore) LeaseNodeCommand(ctx context.Context, nodeID string, lea
 	`, nodeID); err != nil {
 		return NodeCommand{}, err
 	}
+	if err := markExpiredNodeCommandSubjects(ctx, tx, nodeID); err != nil {
+		return NodeCommand{}, err
+	}
 
 	var command NodeCommand
 	err = tx.QueryRow(ctx, `
@@ -429,6 +851,34 @@ func (s *PostgresStore) LeaseNodeCommand(ctx context.Context, nodeID string, lea
 	return command, nil
 }
 
+
+
+func markExpiredNodeCommandSubjects(ctx context.Context, tx pgx.Tx, nodeID string) error {
+	if _, err := tx.Exec(ctx, `
+		UPDATE wireguard_peers p
+		SET status = 'error'
+		FROM node_commands c
+		WHERE c.node_id = $1::uuid
+		  AND c.status = 'expired'
+		  AND c.command_type IN ('peer.ensure', 'peer.remove')
+		  AND p.node_id = c.node_id
+		  AND p.public_key = c.payload->>'public_key'
+		  AND p.status IN ('pending', 'active', 'revoking')
+	`, nodeID); err != nil {
+		return err
+	}
+	_, err := tx.Exec(ctx, `
+		UPDATE vpn_devices d
+		SET status = 'error', updated_at = now(), last_error = 'command_expired'
+		FROM wireguard_peers p
+		WHERE p.device_id = d.id
+		  AND p.node_id = $1::uuid
+		  AND p.status = 'error'
+		  AND d.status IN ('provisioning', 'active', 'revoking')
+	`, nodeID)
+	return err
+}
+
 func (s *PostgresStore) AcknowledgeNodeCommand(ctx context.Context, nodeID, commandID, status, errorCode string) error {
 	if status != "succeeded" && status != "failed" {
 		return errors.New("invalid node command acknowledgement status")
@@ -447,12 +897,14 @@ func (s *PostgresStore) AcknowledgeNodeCommand(ctx context.Context, nodeID, comm
 	var currentError *string
 	var leaseExpiresAt *time.Time
 	var expiresAt time.Time
+	var commandType string
+	var commandPayload []byte
 	err = tx.QueryRow(ctx, `
-		SELECT status, last_error, lease_expires_at, expires_at
+		SELECT status, last_error, lease_expires_at, expires_at, command_type, payload
 		FROM node_commands
 		WHERE id = $1::uuid AND node_id = $2::uuid
 		FOR UPDATE
-	`, commandID, nodeID).Scan(&currentStatus, &currentError, &leaseExpiresAt, &expiresAt)
+	`, commandID, nodeID).Scan(&currentStatus, &currentError, &leaseExpiresAt, &expiresAt, &commandType, &commandPayload)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return ErrNodeCommandNotFound
 	}
@@ -482,6 +934,9 @@ func (s *PostgresStore) AcknowledgeNodeCommand(ctx context.Context, nodeID, comm
 		`, commandID); err != nil {
 			return err
 		}
+		if err := markExpiredNodeCommandSubjects(ctx, tx, nodeID); err != nil {
+			return err
+		}
 		if err := tx.Commit(ctx); err != nil {
 			return err
 		}
@@ -509,6 +964,92 @@ func (s *PostgresStore) AcknowledgeNodeCommand(ctx context.Context, nodeID, comm
 		WHERE id = $1::uuid
 	`, commandID, status, lastError, string(result)); err != nil {
 		return err
+	}
+
+	var commandPayloadFields struct {
+		PublicKey string `json:"public_key"`
+	}
+	if err := json.Unmarshal(commandPayload, &commandPayloadFields); err != nil || !validWireGuardPublicKey(commandPayloadFields.PublicKey) {
+		return errors.New("node command payload has no valid WireGuard public key")
+	}
+	switch commandType {
+	case "peer.ensure":
+		if status == "succeeded" {
+			if _, err := tx.Exec(ctx, `
+				UPDATE wireguard_peers
+				SET status = 'active'
+				WHERE node_id = $1::uuid AND public_key = $2
+				  AND status IN ('pending', 'error')
+			`, nodeID, commandPayloadFields.PublicKey); err != nil {
+				return err
+			}
+			if _, err := tx.Exec(ctx, `
+				UPDATE vpn_devices d
+				SET status = 'active', updated_at = now(), last_error = NULL
+				FROM wireguard_peers p
+				WHERE p.device_id = d.id AND p.node_id = $1::uuid
+				  AND p.public_key = $2 AND d.status = 'provisioning'
+			`, nodeID, commandPayloadFields.PublicKey); err != nil {
+				return err
+			}
+		} else {
+			if _, err := tx.Exec(ctx, `
+				UPDATE wireguard_peers SET status = 'error'
+				WHERE node_id = $1::uuid AND public_key = $2
+				  AND status IN ('pending', 'active')
+			`, nodeID, commandPayloadFields.PublicKey); err != nil {
+				return err
+			}
+			if _, err := tx.Exec(ctx, `
+				UPDATE vpn_devices d
+				SET status = 'error', updated_at = now(), last_error = $3
+				FROM wireguard_peers p
+				WHERE p.device_id = d.id AND p.node_id = $1::uuid
+				  AND p.public_key = $2 AND d.status IN ('provisioning', 'active')
+			`, nodeID, commandPayloadFields.PublicKey, errorCode); err != nil {
+				return err
+			}
+		}
+	case "peer.remove":
+		if status == "succeeded" {
+			if _, err := tx.Exec(ctx, `
+				UPDATE wireguard_peers
+				SET status = 'revoked', revoked_at = COALESCE(revoked_at, now())
+				WHERE node_id = $1::uuid AND public_key = $2
+				  AND status <> 'revoked'
+			`, nodeID, commandPayloadFields.PublicKey); err != nil {
+				return err
+			}
+			if _, err := tx.Exec(ctx, `
+				UPDATE vpn_devices d
+				SET status = 'revoked', revoked_at = COALESCE(d.revoked_at, now()),
+				    updated_at = now(), last_error = NULL
+				FROM wireguard_peers p
+				WHERE p.device_id = d.id AND p.node_id = $1::uuid
+				  AND p.public_key = $2 AND d.status <> 'revoked'
+			`, nodeID, commandPayloadFields.PublicKey); err != nil {
+				return err
+			}
+		} else {
+			if _, err := tx.Exec(ctx, `
+				UPDATE wireguard_peers SET status = 'error'
+				WHERE node_id = $1::uuid AND public_key = $2
+				  AND status IN ('pending', 'active', 'revoking')
+			`, nodeID, commandPayloadFields.PublicKey); err != nil {
+				return err
+			}
+			if _, err := tx.Exec(ctx, `
+				UPDATE vpn_devices d
+				SET status = 'error', updated_at = now(), last_error = $3
+				FROM wireguard_peers p
+				WHERE p.device_id = d.id AND p.node_id = $1::uuid
+				  AND p.public_key = $2 AND d.status IN ('provisioning', 'active', 'revoking')
+			`, nodeID, commandPayloadFields.PublicKey, errorCode); err != nil {
+				return err
+			}
+		}
+	default:
+		return errors.New("unknown node command type")
 	}
 	return tx.Commit(ctx)
 }

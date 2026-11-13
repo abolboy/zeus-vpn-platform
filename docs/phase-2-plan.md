@@ -38,7 +38,7 @@ Build a secure multi-user management plane without changing the already-working 
 - [x] Web create/edit forms wired to authenticated API.
 - [ ] Device registration/revocation and actual device-limit enforcement.
 - [ ] WireGuard peer desired-state workflow and address allocation.
-- Important: account status and device limit are database metadata only. They do not yet disconnect or restrict an existing active WireGuard peer.
+- Account suspension blocks new device enrollment but does not automatically revoke existing peers. Explicit device revocation is asynchronous and completes only after a successful node acknowledgement. The device limit is enforced during enrollment.
 
 ## 2D — Node agent and WireGuard executor
 - [x] Separate optional mTLS listener for node commands.

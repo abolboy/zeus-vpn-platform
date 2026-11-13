@@ -46,7 +46,7 @@ All user endpoints require an operator bearer session. `owner` and `admin` may c
 - Idempotency responses expire after 24 hours; expired entries are removed when the key is reused.
 - User mutation, idempotency response, and audit event are committed in one PostgreSQL transaction.
 - Display names are limited to 1–80 Unicode characters; device limit is 1–20; statuses are `active`, `suspended`, or `disabled`.
-- Important: user status and maximum-device count are currently database/account metadata only. Device enrollment, access enforcement, and active WireGuard peer revocation are not implemented in this milestone. A suspended/disabled record does not itself disconnect an existing tunnel.
+- A suspended/disabled user cannot enroll new devices, and max_devices is enforced during enrollment. Changing user status does not automatically revoke devices already provisioned; revoke those devices explicitly and wait for node acknowledgement.
 - No device, peer, node, payment, subscription, or WireGuard host mutation endpoint is implemented.
 
 ## Session and password security

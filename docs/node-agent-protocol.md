@@ -42,6 +42,13 @@ Allowed command types are a closed enum:
 
 No arbitrary shell command, executable path, interface name, firewall script, or opaque command string is accepted.
 
+## Queue lifecycle and device state
+- User/device APIs create peer.ensure and peer.remove commands in the same PostgreSQL transaction as device/peer desired-state changes.
+- A newly registered device stays provisioning until the node acknowledges peer.ensure successfully.
+- A revocation stays revoking until peer.remove succeeds; only then are the device and peer marked revoked.
+- Failed commands mark the peer/device error and preserve an operator-visible error code.
+- Device limits are checked while locking the owning user row. Provisioning, active, revoking, and error devices count against the limit; revoked devices do not.
+
 ## Queue lifecycle
 
 - Commands are persisted in PostgreSQL and scoped to one vpn_nodes row.

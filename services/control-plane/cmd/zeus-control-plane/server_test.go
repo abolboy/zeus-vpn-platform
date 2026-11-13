@@ -372,8 +372,12 @@ func TestPostgresStoreIntegration(t *testing.T) {
 	fingerprint := sha256.Sum256([]byte("ZEUS node certificate " + newRequestID()))
 	var nodeID string
 	err = store.pool.QueryRow(ctx, `
-		INSERT INTO vpn_nodes (name, region, endpoint_host, endpoint_port, public_key, interface_name, status, agent_cert_sha256)
-		VALUES ($1, 'ci', '127.0.0.1', 51820, 'ci-node-public-key', 'wg0', 'pending', $2)
+		INSERT INTO vpn_nodes (
+			name, region, endpoint_host, endpoint_port, public_key, interface_name, status,
+			agent_cert_sha256, client_ipv4_pool, client_ipv6_pool, interface_ipv4, interface_ipv6
+		)
+		VALUES ($1, 'ci', '127.0.0.1', 51820, 'AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE=', 'wg0', 'pending',
+		        $2, '10.77.77.0/24', 'fd77:77:77::/64', '10.77.77.1', 'fd77:77:77::1')
 		RETURNING id::text
 	`, "ci-node-"+newRequestID(), fingerprint[:]).Scan(&nodeID)
 	if err != nil {
@@ -423,5 +427,157 @@ func TestPostgresStoreIntegration(t *testing.T) {
 	}
 	if commandStatus != "succeeded" {
 		t.Fatalf("node command status=%s, want succeeded", commandStatus)
+	}
+
+	var deviceUserID string
+	if err := store.pool.QueryRow(ctx, `
+		INSERT INTO vpn_users (display_name, max_devices)
+		VALUES ('ZEUS Device Integration User', 1)
+		RETURNING id::text
+	`).Scan(&deviceUserID); err != nil {
+		t.Fatal(err)
+	}
+	deviceInput := CreateDeviceInput{
+		DeviceRef: "ci-device-reference-0001",
+		DeviceName: "CI Android",
+		Platform: "android",
+		PublicKey: "AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgI=",
+	}
+	deviceRoute := "POST:/v1/users/" + deviceUserID + "/devices"
+	deviceBody, err := json.Marshal(deviceInput)
+	if err != nil {
+		t.Fatal(err)
+	}
+	deviceKey := newRequestID()
+	deviceHash := sha256.Sum256(deviceBody)
+	deviceCreateRequest := httptest.NewRequest(http.MethodPost, "/v1/users/"+deviceUserID+"/devices", bytes.NewReader(deviceBody))
+	deviceCreateRequest.Header.Set("Authorization", "Bearer "+token)
+	deviceCreateRequest.Header.Set("Idempotency-Key", deviceKey)
+	deviceCreateResponse := httptest.NewRecorder()
+	handler.ServeHTTP(deviceCreateResponse, deviceCreateRequest)
+	if deviceCreateResponse.Code != http.StatusAccepted {
+		t.Fatalf("device create API status=%d body=%s", deviceCreateResponse.Code, deviceCreateResponse.Body.String())
+	}
+	var device VPNDevice
+	if err := json.Unmarshal(deviceCreateResponse.Body.Bytes(), &device); err != nil {
+		t.Fatal(err)
+	}
+	if device.Status != "provisioning" || device.Peer.Status != "pending" ||
+		device.Peer.AssignedIPv4 != "10.77.77.2" || device.Peer.AssignedIPv6 != "fd77:77:77::2" ||
+		device.Peer.ServerPublicKey != "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE=" {
+		t.Fatalf("unexpected device provisioning result: %+v", device)
+	}
+	deviceReplayRequest := httptest.NewRequest(http.MethodPost, "/v1/users/"+deviceUserID+"/devices", bytes.NewReader(deviceBody))
+	deviceReplayRequest.Header.Set("Authorization", "Bearer "+token)
+	deviceReplayRequest.Header.Set("Idempotency-Key", deviceKey)
+	deviceReplayResponse := httptest.NewRecorder()
+	handler.ServeHTTP(deviceReplayResponse, deviceReplayRequest)
+	var replayedDevice VPNDevice
+	if deviceReplayResponse.Code != http.StatusAccepted ||
+		deviceReplayResponse.Header().Get("Idempotency-Replayed") != "true" ||
+		json.Unmarshal(deviceReplayResponse.Body.Bytes(), &replayedDevice) != nil ||
+		replayedDevice.ID != device.ID {
+		t.Fatalf("device create replay failed: status=%d body=%s", deviceReplayResponse.Code, deviceReplayResponse.Body.String())
+	}
+	devices, err := store.ListVPNDevices(ctx, deviceUserID)
+	if err != nil || len(devices) != 1 || devices[0].ID != device.ID {
+		t.Fatalf("device list mismatch: devices=%+v err=%v", devices, err)
+	}
+	deviceListRequest := httptest.NewRequest(http.MethodGet, "/v1/users/"+deviceUserID+"/devices", nil)
+	deviceListRequest.Header.Set("Authorization", "Bearer "+token)
+	deviceListResponse := httptest.NewRecorder()
+	handler.ServeHTTP(deviceListResponse, deviceListRequest)
+	if deviceListResponse.Code != http.StatusOK {
+		t.Fatalf("device list API status=%d body=%s", deviceListResponse.Code, deviceListResponse.Body.String())
+	}
+
+	secondDeviceBody, err := json.Marshal(CreateDeviceInput{
+		DeviceRef: "ci-device-reference-0002", DeviceName: "Second Android",
+		Platform: "android", PublicKey: "AwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAw=",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondDeviceRequest := httptest.NewRequest(http.MethodPost, "/v1/users/"+deviceUserID+"/devices", bytes.NewReader(secondDeviceBody))
+	secondDeviceRequest.Header.Set("Authorization", "Bearer "+token)
+	secondDeviceRequest.Header.Set("Idempotency-Key", newRequestID())
+	secondDeviceResponse := httptest.NewRecorder()
+	handler.ServeHTTP(secondDeviceResponse, secondDeviceRequest)
+	if secondDeviceResponse.Code != http.StatusConflict {
+		t.Fatalf("device limit API status=%d body=%s, want 409", secondDeviceResponse.Code, secondDeviceResponse.Body.String())
+	}
+
+	secondHash := sha256.Sum256([]byte("second-device"))
+	_, err = store.CreateVPNDevice(ctx, operator.ID, deviceUserID, deviceRoute, newRequestID(),
+		secondHash[:], CreateDeviceInput{
+			DeviceRef: "ci-device-reference-0002", DeviceName: "Second Android",
+			Platform: "android", PublicKey: "AwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAw=",
+		}, newRequestID(), nil)
+	if !errors.Is(err, ErrDeviceLimitReached) {
+		t.Fatalf("second device error=%v, want ErrDeviceLimitReached", err)
+	}
+
+	deviceCommand, err := store.LeaseNodeCommand(ctx, nodeID, 45*time.Second)
+	if err != nil || deviceCommand.Type != "peer.ensure" {
+		t.Fatalf("device peer.ensure command lease failed: command=%+v err=%v", deviceCommand, err)
+	}
+	if err := store.AcknowledgeNodeCommand(ctx, nodeID, deviceCommand.ID, "succeeded", ""); err != nil {
+		t.Fatal(err)
+	}
+	devices, err = store.ListVPNDevices(ctx, deviceUserID)
+	if err != nil || len(devices) != 1 || devices[0].Status != "active" || devices[0].Peer.Status != "active" {
+		t.Fatalf("peer ensure acknowledgement did not activate device: devices=%+v err=%v", devices, err)
+	}
+
+	revokeRoute := "POST:/v1/users/" + deviceUserID + "/devices/" + device.ID + "/revoke"
+	revokeKey := newRequestID()
+	revokeHash := sha256.Sum256([]byte("zeus-device-revoke-v1"))
+	revoking, revokeReplay, err := store.RevokeVPNDevice(ctx, operator.ID, deviceUserID, device.ID, revokeRoute, revokeKey, revokeHash[:], newRequestID(), nil)
+	if err != nil || revokeReplay || revoking.Status != "revoking" || revoking.Peer.Status != "revoking" {
+		t.Fatalf("device revoke enqueue failed: replay=%v device=%+v err=%v", revokeReplay, revoking, err)
+	}
+	revokeAgain, revokeReplay, err := store.RevokeVPNDevice(ctx, operator.ID, deviceUserID, device.ID, revokeRoute, revokeKey, revokeHash[:], newRequestID(), nil)
+	if err != nil || !revokeReplay || revokeAgain.ID != device.ID {
+		t.Fatalf("device revoke replay failed: replay=%v device=%+v err=%v", revokeReplay, revokeAgain, err)
+	}
+
+	revokeAPIRequest := httptest.NewRequest(http.MethodPost, "/v1/users/"+deviceUserID+"/devices/"+device.ID+"/revoke", nil)
+	revokeAPIRequest.Header.Set("Authorization", "Bearer "+token)
+	revokeAPIRequest.Header.Set("Idempotency-Key", newRequestID())
+	revokeAPIResponse := httptest.NewRecorder()
+	handler.ServeHTTP(revokeAPIResponse, revokeAPIRequest)
+	if revokeAPIResponse.Code != http.StatusAccepted {
+		t.Fatalf("device revoke API status=%d body=%s", revokeAPIResponse.Code, revokeAPIResponse.Body.String())
+	}
+	removeCommand, err := store.LeaseNodeCommand(ctx, nodeID, 45*time.Second)
+	if err != nil || removeCommand.Type != "peer.remove" {
+		t.Fatalf("device peer.remove command lease failed: command=%+v err=%v", removeCommand, err)
+	}
+	if err := store.AcknowledgeNodeCommand(ctx, nodeID, removeCommand.ID, "succeeded", ""); err != nil {
+		t.Fatal(err)
+	}
+	devices, err = store.ListVPNDevices(ctx, deviceUserID)
+	if err != nil || len(devices) != 1 || devices[0].Status != "revoked" || devices[0].Peer.Status != "revoked" {
+		t.Fatalf("peer remove acknowledgement did not revoke device: devices=%+v err=%v", devices, err)
+	}
+
+	// A successfully revoked peer releases its per-node IPv4/IPv6 addresses for reuse.
+	replacementInput := CreateDeviceInput{
+		DeviceRef: "ci-device-reference-0003",
+		DeviceName: "Replacement Android",
+		Platform: "android",
+		PublicKey: "BAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQ=",
+	}
+	replacementHash := sha256.Sum256([]byte("replacement-device-payload"))
+	replacementDevice, replayed, err := store.CreateVPNDevice(
+		ctx, operator.ID, deviceUserID, deviceRoute, newRequestID(), replacementHash[:],
+		replacementInput, newRequestID(), nil,
+	)
+	if err != nil || replayed {
+		t.Fatalf("replacement device create failed: replay=%v device=%+v err=%v", replayed, replacementDevice, err)
+	}
+	if replacementDevice.Peer.AssignedIPv4 != device.Peer.AssignedIPv4 ||
+		replacementDevice.Peer.AssignedIPv6 != device.Peer.AssignedIPv6 {
+		t.Fatalf("released node addresses were not reused: old=%+v new=%+v", device.Peer, replacementDevice.Peer)
 	}
 }

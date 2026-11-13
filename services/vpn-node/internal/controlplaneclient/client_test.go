@@ -1,7 +1,6 @@
 package controlplaneclient
 
 import (
-	"bytes"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
@@ -22,11 +21,10 @@ import (
 )
 
 type testCertificates struct {
-	caFile      string
-	serverCert  tls.Certificate
-	clientCert  tls.Certificate
+	caFile         string
+	serverCert     tls.Certificate
 	clientCertFile string
-	clientKeyFile string
+	clientKeyFile  string
 }
 
 func TestClientUsesMutualTLSAndPollsCommands(t *testing.T) {
@@ -48,19 +46,19 @@ func TestClientUsesMutualTLSAndPollsCommands(t *testing.T) {
 			if current == 1 {
 				w.Header().Set("Content-Type", "application/json")
 				_ = json.NewEncoder(w).Encode(Command{
-					ID: "8e09c3da-fbac-4b34-9ad0-090e1f8d4c47",
-					NodeID: "7e09c3da-fbac-4b34-9ad0-090e1f8d4c47",
-					Type: "peer.ensure",
-					Payload: json.RawMessage([]byte("{\"public_key\":\"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=\",\"ipv4\":\"10.77.77.3\",\"ipv6\":\"fd77:77:77::3\"}")),
-					Attempt: 1,
-					ExpiresAt: time.Now().Add(5*time.Minute),
+					ID:        "8e09c3da-fbac-4b34-9ad0-090e1f8d4c47",
+					NodeID:    "7e09c3da-fbac-4b34-9ad0-090e1f8d4c47",
+					Type:      "peer.ensure",
+					Payload:   json.RawMessage([]byte("{\"public_key\":\"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=\",\"ipv4\":\"10.77.77.3\",\"ipv6\":\"fd77:77:77::3\"}")),
+					Attempt:   1,
+					ExpiresAt: time.Now().Add(5 * time.Minute),
 				})
 				return
 			}
 			w.WriteHeader(http.StatusNoContent)
 		case r.Method == http.MethodPost && r.URL.Path == "/agent/v1/commands/8e09c3da-fbac-4b34-9ad0-090e1f8d4c47/ack":
 			var ack struct {
-				Status string "json:\"status\""
+				Status    string "json:\"status\""
 				ErrorCode string "json:\"error_code\""
 			}
 			if err := json.NewDecoder(r.Body).Decode(&ack); err != nil {
@@ -81,20 +79,20 @@ func TestClientUsesMutualTLSAndPollsCommands(t *testing.T) {
 		}
 	}))
 	server.TLS = &tls.Config{
-		MinVersion: tls.VersionTLS12,
-		ClientAuth: tls.RequireAndVerifyClientCert,
-		ClientCAs: certs.clientCAPool(t),
+		MinVersion:   tls.VersionTLS12,
+		ClientAuth:   tls.RequireAndVerifyClientCert,
+		ClientCAs:    certs.clientCAPool(t),
 		Certificates: []tls.Certificate{certs.serverCert},
 	}
 	server.StartTLS()
 	defer server.Close()
 
 	client, err := New(Config{
-		BaseURL: server.URL,
+		BaseURL:        server.URL,
 		ClientCertFile: certs.clientCertFile,
-		ClientKeyFile: certs.clientKeyFile,
-		ServerCAFile: certs.caFile,
-		Timeout: 5*time.Second,
+		ClientKeyFile:  certs.clientKeyFile,
+		ServerCAFile:   certs.caFile,
+		Timeout:        5 * time.Second,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -128,10 +126,10 @@ func TestClientUsesMutualTLSAndPollsCommands(t *testing.T) {
 func TestClientRejectsInsecureOrMalformedConfiguration(t *testing.T) {
 	certs := makeCertificates(t)
 	config := Config{
-		BaseURL: "http://control.example",
+		BaseURL:        "http://control.example",
 		ClientCertFile: certs.clientCertFile,
-		ClientKeyFile: certs.clientKeyFile,
-		ServerCAFile: certs.caFile,
+		ClientKeyFile:  certs.clientKeyFile,
+		ServerCAFile:   certs.caFile,
 	}
 	if _, err := New(config); err == nil {
 		t.Fatal("HTTP control-plane URL was accepted")
@@ -157,10 +155,10 @@ func TestClientRejectsBroadPrivateKeyPermissions(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, err := New(Config{
-		BaseURL: "https://control.example",
+		BaseURL:        "https://control.example",
 		ClientCertFile: certs.clientCertFile,
-		ClientKeyFile: certs.clientKeyFile,
-		ServerCAFile: certs.caFile,
+		ClientKeyFile:  certs.clientKeyFile,
+		ServerCAFile:   certs.caFile,
 	})
 	if err == nil {
 		t.Fatal("group/world-readable client private key was accepted")
@@ -189,13 +187,13 @@ func makeCertificates(t *testing.T) testCertificates {
 		t.Fatal(err)
 	}
 	caTemplate := &x509.Certificate{
-		SerialNumber: big.NewInt(1),
-		Subject: pkix.Name{CommonName: "ZEUS test CA"},
-		NotBefore: now.Add(-time.Hour),
-		NotAfter: now.Add(24*time.Hour),
-		IsCA: true,
+		SerialNumber:          big.NewInt(1),
+		Subject:               pkix.Name{CommonName: "ZEUS test CA"},
+		NotBefore:             now.Add(-time.Hour),
+		NotAfter:              now.Add(24 * time.Hour),
+		IsCA:                  true,
 		BasicConstraintsValid: true,
-		KeyUsage: x509.KeyUsageCertSign | x509.KeyUsageDigitalSignature,
+		KeyUsage:              x509.KeyUsageCertSign | x509.KeyUsageDigitalSignature,
 	}
 	caDER, err := x509.CreateCertificate(rand.Reader, caTemplate, caTemplate, &caKey.PublicKey, caKey)
 	if err != nil {
@@ -206,24 +204,20 @@ func makeCertificates(t *testing.T) testCertificates {
 		t.Fatal(err)
 	}
 	caFile := writePEMFile(t, directory, "ca.pem", "CERTIFICATE", caDER)
-	serverKey, serverCertFile, serverKeyFile := issueCertificate(t, directory, "server", ca, caKey, x509.ExtKeyUsageServerAuth, []string{"localhost"}, []net.IP{net.ParseIP("127.0.0.1")})
-	clientKey, clientCertFile, clientKeyFile := issueCertificate(t, directory, "client", ca, caKey, x509.ExtKeyUsageClientAuth, nil, nil)
+	_, serverCertFile, serverKeyFile := issueCertificate(t, directory, "server", ca, caKey, x509.ExtKeyUsageServerAuth, []string{"localhost"}, []net.IP{net.ParseIP("127.0.0.1")})
+	_, clientCertFile, clientKeyFile := issueCertificate(t, directory, "client", ca, caKey, x509.ExtKeyUsageClientAuth, nil, nil)
 	serverCert, err := tls.LoadX509KeyPair(serverCertFile, serverKeyFile)
 	if err != nil {
 		t.Fatal(err)
 	}
-	clientCert, err := tls.LoadX509KeyPair(clientCertFile, clientKeyFile)
-	if err != nil {
+	if _, err := tls.LoadX509KeyPair(clientCertFile, clientKeyFile); err != nil {
 		t.Fatal(err)
 	}
-	_ = serverKey
-	_ = clientKey
 	return testCertificates{
-		caFile: caFile,
-		serverCert: serverCert,
-		clientCert: clientCert,
+		caFile:         caFile,
+		serverCert:     serverCert,
 		clientCertFile: clientCertFile,
-		clientKeyFile: clientKeyFile,
+		clientKeyFile:  clientKeyFile,
 	}
 }
 
@@ -235,13 +229,13 @@ func issueCertificate(t *testing.T, directory, name string, ca *x509.Certificate
 	}
 	template := &x509.Certificate{
 		SerialNumber: big.NewInt(int64(len(name) + 2)),
-		Subject: pkix.Name{CommonName: "ZEUS test " + name},
-		NotBefore: time.Now().Add(-time.Hour),
-		NotAfter: time.Now().Add(12*time.Hour),
-		KeyUsage: x509.KeyUsageDigitalSignature,
-		ExtKeyUsage: []x509.ExtKeyUsage{usage},
-		DNSNames: dnsNames,
-		IPAddresses: ipAddresses,
+		Subject:      pkix.Name{CommonName: "ZEUS test " + name},
+		NotBefore:    time.Now().Add(-time.Hour),
+		NotAfter:     time.Now().Add(12 * time.Hour),
+		KeyUsage:     x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:  []x509.ExtKeyUsage{usage},
+		DNSNames:     dnsNames,
+		IPAddresses:  ipAddresses,
 	}
 	certificateDER, err := x509.CreateCertificate(rand.Reader, template, ca, &key.PublicKey, caKey)
 	if err != nil {
@@ -264,5 +258,3 @@ func writePEMFile(t *testing.T, directory, name, blockType string, data []byte) 
 	}
 	return path
 }
-
-var _ = bytes.Compare

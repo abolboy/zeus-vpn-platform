@@ -13,13 +13,13 @@ import (
 
 type fakeClient struct {
 	command *controlplaneclient.Command
-	acks []ackRecord
+	acks    []ackRecord
 }
 
 type ackRecord struct {
-	id string
+	id     string
 	status string
-	code string
+	code   string
 }
 
 func (f *fakeClient) Poll(context.Context) (*controlplaneclient.Command, error) {
@@ -34,10 +34,10 @@ func (f *fakeClient) Acknowledge(_ context.Context, id, status, code string) err
 type fakeManager struct {
 	ensureCalls int
 	removeCalls int
-	peer wireguard.PeerSpec
-	publicKey string
-	result wireguard.Result
-	err error
+	peer        wireguard.PeerSpec
+	publicKey   string
+	result      wireguard.Result
+	err         error
 }
 
 func (f *fakeManager) EnsurePeer(_ context.Context, peer wireguard.PeerSpec) (wireguard.Result, error) {
@@ -66,16 +66,16 @@ func newTestWorker(t *testing.T, command *controlplaneclient.Command, result wir
 func TestEnsurePeerCommandAppliesAndAcknowledges(t *testing.T) {
 	payload, _ := json.Marshal(map[string]string{
 		"public_key": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
-		"ipv4": "10.77.77.3",
-		"ipv6": "fd77:77:77::3",
+		"ipv4":       "10.77.77.3",
+		"ipv6":       "fd77:77:77::3",
 	})
 	command := &controlplaneclient.Command{
-		ID: "8e09c3da-fbac-4b34-9ad0-090e1f8d4c47",
-		Type: "peer.ensure",
-		Payload: payload,
+		ID:        "8e09c3da-fbac-4b34-9ad0-090e1f8d4c47",
+		Type:      "peer.ensure",
+		Payload:   payload,
 		ExpiresAt: time.Now().Add(time.Minute),
 	}
-	w, client, manager := newTestWorker(t, command, wireguard.Result{Changed:true}, nil)
+	w, client, manager := newTestWorker(t, command, wireguard.Result{Changed: true}, nil)
 	if err := w.process(context.Background(), command); err != nil {
 		t.Fatal(err)
 	}
@@ -92,8 +92,13 @@ func TestEnsurePeerCommandAppliesAndAcknowledges(t *testing.T) {
 
 func TestDryRunDoesNotReportMutationSuccess(t *testing.T) {
 	payload := []byte("{\"public_key\":\"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=\",\"ipv4\":\"10.77.77.3\",\"ipv6\":\"fd77:77:77::3\"}")
-	command := &controlplaneclient.Command{ID:"8e09c3da-fbac-4b34-9ad0-090e1f8d4c47",Type:"peer.ensure",Payload:payload,ExpiresAt:time.Now().Add(time.Minute)}
-	w, client, manager := newTestWorker(t, command, wireguard.Result{DryRun:true,Changed:true}, nil)
+	command := &controlplaneclient.Command{
+		ID:        "8e09c3da-fbac-4b34-9ad0-090e1f8d4c47",
+		Type:      "peer.ensure",
+		Payload:   payload,
+		ExpiresAt: time.Now().Add(time.Minute),
+	}
+	w, client, manager := newTestWorker(t, command, wireguard.Result{DryRun: true, Changed: true}, nil)
 	if err := w.process(context.Background(), command); err != nil {
 		t.Fatal(err)
 	}
@@ -103,28 +108,28 @@ func TestDryRunDoesNotReportMutationSuccess(t *testing.T) {
 }
 
 func TestExpiredAndInvalidCommandsAreRejectedBeforeExecution(t *testing.T) {
-	for _, tc := range []struct{
-		name string
-		command *controlplaneclient.Command
+	for _, tc := range []struct {
+		name         string
+		command      *controlplaneclient.Command
 		expectedCode string
 	}{
 		{
-			name:"expired",
-			command:&controlplaneclient.Command{ID:"8e09c3da-fbac-4b34-9ad0-090e1f8d4c47",Type:"peer.remove",Payload:[]byte("{\"public_key\":\"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=\"}"),ExpiresAt:time.Now().Add(-time.Second)},
-			expectedCode:"command_expired",
+			name:         "expired",
+			command:      &controlplaneclient.Command{ID: "8e09c3da-fbac-4b34-9ad0-090e1f8d4c47", Type: "peer.remove", Payload: []byte("{\"public_key\":\"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=\"}"), ExpiresAt: time.Now().Add(-time.Second)},
+			expectedCode: "command_expired",
 		},
 		{
-			name:"unknown command",
-			command:&controlplaneclient.Command{ID:"8e09c3da-fbac-4b34-9ad0-090e1f8d4c47",Type:"shell.exec",Payload:[]byte("{}"),ExpiresAt:time.Now().Add(time.Minute)},
-			expectedCode:"validation_failed",
+			name:         "unknown command",
+			command:      &controlplaneclient.Command{ID: "8e09c3da-fbac-4b34-9ad0-090e1f8d4c47", Type: "shell.exec", Payload: []byte("{}"), ExpiresAt: time.Now().Add(time.Minute)},
+			expectedCode: "validation_failed",
 		},
 		{
-			name:"extra payload field",
-			command:&controlplaneclient.Command{ID:"8e09c3da-fbac-4b34-9ad0-090e1f8d4c47",Type:"peer.remove",Payload:[]byte("{\"public_key\":\"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=\",\"command\":\"id\"}"),ExpiresAt:time.Now().Add(time.Minute)},
-			expectedCode:"validation_failed",
+			name:         "extra payload field",
+			command:      &controlplaneclient.Command{ID: "8e09c3da-fbac-4b34-9ad0-090e1f8d4c47", Type: "peer.remove", Payload: []byte("{\"public_key\":\"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=\",\"command\":\"id\"}"), ExpiresAt: time.Now().Add(time.Minute)},
+			expectedCode: "validation_failed",
 		},
 	} {
-		t.Run(tc.name,func(t *testing.T){
+		t.Run(tc.name, func(t *testing.T) {
 			w, client, manager := newTestWorker(t, tc.command, wireguard.Result{}, nil)
 			if err := w.process(context.Background(), tc.command); err != nil {
 				t.Fatal(err)
@@ -132,24 +137,28 @@ func TestExpiredAndInvalidCommandsAreRejectedBeforeExecution(t *testing.T) {
 			if manager.ensureCalls+manager.removeCalls != 0 {
 				t.Fatal("invalid command reached WireGuard executor")
 			}
-			if len(client.acks)!=1 || client.acks[0].status!="failed" || client.acks[0].code!=tc.expectedCode {
-				t.Fatalf("unexpected acknowledgement: %+v",client.acks)
+			if len(client.acks) != 1 || client.acks[0].status != "failed" || client.acks[0].code != tc.expectedCode {
+				t.Fatalf("unexpected acknowledgement: %+v", client.acks)
 			}
 		})
 	}
 }
 
 func TestRemovePeerCommand(t *testing.T) {
-	command:=&controlplaneclient.Command{
-		ID:"8e09c3da-fbac-4b34-9ad0-090e1f8d4c47",
-		Type:"peer.remove",
-		Payload:[]byte("{\"public_key\":\"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=\"}"),
-		ExpiresAt:time.Now().Add(time.Minute),
+	command := &controlplaneclient.Command{
+		ID:        "8e09c3da-fbac-4b34-9ad0-090e1f8d4c47",
+		Type:      "peer.remove",
+		Payload:   []byte("{\"public_key\":\"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=\"}"),
+		ExpiresAt: time.Now().Add(time.Minute),
 	}
-	w,client,manager:=newTestWorker(t,command,wireguard.Result{Changed:true},nil)
-	if err:=w.process(context.Background(),command);err!=nil{t.Fatal(err)}
-	if manager.removeCalls!=1||manager.publicKey!="AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="{
-		t.Fatalf("unexpected remove operation: %+v",manager)
+	w, client, manager := newTestWorker(t, command, wireguard.Result{Changed: true}, nil)
+	if err := w.process(context.Background(), command); err != nil {
+		t.Fatal(err)
 	}
-	if len(client.acks)!=1||client.acks[0].status!="succeeded"{t.Fatalf("unexpected acknowledgement: %+v",client.acks)}
+	if manager.removeCalls != 1 || manager.publicKey != "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=" {
+		t.Fatalf("unexpected remove operation: %+v", manager)
+	}
+	if len(client.acks) != 1 || client.acks[0].status != "succeeded" {
+		t.Fatalf("unexpected acknowledgement: %+v", client.acks)
+	}
 }

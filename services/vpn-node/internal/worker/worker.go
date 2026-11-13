@@ -108,8 +108,8 @@ func (w *Worker) process(ctx context.Context, command *controlplaneclient.Comman
 		}
 		result, err := w.manager.EnsurePeer(ctx, wireguard.PeerSpec{
 			PublicKey: payload.PublicKey,
-			IPv4: ipv4,
-			IPv6: ipv6,
+			IPv4:      ipv4,
+			IPv6:      ipv6,
 		})
 		if err != nil {
 			return w.client.Acknowledge(ctx, command.ID, "failed", "wg_apply_failed")

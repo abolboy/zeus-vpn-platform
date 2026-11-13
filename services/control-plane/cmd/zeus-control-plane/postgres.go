@@ -883,6 +883,13 @@ func markExpiredNodeCommandSubjects(ctx context.Context, tx pgx.Tx, nodeID strin
 		  AND p.node_id = c.node_id
 		  AND p.public_key = c.payload->>'public_key'
 		  AND p.status IN ('pending', 'active', 'revoking')
+		  AND NOT EXISTS (
+		      SELECT 1
+		      FROM node_commands newer
+		      WHERE newer.node_id = c.node_id
+		        AND newer.payload->>'public_key' = c.payload->>'public_key'
+		        AND (newer.created_at, newer.id) > (c.created_at, c.id)
+		  )
 	`, nodeID); err != nil {
 		return err
 	}

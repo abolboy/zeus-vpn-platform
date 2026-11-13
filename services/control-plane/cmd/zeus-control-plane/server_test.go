@@ -568,12 +568,12 @@ func TestPostgresStoreIntegration(t *testing.T) {
 		PublicKey: "BAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQ=",
 	}
 	replacementHash := sha256.Sum256([]byte("replacement-device-payload"))
-	replacementDevice, replacementReplayed, err := store.CreateVPNDevice(
+	replacementDevice, replacementWasReplay, replacementErr := store.CreateVPNDevice(
 		ctx, operator.ID, deviceUserID, deviceRoute, newRequestID(), replacementHash[:],
 		replacementInput, newRequestID(), nil,
 	)
-	if err != nil || replacementReplayed {
-		t.Fatalf("replacement device create failed: replay=%v device=%+v err=%v", replacementReplayed, replacementDevice, err)
+	if replacementErr != nil || replacementWasReplay {
+		t.Fatalf("replacement device create failed: replay=%v device=%+v err=%v", replacementWasReplay, replacementDevice, replacementErr)
 	}
 	if replacementDevice.Peer.AssignedIPv4 != device.Peer.AssignedIPv4 ||
 		replacementDevice.Peer.AssignedIPv6 != device.Peer.AssignedIPv6 {

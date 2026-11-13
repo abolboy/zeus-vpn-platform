@@ -371,19 +371,20 @@ export default function App() {
         <div className="panel-heading">
           <div>
             <h2>مدیریت کاربران</h2>
-            <p>{isControlPlaneConfigured ? 'فهرست کاربران از API احراز هویت‌شده دریافت می‌شود؛ عملیات نوشتن فقط برای مدیر مجاز است.' : 'جست‌وجوی داده‌های نمونه؛ هنوز به API متصل نیست'}</p>
+            <p>{isControlPlaneConfigured ? 'فهرست کاربران از API احراز هویت‌شده دریافت می‌شود؛ تغییر وضعیت و سقف دستگاه فعلاً فقط در پایگاه داده ثبت می‌شود.' : 'جست‌وجوی داده‌های نمونه؛ هنوز به API متصل نیست'}</p>
           </div>
           <div className="users-head-actions">
             <div className="search-box">⌕ <input value={query} onChange={e=>setQuery(e.target.value)} placeholder="جست‌وجوی نام یا شناسه..." /></div>
             {isControlPlaneConfigured && canManageRemoteUsers && <button className="button primary" onClick={() => { setShowCreateUser(v => !v); setUserMutationError('') }}>{showCreateUser ? 'بستن فرم' : '＋ کاربر جدید'}</button>}
           </div>
         </div>
+        {isControlPlaneConfigured && <div className="remote-users-note">توجه: تعلیق حساب یا تغییر سقف دستگاه در این نسخه هنوز اتصال‌های فعال WireGuard را قطع یا محدود نمی‌کند؛ مدیریت واقعی دستگاه و همتا در مرحلهٔ بعد اضافه می‌شود.</div>}
         {isControlPlaneConfigured && <div className="remote-users-toolbar">
           <span>{remoteUsersState === 'loading' ? 'در حال دریافت کاربران...' : remoteUsersState === 'error' ? remoteUsersError : remoteUsers.length + ' کاربر در صفحهٔ جاری'}</span>
           <button className="button secondary" onClick={refreshRemoteUsers} disabled={remoteUsersState === 'loading'}>↻ بروزرسانی</button>
         </div>}
         {isControlPlaneConfigured && showCreateUser && canManageRemoteUsers && <form className="remote-user-form glass" onSubmit={createRemoteUser}>
-          <div className="remote-user-form-title"><b>ایجاد کاربر جدید</b><span>اطلاعات در PostgreSQL ثبت می‌شود</span></div>
+          <div className="remote-user-form-title"><b>ایجاد کاربر جدید</b><span>فقط رکورد حساب در PostgreSQL ساخته می‌شود؛ هنوز پروفایل یا تونل VPN ایجاد نمی‌شود</span></div>
           <div className="remote-user-form-fields">
             <label>نام کاربر<input value={createUserName} onChange={event => { setCreateUserName(event.target.value); setCreateUserKey('') }} maxLength={80} required placeholder="نام نمایشی کاربر" /></label>
             <label>حداکثر دستگاه<input type="number" min="1" max="20" step="1" value={createUserMaxDevices} onChange={event => { setCreateUserMaxDevices(event.target.value); setCreateUserKey('') }} required /></label>

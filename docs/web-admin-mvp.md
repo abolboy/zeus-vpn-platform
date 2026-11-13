@@ -32,6 +32,7 @@ npm run preview
 - Persian-first, responsive dashboard with Neon Core, Cyberpunk and Aurora themes.
 - Operator login/logout and authenticated user listing from the Control Plane.
 - Create user and edit name/status/device limit with server-side role enforcement.
+- Account status and device limits are metadata only in this milestone; they do not yet alter active WireGuard connections.
 - Explicit loading, error and no-data states for remote user data.
 - The API connection indicator calls only `GET /healthz`; it does not prove database readiness or VPN-node health.
 - Server inventory, traffic metrics, subscriptions and activity events remain sample data and are visibly identified as preview/demo information.

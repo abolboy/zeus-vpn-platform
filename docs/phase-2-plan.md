@@ -39,7 +39,8 @@ Turn the Phase 1 foundation into a secure, multi-user management plane without c
 - [x] Idempotency keys, payload fingerprints, safe replay, and conflict detection.
 - [x] Mutation and audit event stored in the same database transaction.
 - [x] Web dashboard create/edit forms connected to authenticated API calls.
-- [ ] Device registration/revocation, device-limit enforcement, address allocation, and idempotent peer lifecycle.
+- [ ] Device registration/revocation, actual device-limit enforcement, address allocation, and idempotent peer lifecycle.
+- Until device and peer lifecycle is implemented, account status changes do not disconnect or block existing WireGuard peers; device limits are stored as policy metadata only.
 - [ ] Immutable audit policy and audit-log viewing/retention controls.
 - The API does not change host WireGuard configuration.
 

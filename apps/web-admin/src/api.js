@@ -28,6 +28,7 @@ async function requestJSON(path, { method = 'GET', token, body, timeoutMs = 8000
     return payload
   } catch (error) {
     if (error?.name === 'AbortError') throw new Error('مهلت پاسخ Control Plane تمام شد')
+    if (error instanceof TypeError) throw new Error('ارتباط با Control Plane برقرار نشد؛ شبکه، نشانی API و CORS را بررسی کنید')
     throw error
   } finally {
     window.clearTimeout(timeout)

@@ -387,3 +387,6 @@ tbody tr:hover { background: rgba(var(--accent-rgb),.045); }
   .data-source-banner { align-items:flex-start; flex-direction:column; gap:5px; }
   .auth-user-chip { display:none; }
 }
+
+.remote-users-more { display:flex; justify-content:center; padding-top:14px; }
+.remote-users-more .button { min-width:190px; }

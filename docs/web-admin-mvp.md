@@ -1,18 +1,39 @@
-# ZEUS Web Admin — UI milestone
+# ZEUS Web Admin
 
-## Scope delivered
-- React single-page application under `apps/web-admin`.
-- Persian-first RTL layout and responsive desktop/mobile navigation.
-- Theme switcher with Neon Core, Cyberpunk, and Aurora palettes.
-- Dashboard, server inventory, user search/status demo actions, subscription cards, activity feed, and UI settings.
-- Demo data is explicitly identified in the interface; no false live telemetry is shown.
+React SPA for the ZEUS VPN control panel. Persian-first UI with three switchable neon themes.
 
-## Not yet implemented
-- Backend/API integration, authentication, role-based access control, persistent audit logs, real server metrics, provisioning, billing, and production deployment.
-- The UI must remain behind authentication when those integrations are added. Do not expose it publicly before the security baseline is complete.
+## Run locally
 
-## Next engineering steps
-1. Add typed API client and contract tests against the Go control-plane.
-2. Implement authentication and server-side authorization before management mutations.
-3. Replace sample fixtures with validated API responses and explicit loading/error/offline states.
-4. Add browser tests for navigation, themes, search, and forms.
+```sh
+npm install
+cp .env.example .env.local
+npm run dev
+```
+
+## Configure the Control Plane
+
+Set `VITE_ZEUS_API_BASE_URL` to the Go Control Plane base URL. For cross-origin development, configure one exact origin in the API's `ZEUS_ALLOWED_ORIGINS`; wildcard CORS is not supported.
+
+When the API base URL is configured, the UI starts at an operator login screen. The bearer token stays in React memory only and is not persisted to localStorage. A page reload therefore requires a new login. Logout calls the server-side session revocation endpoint.
+
+After login, the user page reads the authenticated paginated `GET /v1/users` endpoint. User data is read-only in this milestone.
+
+## Build
+
+```sh
+npm run build
+npm run preview
+```
+
+## Current scope
+
+- Persian-first, responsive dashboard with Neon Core, Cyberpunk and Aurora themes.
+- Operator login/logout and authenticated user listing from the Control Plane.
+- Explicit loading, error and no-data states for remote user data.
+- The API connection indicator calls only `GET /healthz`; it does not prove database readiness or VPN-node health.
+- Server inventory, traffic metrics, subscriptions and activity events remain sample data and are visibly identified as preview/demo information.
+- Server creation and user status actions remain local demo actions when the API is not configured. They are not shown as live operations in connected mode.
+
+## Security status
+
+The UI is not approved for public production exposure. Configure TLS, exact CORS origins, a strong owner password, restricted network access, and a dedicated database role before deployment. The API currently provides read-only user access; device provisioning, peer operations, billing, and real telemetry are not implemented.

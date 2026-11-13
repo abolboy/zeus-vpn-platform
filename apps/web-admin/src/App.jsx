@@ -59,6 +59,7 @@ export default function App() {
   const [loginBusy, setLoginBusy] = useState(false)
   const [loginError, setLoginError] = useState('')
   const [remoteUsers, setRemoteUsers] = useState([])
+  const [remoteUsersNextCursor, setRemoteUsersNextCursor] = useState('')
   const [remoteUsersState, setRemoteUsersState] = useState('idle')
   const [remoteUsersError, setRemoteUsersError] = useState('')
 
@@ -129,6 +130,7 @@ export default function App() {
     setAccessToken('')
     setOperator(null)
     setRemoteUsers([])
+    setRemoteUsersNextCursor('')
     setRemoteUsersState('idle')
     try {
       await logoutOperator(token)
@@ -138,13 +140,15 @@ export default function App() {
     }
   }
 
-  async function refreshRemoteUsers() {
+  async function refreshRemoteUsers(cursor = '') {
     if (!accessToken) return
     setRemoteUsersState('loading')
     setRemoteUsersError('')
     try {
-      const result = await listVPNUsers(accessToken, { limit: 100 })
-      setRemoteUsers(Array.isArray(result?.items) ? result.items : [])
+      const result = await listVPNUsers(accessToken, { limit: 100, cursor })
+      const items = Array.isArray(result?.items) ? result.items : []
+      setRemoteUsers(current => cursor ? [...current, ...items] : items)
+      setRemoteUsersNextCursor(result?.next_cursor || '')
       setRemoteUsersState('loaded')
     } catch (error) {
       setRemoteUsersError(error.message || 'دریافت کاربران انجام نشد.')
@@ -165,6 +169,7 @@ export default function App() {
     listVPNUsers(accessToken, { limit: 100 }).then(result => {
       if (active) {
         setRemoteUsers(Array.isArray(result?.items) ? result.items : [])
+        setRemoteUsersNextCursor(result?.next_cursor || '')
         setRemoteUsersState('loaded')
         setRemoteUsersError('')
       }
@@ -257,7 +262,7 @@ export default function App() {
 
       {page === 'servers' && <section className="panel glass full-panel"><div className="panel-heading"><div><h2>مدیریت سرورها</h2><p>فهرست نودها؛ اطلاعات فعلی صرفاً داده نمایشی است</p></div>{!isControlPlaneConfigured && <button className="button primary" onClick={() => setShowServerForm(v => !v)}>＋ سرور جدید</button>}</div>{showServerForm && <form className="inline-form" onSubmit={addServer}><label>نام سرور<input value={serverName} onChange={e=>setServerName(e.target.value)} placeholder="مثلاً ZEUS • Istanbul" required /></label><label>منطقه<input value={serverRegion} onChange={e=>setServerRegion(e.target.value)} placeholder="مثلاً ترکیه" required /></label><button className="button primary">افزودن به فهرست</button></form>}<div className="table-wrap"><table><thead><tr><th>نام نود</th><th>منطقه / IP</th><th>پروتکل</th><th>بار</th><th>کاربران</th><th>وضعیت</th></tr></thead><tbody>{servers.map(s=><tr key={s.id}><td><b>{s.name}</b></td><td>{s.region}<small className="cell-sub">{s.ip}</small></td><td>{s.protocol}</td><td>{s.status==='pending'?'—':s.load+'%'}</td><td>{s.users}</td><td><Status value={s.status}/></td></tr>)}</tbody></table></div></section>}
 
-      {page === 'users' && <section className="panel glass full-panel"><div className="panel-heading"><div><h2>مدیریت کاربران</h2><p>{isControlPlaneConfigured ? 'فهرست کاربران از API احراز هویت‌شده دریافت می‌شود؛ این نسخه فقط خواندنی است.' : 'جست‌وجوی داده‌های نمونه؛ هنوز به API متصل نیست'}</p></div><div className="search-box">⌕ <input value={query} onChange={e=>setQuery(e.target.value)} placeholder="جست‌وجوی نام یا شناسه..." /></div></div>{isControlPlaneConfigured && <div className="remote-users-toolbar"><span>{remoteUsersState === 'loading' ? 'در حال دریافت کاربران...' : remoteUsersState === 'error' ? remoteUsersError : remoteUsers.length + ' کاربر از API'}</span><button className="button secondary" onClick={refreshRemoteUsers} disabled={remoteUsersState === 'loading'}>↻ بروزرسانی</button></div>}<div className="table-wrap"><table><thead><tr><th>شناسه</th><th>کاربر</th><th>اشتراک</th><th>مصرف</th><th>انقضا</th><th>وضعیت</th><th>عملیات</th></tr></thead><tbody>{filteredUsers.map(u=><tr key={u.id}><td>{u.id}</td><td><b>{u.name}</b></td><td>{u.plan}</td><td>{u.usage}</td><td>{u.expiry}</td><td><Status value={u.status}/></td><td>{isControlPlaneConfigured ? (u.maxDevices ? <span>{u.maxDevices} دستگاه</span> : 'فقط خواندنی') : <button className="mini-action" onClick={()=>toggleUser(u.id)}>{u.status==='active'?'غیرفعال‌سازی':'فعال‌سازی'}</button>}</td></tr>)}</tbody></table>{filteredUsers.length===0&&<div className="empty">کاربری با این مشخصات پیدا نشد.</div>}</div></section>}
+      {page === 'users' && <section className="panel glass full-panel"><div className="panel-heading"><div><h2>مدیریت کاربران</h2><p>{isControlPlaneConfigured ? 'فهرست کاربران از API احراز هویت‌شده دریافت می‌شود؛ این نسخه فقط خواندنی است.' : 'جست‌وجوی داده‌های نمونه؛ هنوز به API متصل نیست'}</p></div><div className="search-box">⌕ <input value={query} onChange={e=>setQuery(e.target.value)} placeholder="جست‌وجوی نام یا شناسه..." /></div></div>{isControlPlaneConfigured && <div className="remote-users-toolbar"><span>{remoteUsersState === 'loading' ? 'در حال دریافت کاربران...' : remoteUsersState === 'error' ? remoteUsersError : remoteUsers.length + ' کاربر از API'}</span><button className="button secondary" onClick={refreshRemoteUsers} disabled={remoteUsersState === 'loading'}>↻ بروزرسانی</button></div>}<div className="table-wrap"><table><thead><tr><th>شناسه</th><th>کاربر</th><th>اشتراک</th><th>مصرف</th><th>انقضا</th><th>وضعیت</th><th>{isControlPlaneConfigured ? 'سقف دستگاه' : 'عملیات'}</th></tr></thead><tbody>{filteredUsers.map(u=><tr key={u.id}><td>{u.id}</td><td><b>{u.name}</b></td><td>{u.plan}</td><td>{u.usage}</td><td>{u.expiry}</td><td><Status value={u.status}/></td><td>{isControlPlaneConfigured ? (u.maxDevices ? <span>{u.maxDevices} دستگاه</span> : 'فقط خواندنی') : <button className="mini-action" onClick={()=>toggleUser(u.id)}>{u.status==='active'?'غیرفعال‌سازی':'فعال‌سازی'}</button>}</td></tr>)}</tbody></table>{filteredUsers.length===0&&<div className="empty">{remoteUsersState === 'loading' ? 'در حال دریافت اطلاعات...' : remoteUsersState === 'error' ? 'دریافت اطلاعات ناموفق بود.' : 'کاربری با این مشخصات پیدا نشد.'}</div>}</div>{isControlPlaneConfigured && remoteUsersNextCursor && <div className="remote-users-more"><button className="button secondary" onClick={() => refreshRemoteUsers(remoteUsersNextCursor)} disabled={remoteUsersState === 'loading'}>دریافت کاربران بیشتر ←</button></div>}</section>}
 
       {page === 'plans' && <section className="plan-grid">{[['STARTER','۷ روزه','برای استفاده کوتاه‌مدت','۷ روز','۵۰ GB'],['PRO','۳۰ روزه','برای استفاده روزمره','۳۰ روز','نامحدود'],['ULTRA','۹۰ روزه','برای کاربران حرفه‌ای','۹۰ روز','نامحدود']].map((p,i)=><article className="plan-card glass" key={p[0]}><span className="plan-index">۰{i+1}</span><h2>{p[0]}</h2><h3>{p[1]}</h3><p>{p[2]}</p><div className="plan-detail"><span>مدت اعتبار</span><b>{p[3]}</b></div><div className="plan-detail"><span>سقف ترافیک</span><b>{p[4]}</b></div><button className="button secondary" onClick={()=>toast('تعریف و قیمت‌گذاری اشتراک‌ها پس از اتصال API فعال می‌شود.')}>ویرایش طرح</button></article>)}</section>}
 

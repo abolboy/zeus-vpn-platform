@@ -5,7 +5,7 @@ Turn the Phase 1 foundation into a secure, multi-user management plane without c
 
 ## Guardrails
 - Work only on `phase2-multiplayer-control-plane`; never push Phase 2 work to `main`.
-- No production deployment, AWS resource changes, firewall changes, or live peer changes in this phase without explicit approval.
+- No production deployment, AWS resource changes, firewall changes, or live peer changes without explicit approval.
 - Never store or return WireGuard private keys. The control plane stores peer public keys and assigned addresses only.
 - Keep admin authentication separate from VPN customer accounts.
 - Require authorization, validation, audit logging, and idempotency for every state-changing operation.
@@ -13,34 +13,45 @@ Turn the Phase 1 foundation into a secure, multi-user management plane without c
 
 ## Delivery sequence
 
-### 2A — Data and API contracts (current milestone)
-- Define PostgreSQL entities for operators, sessions, VPN users, devices, nodes, WireGuard peers, and audit events.
-- Define API conventions, role boundaries, error envelopes, and node trust boundary.
-- Review schema and migration strategy before applying it to any database.
-- No database connection or mutation endpoint is enabled by this milestone.
+### 2A — Data and API contracts
+- [x] Define PostgreSQL entities for operators, sessions, VPN users, devices, nodes, WireGuard peers, and audit events.
+- [x] Define API conventions, role boundaries, error envelopes, and node trust boundary.
+- [x] Add a checksum-tracked migration runner with a PostgreSQL advisory lock.
+- [x] Verify migration idempotency and schema application in CI.
+- No migration has been applied to the production AWS database.
 
 ### 2B — Control-plane persistence and operator authentication
-- Add PostgreSQL connection management, readiness checks, migrations, and repository tests.
-- Add password hashing (Argon2id), opaque short-lived sessions, token hashing at rest, revocation, rate limiting, and CSRF protection where cookie authentication is used.
-- Enforce role-based authorization server-side.
-- Add integration tests using an ephemeral PostgreSQL service in CI.
+- [x] PostgreSQL connection pool and schema readiness checks.
+- [x] Argon2id password hashing (64 MiB, 3 iterations, 2 lanes).
+- [x] Opaque random 256-bit bearer sessions; only SHA-256 token hashes are stored.
+- [x] Eight-hour expiry and server-side revocation.
+- [x] First-owner bootstrap that never overwrites an existing account.
+- [x] Exact-origin CORS allowlist, request IDs, security headers, bounded JSON bodies, and structured error envelopes.
+- [x] Per-source-IP login throttling and bounded concurrent Argon2 work.
+- [x] Server-side role checks for the authenticated read-only user listing.
+- [x] Go unit and PostgreSQL integration tests in GitHub Actions.
+- Remaining: password-reset workflow, operator lifecycle/role-management endpoints, distributed rate limiting, session cleanup, and deeper threat-model review.
 
-### 2C — User/device lifecycle
-- Add transactional user and device operations, device limits, uniqueness checks, and immutable audit events.
-- Add peer allocation with database uniqueness and idempotency.
-- Do not change the host WireGuard configuration from the API process.
+### 2C — User/device lifecycle (not implemented)
+- Add transactional user and device create/update/revoke operations.
+- Enforce device limits, uniqueness, address allocation, and idempotency.
+- Create immutable audit records for every state-changing operation.
+- Do not change host WireGuard configuration from the API process.
 
-### 2D — VPN node agent
+### 2D — VPN node agent (not implemented)
 - Implement a separate least-privilege agent with a mutually authenticated control channel.
-- Agent accepts only narrowly scoped, signed or mutually authenticated desired-state commands.
+- Accept only narrowly scoped desired-state commands.
 - Validate and apply peer changes atomically; report observed state and counters.
 - Support credential rotation, revocation, replay protection, and bounded command expiry.
 
-### 2E — Dashboard and Android integration
-- Replace demo fixtures with typed API responses and explicit loading/error/offline states.
-- Add operator login and permission-aware controls.
-- Connect Android provisioning only after the API and node lifecycle have passed integration tests.
-- Cache only encrypted, revocable client configuration required for offline reconnect.
+### 2E — Dashboard and Android integration (partially implemented)
+- [x] Web operator login against the Go API.
+- [x] Keep the bearer token in browser memory only; require login again after a page reload.
+- [x] Load authenticated VPN users from PostgreSQL through the API, with cursor pagination.
+- [ ] Replace remaining demo server, traffic, subscription, and activity data with real APIs.
+- [ ] Add operator role-management screens.
+- [ ] Connect Android provisioning only after the API and node lifecycle have passed integration tests.
+- [ ] Cache only encrypted, revocable client configuration required for offline reconnect.
 
 ## Exit criteria
 - Unit, integration, race, static-analysis, and browser tests pass.
@@ -51,6 +62,7 @@ Turn the Phase 1 foundation into a secure, multi-user management plane without c
 - Android tunnel reconnect works with the control plane unavailable, using a previously provisioned local profile.
 
 ## Current status
-- Branch created from Phase 1 commit.
-- Milestone 2A schema and API contract are being established.
-- No live server or AWS resource has been changed.
+- Branch: `phase2-multiplayer-control-plane`.
+- Latest completed milestone: 2B authentication and PostgreSQL-backed read-only API.
+- The web-admin build and Go/PostgreSQL test suites run in GitHub Actions.
+- No live server, AWS resource, firewall rule, or production VPN peer has been changed.

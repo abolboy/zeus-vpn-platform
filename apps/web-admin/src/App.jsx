@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { getControlPlaneHealth, isControlPlaneConfigured, loginOperator, logoutOperator, listVPNUsers } from './api.js'
+import { getControlPlaneHealth, isControlPlaneConfigured, loginOperator, logoutOperator, listVPNUsers, createVPNUser, updateVPNUser, createIdempotencyKey } from './api.js'
 
 const initialServers = [
   { id: 1, name: 'ZEUS • Frankfurt', region: 'آلمان', ip: '185.220.101.14', protocol: 'WireGuard', load: 38, latency: 82, status: 'online', users: 128 },
@@ -62,6 +62,17 @@ export default function App() {
   const [remoteUsersNextCursor, setRemoteUsersNextCursor] = useState('')
   const [remoteUsersState, setRemoteUsersState] = useState('idle')
   const [remoteUsersError, setRemoteUsersError] = useState('')
+  const [showCreateUser, setShowCreateUser] = useState(false)
+  const [createUserName, setCreateUserName] = useState('')
+  const [createUserMaxDevices, setCreateUserMaxDevices] = useState('3')
+  const [createUserKey, setCreateUserKey] = useState('')
+  const [editingUserId, setEditingUserId] = useState('')
+  const [editUserName, setEditUserName] = useState('')
+  const [editUserStatus, setEditUserStatus] = useState('active')
+  const [editUserMaxDevices, setEditUserMaxDevices] = useState('3')
+  const [updateUserKey, setUpdateUserKey] = useState('')
+  const [userMutationBusy, setUserMutationBusy] = useState(false)
+  const [userMutationError, setUserMutationError] = useState('')
 
   async function checkControlPlane() {
     setApiStatus('checking')
@@ -94,6 +105,7 @@ export default function App() {
       }))
     : users, [accessToken, remoteUsers, users])
   const filteredUsers = useMemo(() => sourceUsers.filter(u => (u.name + u.id).toLowerCase().includes(query.toLowerCase())), [sourceUsers, query])
+  const canManageRemoteUsers = operator?.role === 'owner' || operator?.role === 'admin'
 
   useEffect(() => {
     try { window.localStorage.setItem('zeus.theme', theme) } catch { /* Browser storage is optional. */ }
@@ -186,6 +198,99 @@ export default function App() {
     return () => { active = false }
   }, [accessToken])
 
+
+  async function createRemoteUser(event) {
+    event.preventDefault()
+    if (!accessToken || !canManageRemoteUsers || userMutationBusy) return
+    const displayName = createUserName.trim()
+    const maxDevices = Number(createUserMaxDevices)
+    if (!displayName || displayName.length > 80 || !Number.isInteger(maxDevices) || maxDevices < 1 || maxDevices > 20) {
+      setUserMutationError('نام کاربر و سقف دستگاه‌ها را بررسی کنید؛ سقف مجاز ۱ تا ۲۰ است.')
+      return
+    }
+    setUserMutationBusy(true)
+    setUserMutationError('')
+    let key = createUserKey
+    try {
+      if (!key) {
+        key = createIdempotencyKey()
+        setCreateUserKey(key)
+      }
+      const created = await createVPNUser(accessToken, { display_name: displayName, max_devices: maxDevices }, key)
+      setRemoteUsers(current => [created, ...current.filter(user => user.id !== created.id)])
+      setRemoteUsersState('loaded')
+      setShowCreateUser(false)
+      setCreateUserName('')
+      setCreateUserMaxDevices('3')
+      setCreateUserKey('')
+      toast('کاربر در پایگاه داده ایجاد شد.')
+    } catch (error) {
+      setUserMutationError(error.message || 'ایجاد کاربر انجام نشد.')
+      if (error.status === 401) {
+        setAccessToken('')
+        setOperator(null)
+        setRemoteUsers([])
+        setLoginError('نشست منقضی شده است؛ دوباره وارد شوید.')
+      }
+    } finally {
+      setUserMutationBusy(false)
+    }
+  }
+
+  function startEditRemoteUser(user) {
+    if (!canManageRemoteUsers) return
+    setEditingUserId(user.id)
+    setEditUserName(user.display_name)
+    setEditUserStatus(user.status)
+    setEditUserMaxDevices(String(user.max_devices))
+    setUpdateUserKey('')
+    setUserMutationError('')
+  }
+
+  function cancelEditRemoteUser() {
+    setEditingUserId('')
+    setUpdateUserKey('')
+    setUserMutationError('')
+  }
+
+  async function saveRemoteUser(user) {
+    if (!accessToken || !canManageRemoteUsers || userMutationBusy) return
+    const displayName = editUserName.trim()
+    const maxDevices = Number(editUserMaxDevices)
+    if (!displayName || displayName.length > 80 || !Number.isInteger(maxDevices) || maxDevices < 1 || maxDevices > 20) {
+      setUserMutationError('نام کاربر و سقف دستگاه‌ها را بررسی کنید؛ سقف مجاز ۱ تا ۲۰ است.')
+      return
+    }
+    setUserMutationBusy(true)
+    setUserMutationError('')
+    let key = updateUserKey
+    try {
+      if (!key) {
+        key = createIdempotencyKey()
+        setUpdateUserKey(key)
+      }
+      const updated = await updateVPNUser(accessToken, user.id, {
+        display_name: displayName,
+        status: editUserStatus,
+        max_devices: maxDevices,
+      }, key)
+      setRemoteUsers(current => current.map(item => item.id === updated.id ? updated : item))
+      setEditingUserId('')
+      setUpdateUserKey('')
+      toast('اطلاعات کاربر ذخیره شد.')
+    } catch (error) {
+      setUserMutationError(error.message || 'ویرایش کاربر انجام نشد.')
+      if (error.status === 401) {
+        setAccessToken('')
+        setOperator(null)
+        setRemoteUsers([])
+        setLoginError('نشست منقضی شده است؛ دوباره وارد شوید.')
+      }
+    } finally {
+      setUserMutationBusy(false)
+    }
+  }
+
   function addServer(event) {
     event.preventDefault()
     if (!serverName.trim() || !serverRegion.trim()) return
@@ -262,7 +367,74 @@ export default function App() {
 
       {page === 'servers' && <section className="panel glass full-panel"><div className="panel-heading"><div><h2>مدیریت سرورها</h2><p>فهرست نودها؛ اطلاعات فعلی صرفاً داده نمایشی است</p></div>{!isControlPlaneConfigured && <button className="button primary" onClick={() => setShowServerForm(v => !v)}>＋ سرور جدید</button>}</div>{showServerForm && <form className="inline-form" onSubmit={addServer}><label>نام سرور<input value={serverName} onChange={e=>setServerName(e.target.value)} placeholder="مثلاً ZEUS • Istanbul" required /></label><label>منطقه<input value={serverRegion} onChange={e=>setServerRegion(e.target.value)} placeholder="مثلاً ترکیه" required /></label><button className="button primary">افزودن به فهرست</button></form>}<div className="table-wrap"><table><thead><tr><th>نام نود</th><th>منطقه / IP</th><th>پروتکل</th><th>بار</th><th>کاربران</th><th>وضعیت</th></tr></thead><tbody>{servers.map(s=><tr key={s.id}><td><b>{s.name}</b></td><td>{s.region}<small className="cell-sub">{s.ip}</small></td><td>{s.protocol}</td><td>{s.status==='pending'?'—':s.load+'%'}</td><td>{s.users}</td><td><Status value={s.status}/></td></tr>)}</tbody></table></div></section>}
 
-      {page === 'users' && <section className="panel glass full-panel"><div className="panel-heading"><div><h2>مدیریت کاربران</h2><p>{isControlPlaneConfigured ? 'فهرست کاربران از API احراز هویت‌شده دریافت می‌شود؛ این نسخه فقط خواندنی است.' : 'جست‌وجوی داده‌های نمونه؛ هنوز به API متصل نیست'}</p></div><div className="search-box">⌕ <input value={query} onChange={e=>setQuery(e.target.value)} placeholder="جست‌وجوی نام یا شناسه..." /></div></div>{isControlPlaneConfigured && <div className="remote-users-toolbar"><span>{remoteUsersState === 'loading' ? 'در حال دریافت کاربران...' : remoteUsersState === 'error' ? remoteUsersError : remoteUsers.length + ' کاربر از API'}</span><button className="button secondary" onClick={refreshRemoteUsers} disabled={remoteUsersState === 'loading'}>↻ بروزرسانی</button></div>}<div className="table-wrap"><table><thead><tr><th>شناسه</th><th>کاربر</th><th>اشتراک</th><th>مصرف</th><th>انقضا</th><th>وضعیت</th><th>{isControlPlaneConfigured ? 'سقف دستگاه' : 'عملیات'}</th></tr></thead><tbody>{filteredUsers.map(u=><tr key={u.id}><td>{u.id}</td><td><b>{u.name}</b></td><td>{u.plan}</td><td>{u.usage}</td><td>{u.expiry}</td><td><Status value={u.status}/></td><td>{isControlPlaneConfigured ? (u.maxDevices ? <span>{u.maxDevices} دستگاه</span> : 'فقط خواندنی') : <button className="mini-action" onClick={()=>toggleUser(u.id)}>{u.status==='active'?'غیرفعال‌سازی':'فعال‌سازی'}</button>}</td></tr>)}</tbody></table>{filteredUsers.length===0&&<div className="empty">{remoteUsersState === 'loading' ? 'در حال دریافت اطلاعات...' : remoteUsersState === 'error' ? 'دریافت اطلاعات ناموفق بود.' : 'کاربری با این مشخصات پیدا نشد.'}</div>}</div>{isControlPlaneConfigured && remoteUsersNextCursor && <div className="remote-users-more"><button className="button secondary" onClick={() => refreshRemoteUsers(remoteUsersNextCursor)} disabled={remoteUsersState === 'loading'}>دریافت کاربران بیشتر ←</button></div>}</section>}
+      {page === 'users' && <section className="panel glass full-panel">
+        <div className="panel-heading">
+          <div>
+            <h2>مدیریت کاربران</h2>
+            <p>{isControlPlaneConfigured ? 'فهرست کاربران از API احراز هویت‌شده دریافت می‌شود؛ عملیات نوشتن فقط برای مدیر مجاز است.' : 'جست‌وجوی داده‌های نمونه؛ هنوز به API متصل نیست'}</p>
+          </div>
+          <div className="users-head-actions">
+            <div className="search-box">⌕ <input value={query} onChange={e=>setQuery(e.target.value)} placeholder="جست‌وجوی نام یا شناسه..." /></div>
+            {isControlPlaneConfigured && canManageRemoteUsers && <button className="button primary" onClick={() => { setShowCreateUser(v => !v); setUserMutationError('') }}>{showCreateUser ? 'بستن فرم' : '＋ کاربر جدید'}</button>}
+          </div>
+        </div>
+        {isControlPlaneConfigured && <div className="remote-users-toolbar">
+          <span>{remoteUsersState === 'loading' ? 'در حال دریافت کاربران...' : remoteUsersState === 'error' ? remoteUsersError : remoteUsers.length + ' کاربر در صفحهٔ جاری'}</span>
+          <button className="button secondary" onClick={refreshRemoteUsers} disabled={remoteUsersState === 'loading'}>↻ بروزرسانی</button>
+        </div>}
+        {isControlPlaneConfigured && showCreateUser && canManageRemoteUsers && <form className="remote-user-form glass" onSubmit={createRemoteUser}>
+          <div className="remote-user-form-title"><b>ایجاد کاربر جدید</b><span>اطلاعات در PostgreSQL ثبت می‌شود</span></div>
+          <div className="remote-user-form-fields">
+            <label>نام کاربر<input value={createUserName} onChange={event => { setCreateUserName(event.target.value); setCreateUserKey('') }} maxLength={80} required placeholder="نام نمایشی کاربر" /></label>
+            <label>حداکثر دستگاه<input type="number" min="1" max="20" step="1" value={createUserMaxDevices} onChange={event => { setCreateUserMaxDevices(event.target.value); setCreateUserKey('') }} required /></label>
+          </div>
+          {userMutationError && <div className="remote-users-error" role="alert">{userMutationError}</div>}
+          <div className="remote-user-form-actions">
+            <button className="button primary" type="submit" disabled={userMutationBusy}>{userMutationBusy ? 'در حال ثبت...' : 'ایجاد کاربر'}</button>
+            <button className="button secondary" type="button" onClick={() => { setShowCreateUser(false); setUserMutationError('') }} disabled={userMutationBusy}>لغو</button>
+          </div>
+        </form>}
+        {isControlPlaneConfigured && userMutationError && !showCreateUser && <div className="remote-users-error" role="alert">{userMutationError}</div>}
+        <div className="table-wrap">
+          <table>
+            <thead><tr><th>شناسه</th><th>کاربر</th><th>اشتراک</th><th>مصرف</th><th>انقضا</th><th>وضعیت</th><th>سقف دستگاه</th><th>عملیات</th></tr></thead>
+            <tbody>{filteredUsers.map(u => {
+              const editing = isControlPlaneConfigured && editingUserId === u.id
+              return <tr key={u.id}>
+                <td>{u.id}</td>
+                <td>{editing
+                  ? <input className="table-edit-input" value={editUserName} onChange={event => { setEditUserName(event.target.value); setUpdateUserKey('') }} maxLength={80} />
+                  : <b>{u.name}</b>}</td>
+                <td>{u.plan}</td>
+                <td>{u.usage}</td>
+                <td>{u.expiry}</td>
+                <td>{editing
+                  ? <select className="table-edit-select" value={editUserStatus} onChange={event => { setEditUserStatus(event.target.value); setUpdateUserKey('') }}>
+                      <option value="active">فعال</option>
+                      <option value="suspended">معلق</option>
+                      <option value="disabled">غیرفعال</option>
+                    </select>
+                  : <Status value={u.status}/>}</td>
+                <td>{editing
+                  ? <input className="table-edit-number" type="number" min="1" max="20" step="1" value={editUserMaxDevices} onChange={event => { setEditUserMaxDevices(event.target.value); setUpdateUserKey('') }} />
+                  : isControlPlaneConfigured ? <span>{u.maxDevices} دستگاه</span> : '—'}</td>
+                <td>{isControlPlaneConfigured
+                  ? canManageRemoteUsers
+                    ? editing
+                      ? <div className="user-row-actions">
+                          <button className="mini-action" onClick={() => saveRemoteUser(u)} disabled={userMutationBusy}>{userMutationBusy ? '...' : 'ذخیره'}</button>
+                          <button className="mini-action subtle" onClick={cancelEditRemoteUser} disabled={userMutationBusy}>لغو</button>
+                        </div>
+                      : <button className="mini-action" onClick={() => startEditRemoteUser(remoteUsers.find(user => user.id === u.id))}>ویرایش</button>
+                    : '—'
+                  : <button className="mini-action" onClick={()=>toggleUser(u.id)}>{u.status==='active'?'غیرفعال‌سازی':'فعال‌سازی'}</button>}</td>
+              </tr>
+            })}</tbody>
+          </table>
+          {filteredUsers.length===0&&<div className="empty">{remoteUsersState === 'loading' ? 'در حال دریافت اطلاعات...' : remoteUsersState === 'error' ? 'دریافت اطلاعات ناموفق بود.' : 'کاربری با این مشخصات پیدا نشد.'}</div>}
+        </div>
+        {isControlPlaneConfigured && remoteUsersNextCursor && <div className="remote-users-more"><button className="button secondary" onClick={() => refreshRemoteUsers(remoteUsersNextCursor)} disabled={remoteUsersState === 'loading'}>دریافت کاربران بیشتر ←</button></div>}
+      </section>}
 
       {page === 'plans' && <section className="plan-grid">{[['STARTER','۷ روزه','برای استفاده کوتاه‌مدت','۷ روز','۵۰ GB'],['PRO','۳۰ روزه','برای استفاده روزمره','۳۰ روز','نامحدود'],['ULTRA','۹۰ روزه','برای کاربران حرفه‌ای','۹۰ روز','نامحدود']].map((p,i)=><article className="plan-card glass" key={p[0]}><span className="plan-index">۰{i+1}</span><h2>{p[0]}</h2><h3>{p[1]}</h3><p>{p[2]}</p><div className="plan-detail"><span>مدت اعتبار</span><b>{p[3]}</b></div><div className="plan-detail"><span>سقف ترافیک</span><b>{p[4]}</b></div><button className="button secondary" onClick={()=>toast('تعریف و قیمت‌گذاری اشتراک‌ها پس از اتصال API فعال می‌شود.')}>ویرایش طرح</button></article>)}</section>}
 

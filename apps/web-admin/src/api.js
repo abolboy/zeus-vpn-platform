@@ -2,13 +2,23 @@ const configuredBase = (import.meta.env.VITE_ZEUS_API_BASE_URL || '').trim().rep
 
 export const isControlPlaneConfigured = Boolean(configuredBase)
 
-async function requestJSON(path, { method = 'GET', token, body, timeoutMs = 8000 } = {}) {
+export function createIdempotencyKey() {
+  const bytes = new Uint8Array(16)
+  if (!globalThis.crypto?.getRandomValues) {
+    throw new Error('مرورگر امکان تولید کلید امن درخواست را ندارد')
+  }
+  globalThis.crypto.getRandomValues(bytes)
+  return Array.from(bytes, value => value.toString(16).padStart(2, '0')).join('')
+}
+
+async function requestJSON(path, { method = 'GET', token, body, timeoutMs = 8000, idempotencyKey } = {}) {
   if (!configuredBase) throw new Error('نشانی Control Plane تنظیم نشده است')
   const controller = new AbortController()
   const timeout = window.setTimeout(() => controller.abort(), timeoutMs)
   const headers = { Accept: 'application/json' }
   if (body !== undefined) headers['Content-Type'] = 'application/json'
   if (token) headers.Authorization = 'Bearer ' + token
+  if (idempotencyKey) headers['Idempotency-Key'] = idempotencyKey
   try {
     const response = await fetch(configuredBase + path, {
       method,
@@ -62,4 +72,22 @@ export function listVPNUsers(token, { limit = 50, cursor = '' } = {}) {
   const params = new URLSearchParams({ limit: String(limit) })
   if (cursor) params.set('cursor', cursor)
   return requestJSON('/v1/users?' + params.toString(), { token })
+}
+
+export function createVPNUser(token, input, idempotencyKey = createIdempotencyKey()) {
+  return requestJSON('/v1/users', {
+    method: 'POST',
+    token,
+    body: input,
+    idempotencyKey,
+  })
+}
+
+export function updateVPNUser(token, userID, input, idempotencyKey = createIdempotencyKey()) {
+  return requestJSON('/v1/users/' + encodeURIComponent(userID), {
+    method: 'PATCH',
+    token,
+    body: input,
+    idempotencyKey,
+  })
 }

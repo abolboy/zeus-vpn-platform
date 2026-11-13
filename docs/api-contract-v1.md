@@ -33,6 +33,9 @@ Do not return stack traces, SQL errors, secrets, private keys, or internal host 
 - `GET /v1/users/{userID}`: read one user record.
 - `POST /v1/users`: create a VPN user.
 - `PATCH /v1/users/{userID}`: update display name, status, or maximum device count.
+- `GET /v1/users/{userID}`: read one user record.
+- `POST /v1/users`: create a VPN user.
+- `PATCH /v1/users/{userID}`: update display name, status, or maximum device count.
 
 All user endpoints require an operator bearer session. `owner` and `admin` may create or update users. `support` and `read_only` are read-only. The API enforces permissions server-side.
 

@@ -390,3 +390,36 @@ tbody tr:hover { background: rgba(var(--accent-rgb),.045); }
 
 .remote-users-more { display:flex; justify-content:center; padding-top:14px; }
 .remote-users-more .button { min-width:190px; }
+
+/* Real, authenticated VPN-user management controls */
+.users-head-actions { display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
+.remote-user-form { margin:0 0 16px; padding:16px; border:1px solid rgba(var(--accent-rgb),.19); }
+.remote-user-form-title { display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom:14px; }
+.remote-user-form-title b { color:var(--accent); font-size:12px; }
+.remote-user-form-title span { color:#8594ad; font-size:9px; }
+.remote-user-form-fields { display:grid; grid-template-columns:minmax(0,2fr) minmax(120px,1fr); gap:12px; }
+.remote-user-form-fields label { display:grid; gap:7px; color:#aebbd1; font-size:10px; }
+.remote-user-form-fields input,
+.table-edit-input,
+.table-edit-select,
+.table-edit-number { min-width:0; width:100%; border:1px solid rgba(255,255,255,.13); border-radius:8px; padding:9px 10px; color:#f1f5ff; background:rgba(5,9,20,.72); outline:none; font:inherit; }
+.remote-user-form-fields input:focus,
+.table-edit-input:focus,
+.table-edit-select:focus,
+.table-edit-number:focus { border-color:rgba(var(--accent-rgb),.65); box-shadow:0 0 0 2px rgba(var(--accent-rgb),.08); }
+.table-edit-input { min-width:130px; }
+.table-edit-select { min-width:105px; }
+.table-edit-number { min-width:75px; max-width:95px; }
+.remote-user-form-actions { display:flex; gap:8px; margin-top:14px; }
+.remote-user-form-actions .button { min-width:105px; }
+.remote-user-form .remote-users-error { margin-top:12px; }
+.user-row-actions { display:flex; align-items:center; gap:6px; }
+.mini-action.subtle { color:#9aa8bf; border-color:rgba(255,255,255,.12); background:rgba(255,255,255,.035); }
+.mini-action:disabled { opacity:.5; cursor:wait; }
+@media (max-width:760px) {
+  .users-head-actions { width:100%; }
+  .users-head-actions .search-box { flex:1; min-width:160px; }
+  .remote-user-form-fields { grid-template-columns:1fr; }
+  .remote-user-form-title { align-items:flex-start; flex-direction:column; }
+  .user-row-actions { flex-direction:column; align-items:stretch; }
+}

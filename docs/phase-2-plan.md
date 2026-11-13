@@ -38,6 +38,7 @@ Turn the Phase 1 foundation into a secure, multi-user management plane without c
 - [x] Owner/admin-only mutation authorization; support and read-only roles cannot mutate users.
 - [x] Idempotency keys, payload fingerprints, safe replay, and conflict detection.
 - [x] Mutation and audit event stored in the same database transaction.
+- [x] Web dashboard create/edit forms connected to authenticated API calls.
 - [ ] Device registration/revocation, device-limit enforcement, address allocation, and idempotent peer lifecycle.
 - [ ] Immutable audit policy and audit-log viewing/retention controls.
 - The API does not change host WireGuard configuration.
@@ -52,7 +53,7 @@ Turn the Phase 1 foundation into a secure, multi-user management plane without c
 - [x] Web operator login against the Go API.
 - [x] Keep the bearer token in browser memory only; require login again after a page reload.
 - [x] Load authenticated VPN users from PostgreSQL through the API, with cursor pagination.
-- [ ] Connect the user create/edit forms to the authenticated API endpoints.
+- [x] Connect the user create/edit forms to the authenticated API endpoints.
 - [ ] Replace remaining demo server, traffic, subscription, and activity data with real APIs.
 - [ ] Add operator role-management screens.
 - [ ] Connect Android provisioning only after the API and node lifecycle have passed integration tests.

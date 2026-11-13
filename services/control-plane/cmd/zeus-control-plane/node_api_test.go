@@ -67,7 +67,7 @@ func TestNodeAgentRoutesRequireVerifiedClientCertificate(t *testing.T) {
 			ID: "8e09c3da-fbac-4b34-9ad0-090e1f8d4c47",
 			NodeID: "8e09c3da-fbac-4b34-9ad0-090e1f8d4c47",
 			Type: "peer.ensure",
-			Payload: []byte(\`{"public_key":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=","ipv4":"10.77.77.3","ipv6":"fd77:77:77::3"}\`),
+			Payload: []byte("{\"public_key\":\"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=\",\"ipv4\":\"10.77.77.3\",\"ipv6\":\"fd77:77:77::3\"}"),
 			Attempt: 1,
 			ExpiresAt: time.Now().Add(5*time.Minute),
 		},
@@ -100,7 +100,7 @@ func TestNodeAgentRoutesRequireVerifiedClientCertificate(t *testing.T) {
 		t.Fatal("node command response must not be cacheable")
 	}
 
-	ackBody := bytes.NewBufferString(\`{"status":"succeeded"}\`)
+	ackBody := bytes.NewBufferString("{\"status\":\"succeeded\"}")
 	ackRequest, err := http.NewRequest(http.MethodPost, server.URL+"/agent/v1/commands/8e09c3da-fbac-4b34-9ad0-090e1f8d4c47/ack", ackBody)
 	if err != nil {
 		t.Fatal(err)
@@ -115,7 +115,7 @@ func TestNodeAgentRoutesRequireVerifiedClientCertificate(t *testing.T) {
 		t.Fatalf("ack response status=%d calls=%d status=%s", ackResponse.StatusCode, store.ackCalls, store.ackStatus)
 	}
 
-	invalidRequest, err := http.NewRequest(http.MethodPost, server.URL+"/agent/v1/commands/8e09c3da-fbac-4b34-9ad0-090e1f8d4c47/ack", bytes.NewBufferString(\`{"status":"failed","error_code":"run arbitrary shell"}\`))
+	invalidRequest, err := http.NewRequest(http.MethodPost, server.URL+"/agent/v1/commands/8e09c3da-fbac-4b34-9ad0-090e1f8d4c47/ack", bytes.NewBufferString("{\"status\":\"failed\",\"error_code\":\"run arbitrary shell\"}"))
 	if err != nil {
 		t.Fatal(err)
 	}

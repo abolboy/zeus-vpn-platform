@@ -246,7 +246,7 @@ func (s *PostgresStore) runIdempotentUserMutation(ctx context.Context, actorID, 
 	_, err = tx.Exec(ctx, `
 		DELETE FROM idempotency_records
 		WHERE actor_operator_id = $1::uuid AND expires_at <= now()
-	`, actorID, route, key)
+	`, actorID)
 	if err != nil {
 		return VPNUser{}, false, err
 	}

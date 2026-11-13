@@ -426,7 +426,7 @@ func (a *API) handleCreateUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err != nil {
-		a.logger.Error("user creation failed", "request_id", requestIDFrom(r))
+		a.logger.Error("user creation failed", "request_id", requestIDFrom(r), "error", err)
 		writeError(w, http.StatusInternalServerError, "internal_error", "ایجاد کاربر انجام نشد", requestIDFrom(r))
 		return
 	}
@@ -503,7 +503,7 @@ func (a *API) handleUpdateUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err != nil {
-		a.logger.Error("user update failed", "request_id", requestIDFrom(r))
+		a.logger.Error("user update failed", "request_id", requestIDFrom(r), "error", err)
 		writeError(w, http.StatusInternalServerError, "internal_error", "ویرایش کاربر انجام نشد", requestIDFrom(r))
 		return
 	}

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { getControlPlaneHealth } from './api.js'
+import { getControlPlaneHealth, isControlPlaneConfigured, loginOperator, logoutOperator, listVPNUsers } from './api.js'
 
 const initialServers = [
   { id: 1, name: 'ZEUS • Frankfurt', region: 'آلمان', ip: '185.220.101.14', protocol: 'WireGuard', load: 38, latency: 82, status: 'online', users: 128 },
@@ -25,7 +25,7 @@ function Metric({ icon, label, value, note, tone = '' }) {
   return <article className="metric glass"><div className="metric-top"><span className="metric-icon">{icon}</span><span className="metric-note">{note}</span></div><div className="metric-value">{value}</div><div className="metric-label">{label}</div><div className={`metric-line ${tone}`} /></article>
 }
 function Status({ value }) {
-  const label = value === 'online' || value === 'active' ? 'فعال' : value === 'pending' ? 'در انتظار' : 'منقضی'
+  const label = value === 'online' || value === 'active' ? 'فعال' : value === 'pending' ? 'در انتظار' : value === 'suspended' ? 'معلق' : value === 'disabled' ? 'غیرفعال' : 'منقضی'
   return <span className={`status ${value}`}><i />{label}</span>
 }
 
@@ -52,6 +52,15 @@ export default function App() {
   })
   const [apiStatus, setApiStatus] = useState('checking')
   const [apiMessage, setApiMessage] = useState('در حال بررسی اتصال کنترل‌پلین')
+  const [accessToken, setAccessToken] = useState('')
+  const [operator, setOperator] = useState(null)
+  const [loginName, setLoginName] = useState('')
+  const [loginPassword, setLoginPassword] = useState('')
+  const [loginBusy, setLoginBusy] = useState(false)
+  const [loginError, setLoginError] = useState('')
+  const [remoteUsers, setRemoteUsers] = useState([])
+  const [remoteUsersState, setRemoteUsersState] = useState('idle')
+  const [remoteUsersError, setRemoteUsersError] = useState('')
 
   async function checkControlPlane() {
     setApiStatus('checking')
@@ -72,7 +81,18 @@ export default function App() {
     return () => { active = false }
   }, [])
   const todayLabel = useMemo(() => new Intl.DateTimeFormat('fa-IR', { dateStyle: 'full' }).format(new Date()), [])
-  const filteredUsers = useMemo(() => users.filter(u => (u.name + u.id).toLowerCase().includes(query.toLowerCase())), [users, query])
+  const sourceUsers = useMemo(() => isControlPlaneConfigured && accessToken
+    ? remoteUsers.map(user => ({
+        id: user.id,
+        name: user.display_name,
+        plan: '—',
+        usage: '—',
+        expiry: '—',
+        status: user.status,
+        maxDevices: user.max_devices,
+      }))
+    : users, [accessToken, remoteUsers, users])
+  const filteredUsers = useMemo(() => sourceUsers.filter(u => (u.name + u.id).toLowerCase().includes(query.toLowerCase())), [sourceUsers, query])
 
   useEffect(() => {
     try { window.localStorage.setItem('zeus.theme', theme) } catch { /* Browser storage is optional. */ }
@@ -83,6 +103,83 @@ export default function App() {
   }, [compact])
   const activePage = nav.find(n => n[0] === page)?.[2] ?? 'نمای کلی'
   const toast = (message) => { setNotice(message); window.setTimeout(() => setNotice(''), 2600) }
+
+  async function submitLogin(event) {
+    event.preventDefault()
+    if (loginBusy) return
+    setLoginBusy(true)
+    setLoginError('')
+    try {
+      const result = await loginOperator(loginName.trim(), loginPassword)
+      if (!result?.access_token || !result?.operator) throw new Error('پاسخ ورود از سرور معتبر نیست')
+      setAccessToken(result.access_token)
+      setOperator(result.operator)
+      setLoginPassword('')
+      setPage('overview')
+      toast('ورود مدیر با موفقیت انجام شد.')
+    } catch (error) {
+      setLoginError(error.message || 'ورود انجام نشد؛ اتصال و اطلاعات را بررسی کنید.')
+    } finally {
+      setLoginBusy(false)
+    }
+  }
+
+  async function signOut() {
+    const token = accessToken
+    setAccessToken('')
+    setOperator(null)
+    setRemoteUsers([])
+    setRemoteUsersState('idle')
+    try {
+      await logoutOperator(token)
+      toast('نشست مدیر لغو شد.')
+    } catch {
+      toast('نشست از این مرورگر پاک شد؛ لغو سمت سرور تأیید نشد.')
+    }
+  }
+
+  async function refreshRemoteUsers() {
+    if (!accessToken) return
+    setRemoteUsersState('loading')
+    setRemoteUsersError('')
+    try {
+      const result = await listVPNUsers(accessToken, { limit: 100 })
+      setRemoteUsers(Array.isArray(result?.items) ? result.items : [])
+      setRemoteUsersState('loaded')
+    } catch (error) {
+      setRemoteUsersError(error.message || 'دریافت کاربران انجام نشد.')
+      setRemoteUsersState('error')
+      if (error.status === 401) {
+        setAccessToken('')
+        setOperator(null)
+        setRemoteUsers([])
+        setLoginError('نشست منقضی شده است؛ دوباره وارد شوید.')
+      }
+    }
+  }
+
+  useEffect(() => {
+    if (!accessToken || !isControlPlaneConfigured) return
+    let active = true
+    setRemoteUsersState('loading')
+    listVPNUsers(accessToken, { limit: 100 }).then(result => {
+      if (active) {
+        setRemoteUsers(Array.isArray(result?.items) ? result.items : [])
+        setRemoteUsersState('loaded')
+        setRemoteUsersError('')
+      }
+    }).catch(error => {
+      if (active) {
+        setRemoteUsersState('error')
+        setRemoteUsersError(error.message || 'دریافت کاربران انجام نشد.')
+        if (error.status === 401) {
+          setAccessToken('')
+          setOperator(null)
+        }
+      }
+    })
+    return () => { active = false }
+  }, [accessToken])
 
   function addServer(event) {
     event.preventDefault()
@@ -96,6 +193,24 @@ export default function App() {
     toast('وضعیت نمایشی کاربر تغییر کرد؛ API هنوز متصل نیست.')
   }
 
+  if (isControlPlaneConfigured && !accessToken) {
+    return <div className={`app theme-${theme} login-screen`}>
+      <div className="ambient ambient-one" /><div className="ambient ambient-two" />
+      <form className="login-card glass" onSubmit={submitLogin}>
+        <div className="login-brand"><div className="brand-mark">Z</div><div><b>ZEUS</b><small>SECURE CONTROL ACCESS</small></div></div>
+        <div className="login-eyebrow"><span /> OPERATOR AUTHENTICATION</div>
+        <h1>ورود به مرکز فرماندهی</h1>
+        <p>برای مشاهده داده‌های مدیریتی، با حساب مدیر احراز هویت کنید.</p>
+        <label>نام کاربری<input autoComplete="username" value={loginName} onChange={event => setLoginName(event.target.value)} required maxLength={128} placeholder="نام کاربری مدیر" /></label>
+        <label>گذرواژه<input autoComplete="current-password" type="password" value={loginPassword} onChange={event => setLoginPassword(event.target.value)} required maxLength={1024} placeholder="گذرواژه حساب مدیر" /></label>
+        {loginError && <div className="login-error" role="alert">{loginError}</div>}
+        <button className="button primary login-submit" disabled={loginBusy}>{loginBusy ? 'در حال بررسی...' : 'ورود امن به ZEUS'}</button>
+        <div className="login-security"><i /> نشست کوتاه‌مدت · رمزنگاری‌شده · بدون ذخیره توکن در مرورگر</div>
+        <div className="login-health"><span className={`live-indicator api-${apiStatus}`}><i /> {apiStatus === 'online' ? 'API پاسخ‌گوست' : apiStatus === 'offline' ? 'API در دسترس نیست' : 'در حال بررسی API'}</span><button type="button" onClick={checkControlPlane}>بررسی اتصال</button></div>
+      </form>
+    </div>
+  }
+
   return <div className={`app theme-${theme} ${compact ? 'compact' : ''}`}>
     <div className="ambient ambient-one" /><div className="ambient ambient-two" />
     <aside className="sidebar glass">
@@ -107,10 +222,11 @@ export default function App() {
     </aside>
 
     <main className="main">
-      <header className="topbar"><div className="crumb">ZEUS <span>/</span> {activePage}</div><div className="top-actions"><span className={`live-indicator api-${apiStatus}`}><i /> {apiStatus === "online" ? "Control Plane متصل" : apiStatus === "offline" ? "Control Plane قطع" : apiStatus === "checking" ? "در حال بررسی API" : "API تنظیم نشده"}</span><button className="icon-btn" aria-label="اعلان‌ها" onClick={() => setPage('activity')}>♧<b className="notification-dot" /></button><button className="language-btn" onClick={() => toast('رابط فارسی فعال است؛ زبان انگلیسی در برنامه توسعه قرار دارد.')}>فا <span>⌄</span></button></div></header>
+      <header className="topbar"><div className="crumb">ZEUS <span>/</span> {activePage}</div><div className="top-actions"><span className={`live-indicator api-${apiStatus}`}><i /> {apiStatus === "online" ? "Control Plane متصل" : apiStatus === "offline" ? "Control Plane قطع" : apiStatus === "checking" ? "در حال بررسی API" : "API تنظیم نشده"}</span>{operator && <span className="auth-user-chip">{operator.login} · {operator.role}</span>}<button className="icon-btn" aria-label="اعلان‌ها" onClick={() => setPage('activity')}>♧<b className="notification-dot" /></button><button className="language-btn" onClick={() => toast('رابط فارسی فعال است؛ زبان انگلیسی در برنامه توسعه قرار دارد.')}>فا <span>⌄</span></button></div></header>
 
-      <section className="page-head"><div><div className="eyebrow"><span /> SYSTEM OVERVIEW / ۰۱</div><h1>{page === 'overview' ? 'مرکز فرماندهی' : activePage}<span className="heading-glow">.</span></h1><p>{page === 'overview' ? 'نمای زنده از زیرساخت، کاربران و سلامت شبکه ZEUS' : 'مدیریت و پایش بخش ' + activePage + ' در پنل ZEUS'}</p></div><div className="head-actions"><button className="button secondary" onClick={checkControlPlane}>↻ بررسی API</button><button className="button primary" onClick={() => { setPage('servers'); setShowServerForm(true) }}>＋ افزودن سرور</button></div></section>
+      <section className="page-head"><div><div className="eyebrow"><span /> SYSTEM OVERVIEW / ۰۱</div><h1>{page === 'overview' ? 'مرکز فرماندهی' : activePage}<span className="heading-glow">.</span></h1><p>{page === 'overview' ? 'نمای زنده از زیرساخت، کاربران و سلامت شبکه ZEUS' : 'مدیریت و پایش بخش ' + activePage + ' در پنل ZEUS'}</p></div><div className="head-actions"><button className="button secondary" onClick={checkControlPlane}>↻ بررسی API</button>{!isControlPlaneConfigured && <button className="button primary" onClick={() => { setPage('servers'); setShowServerForm(true) }}>＋ افزودن سرور</button>}</div></section>
 
+      {isControlPlaneConfigured && operator && <div className="data-source-banner glass"><b>اتصال مدیریتی فعال است</b><span>هویت مدیر و فهرست کاربران از Control Plane خوانده می‌شوند؛ سرورها، ترافیک، اشتراک‌ها و گزارش‌ها هنوز دادهٔ نمایشی هستند.</span></div>}
       <section className="theme-strip glass"><div><b>ظاهر پنل را انتخاب کن</b><small>سه پوسته نئونی با تغییر زنده و بدون بارگذاری مجدد</small></div><div className="theme-options">{themes.map(t => <button key={t.id} onClick={() => setTheme(t.id)} className={theme === t.id ? 'theme-choice active' : 'theme-choice'}><i style={{ background: t.color, boxShadow: `0 0 14px ${t.color}` }} /><span><b>{t.name}</b><small>{t.sub}</small></span>{theme === t.id && <strong>✓</strong>}</button>)}</div></section>
 
       {page === 'overview' && <section className="hero-panel glass">
@@ -139,9 +255,9 @@ export default function App() {
       <article className="panel glass traffic-panel"><div className="panel-heading"><div><h2>ترافیک شبکه</h2><p>نمای نمونه مصرف در ۷ روز اخیر</p></div><span className="select-like">۷ روز اخیر⌄</span></div><div className="traffic-total"><b>۸۴۲.۶ <small>GB</small></b><span>↑ ۱۲.۸٪ <small>نسبت به دوره قبل</small></span></div><div className="chart"><div className="chart-y"><span>۱۰۰GB</span><span>۷۵GB</span><span>۵۰GB</span><span>۲۵GB</span><span>۰</span></div><div className="chart-bars">{[42,68,52,86,61,74,95].map((v,i)=><div className="bar-wrap" key={i}><i style={{height:v+'%'}} /><small>{['ش','ی','د','س','چ','پ','ج'][i]}</small></div>)}</div></div></article></section>
       <section className="panel glass activity-panel"><div className="panel-heading"><div><h2>رویدادهای اخیر</h2><p>آخرین فعالیت‌های ثبت‌شده در داده آزمایشی</p></div><button className="text-link" onClick={() => setPage('activity')}>مشاهده گزارش‌ها ←</button></div><div className="activity-list"><div><i className="activity-icon green">✓</i><span><b>نود Frankfurt در دسترس است</b><small>بررسی نمونه سلامت · ۲ دقیقه پیش</small></span><Status value="online" /></div><div><i className="activity-icon purple">♙</i><span><b>کاربر نمونه به فهرست اضافه شد</b><small>رویداد آزمایشی · ۱۸ دقیقه پیش</small></span><Status value="active" /></div><div><i className="activity-icon orange">!</i><span><b>راه‌اندازی نود Warsaw تکمیل نشده</b><small>نیازمند نصب Agent و تنظیم کلیدها</small></span><Status value="pending" /></div></div></section></>}
 
-      {page === 'servers' && <section className="panel glass full-panel"><div className="panel-heading"><div><h2>مدیریت سرورها</h2><p>فهرست نودها؛ اطلاعات فعلی صرفاً داده نمایشی است</p></div><button className="button primary" onClick={() => setShowServerForm(v => !v)}>＋ سرور جدید</button></div>{showServerForm && <form className="inline-form" onSubmit={addServer}><label>نام سرور<input value={serverName} onChange={e=>setServerName(e.target.value)} placeholder="مثلاً ZEUS • Istanbul" required /></label><label>منطقه<input value={serverRegion} onChange={e=>setServerRegion(e.target.value)} placeholder="مثلاً ترکیه" required /></label><button className="button primary">افزودن به فهرست</button></form>}<div className="table-wrap"><table><thead><tr><th>نام نود</th><th>منطقه / IP</th><th>پروتکل</th><th>بار</th><th>کاربران</th><th>وضعیت</th></tr></thead><tbody>{servers.map(s=><tr key={s.id}><td><b>{s.name}</b></td><td>{s.region}<small className="cell-sub">{s.ip}</small></td><td>{s.protocol}</td><td>{s.status==='pending'?'—':s.load+'%'}</td><td>{s.users}</td><td><Status value={s.status}/></td></tr>)}</tbody></table></div></section>}
+      {page === 'servers' && <section className="panel glass full-panel"><div className="panel-heading"><div><h2>مدیریت سرورها</h2><p>فهرست نودها؛ اطلاعات فعلی صرفاً داده نمایشی است</p></div>{!isControlPlaneConfigured && <button className="button primary" onClick={() => setShowServerForm(v => !v)}>＋ سرور جدید</button>}</div>{showServerForm && <form className="inline-form" onSubmit={addServer}><label>نام سرور<input value={serverName} onChange={e=>setServerName(e.target.value)} placeholder="مثلاً ZEUS • Istanbul" required /></label><label>منطقه<input value={serverRegion} onChange={e=>setServerRegion(e.target.value)} placeholder="مثلاً ترکیه" required /></label><button className="button primary">افزودن به فهرست</button></form>}<div className="table-wrap"><table><thead><tr><th>نام نود</th><th>منطقه / IP</th><th>پروتکل</th><th>بار</th><th>کاربران</th><th>وضعیت</th></tr></thead><tbody>{servers.map(s=><tr key={s.id}><td><b>{s.name}</b></td><td>{s.region}<small className="cell-sub">{s.ip}</small></td><td>{s.protocol}</td><td>{s.status==='pending'?'—':s.load+'%'}</td><td>{s.users}</td><td><Status value={s.status}/></td></tr>)}</tbody></table></div></section>}
 
-      {page === 'users' && <section className="panel glass full-panel"><div className="panel-heading"><div><h2>مدیریت کاربران</h2><p>جست‌وجو و تغییر وضعیت نمونه کاربران</p></div><div className="search-box">⌕ <input value={query} onChange={e=>setQuery(e.target.value)} placeholder="جست‌وجوی نام یا شناسه..." /></div></div><div className="table-wrap"><table><thead><tr><th>شناسه</th><th>کاربر</th><th>اشتراک</th><th>مصرف</th><th>انقضا</th><th>وضعیت</th><th>عملیات</th></tr></thead><tbody>{filteredUsers.map(u=><tr key={u.id}><td>{u.id}</td><td><b>{u.name}</b></td><td>{u.plan}</td><td>{u.usage}</td><td>{u.expiry}</td><td><Status value={u.status}/></td><td><button className="mini-action" onClick={()=>toggleUser(u.id)}>{u.status==='active'?'غیرفعال‌سازی':'فعال‌سازی'}</button></td></tr>)}</tbody></table>{filteredUsers.length===0&&<div className="empty">کاربری با این مشخصات پیدا نشد.</div>}</div></section>}
+      {page === 'users' && <section className="panel glass full-panel"><div className="panel-heading"><div><h2>مدیریت کاربران</h2><p>{isControlPlaneConfigured ? 'فهرست کاربران از API احراز هویت‌شده دریافت می‌شود؛ این نسخه فقط خواندنی است.' : 'جست‌وجوی داده‌های نمونه؛ هنوز به API متصل نیست'}</p></div><div className="search-box">⌕ <input value={query} onChange={e=>setQuery(e.target.value)} placeholder="جست‌وجوی نام یا شناسه..." /></div></div>{isControlPlaneConfigured && <div className="remote-users-toolbar"><span>{remoteUsersState === 'loading' ? 'در حال دریافت کاربران...' : remoteUsersState === 'error' ? remoteUsersError : remoteUsers.length + ' کاربر از API'}</span><button className="button secondary" onClick={refreshRemoteUsers} disabled={remoteUsersState === 'loading'}>↻ بروزرسانی</button></div>}<div className="table-wrap"><table><thead><tr><th>شناسه</th><th>کاربر</th><th>اشتراک</th><th>مصرف</th><th>انقضا</th><th>وضعیت</th><th>عملیات</th></tr></thead><tbody>{filteredUsers.map(u=><tr key={u.id}><td>{u.id}</td><td><b>{u.name}</b></td><td>{u.plan}</td><td>{u.usage}</td><td>{u.expiry}</td><td><Status value={u.status}/></td><td>{isControlPlaneConfigured ? (u.maxDevices ? <span>{u.maxDevices} دستگاه</span> : 'فقط خواندنی') : <button className="mini-action" onClick={()=>toggleUser(u.id)}>{u.status==='active'?'غیرفعال‌سازی':'فعال‌سازی'}</button>}</td></tr>)}</tbody></table>{filteredUsers.length===0&&<div className="empty">کاربری با این مشخصات پیدا نشد.</div>}</div></section>}
 
       {page === 'plans' && <section className="plan-grid">{[['STARTER','۷ روزه','برای استفاده کوتاه‌مدت','۷ روز','۵۰ GB'],['PRO','۳۰ روزه','برای استفاده روزمره','۳۰ روز','نامحدود'],['ULTRA','۹۰ روزه','برای کاربران حرفه‌ای','۹۰ روز','نامحدود']].map((p,i)=><article className="plan-card glass" key={p[0]}><span className="plan-index">۰{i+1}</span><h2>{p[0]}</h2><h3>{p[1]}</h3><p>{p[2]}</p><div className="plan-detail"><span>مدت اعتبار</span><b>{p[3]}</b></div><div className="plan-detail"><span>سقف ترافیک</span><b>{p[4]}</b></div><button className="button secondary" onClick={()=>toast('تعریف و قیمت‌گذاری اشتراک‌ها پس از اتصال API فعال می‌شود.')}>ویرایش طرح</button></article>)}</section>}
 
@@ -149,6 +265,7 @@ export default function App() {
 
       {page === 'settings' && <section className="panel glass full-panel settings-panel"><div className="panel-heading"><div><h2>تنظیمات پنل</h2><p>ترجیحات رابط کاربری و رفتار نمایشی</p></div></div><div className="setting-row"><span><b>بروزرسانی خودکار رابط</b><small>در نسخه متصل، داده‌ها به‌صورت دوره‌ای از API خوانده می‌شوند.</small></span><button className={autoRefresh?'switch on':'switch'} onClick={()=>setAutoRefresh(v=>!v)} aria-label="تغییر بروزرسانی خودکار"><i/></button></div><div className="setting-row"><span><b>وضعیت Control Plane</b><small>{apiMessage} — این بررسی فقط GET /healthz را می‌خواند و به معنی اتصال داده‌های مدیریتی نیست.</small></span><button className="button secondary" onClick={checkControlPlane}>بررسی دوباره</button></div><div className="setting-row"><span><b>حالت فشرده</b><small>کاهش فاصله‌ها برای نمایش اطلاعات بیشتر.</small></span><button className={compact?'switch on':'switch'} onClick={()=>setCompact(v=>!v)} aria-label="تغییر حالت فشرده"><i/></button></div><div className="setting-row"><span><b>پوسته فعلی</b><small>{themes.find(t=>t.id===theme).name}</small></span><button className="button secondary" onClick={()=>setTheme(themes[(themes.findIndex(t=>t.id===theme)+1)%themes.length].id)}>تغییر پوسته</button></div><div className="notice-box">امنیت: این نسخه به API واقعی، احراز هویت یا داده تولیدی متصل نیست. پیش از اتصال عمومی باید ورود امن، نقش‌ها، CSRF/CORS، اعتبارسنجی ورودی و ثبت ممیزی پیاده‌سازی شوند.</div></section>}
 
+      {isControlPlaneConfigured && remoteUsersState === 'error' && <div className="remote-users-error" role="alert">{remoteUsersError}</div>}
       <footer className="footer"><span>© ۲۰۲۶ ZEUS VPN PLATFORM</span><span>ساخته‌شده برای کنترل دقیق‌تر <i>✦</i></span><span className="footer-version">FRONTEND PREVIEW 0.1.0</span></footer>
     </main>
     {notice && <div className="toast" role="status">✦ {notice}</div>}

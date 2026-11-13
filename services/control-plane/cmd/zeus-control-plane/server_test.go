@@ -510,7 +510,7 @@ func TestPostgresStoreIntegration(t *testing.T) {
 	_, _, err = store.CreateVPNDevice(ctx, operator.ID, deviceUserID, deviceRoute, newRequestID(),
 		secondHash[:], CreateDeviceInput{
 			DeviceRef: "ci-device-reference-0002", DeviceName: "Second Android",
-			Platform: "android", PublicKey: "AwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAw=",
+			Platform: "android", PublicKey: deviceInput.PublicKey,
 		}, newRequestID(), nil)
 	if !errors.Is(err, ErrDeviceLimitReached) {
 		t.Fatalf("second device error=%v, want ErrDeviceLimitReached", err)

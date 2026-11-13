@@ -41,6 +41,9 @@ func (s *fakeControlStore) FindOperatorByLogin(_ context.Context, login string) 
 	return s.operator, nil
 }
 func (s *fakeControlStore) EnsureBootstrapOperator(context.Context, string, string) error { return nil }
+func (s *fakeControlStore) HasActiveOwner(context.Context) (bool, error) {
+	return s.operator.Role == "owner" && s.operator.Status == "active", nil
+}
 func (s *fakeControlStore) CreateSession(_ context.Context, _ string, hash []byte, _ time.Time) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -242,6 +245,10 @@ func TestPostgresStoreIntegration(t *testing.T) {
 	}
 	if operator.Role != "owner" || operator.Status != "active" {
 		t.Fatalf("unexpected seeded operator: %+v", operator)
+	}
+	hasOwner, err := store.HasActiveOwner(ctx)
+	if err != nil || !hasOwner {
+		t.Fatalf("active owner check failed: hasOwner=%v err=%v", hasOwner, err)
 	}
 	_, tokenHash, err := generateSessionToken()
 	if err != nil {

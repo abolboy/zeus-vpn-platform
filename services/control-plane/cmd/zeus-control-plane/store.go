@@ -29,6 +29,7 @@ type UserCursor struct {
 type ControlStore interface {
 	Ping(context.Context) error
 	FindOperatorByLogin(context.Context, string) (Operator, error)
+	HasActiveOwner(context.Context) (bool, error)
 	EnsureBootstrapOperator(context.Context, string, string) error
 	CreateSession(context.Context, string, []byte, time.Time) error
 	FindOperatorForSession(context.Context, []byte) (Operator, error)

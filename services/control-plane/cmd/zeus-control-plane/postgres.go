@@ -78,6 +78,12 @@ func (s *PostgresStore) Ping(ctx context.Context) error {
 	return nil
 }
 
+func (s *PostgresStore) HasActiveOwner(ctx context.Context) (bool, error) {
+	var exists bool
+	err := s.pool.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM operators WHERE role = 'owner' AND status = 'active')").Scan(&exists)
+	return exists, err
+}
+
 func (s *PostgresStore) FindOperatorByLogin(ctx context.Context, login string) (Operator, error) {
 	var operator Operator
 	err := s.pool.QueryRow(ctx, `

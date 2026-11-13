@@ -54,8 +54,13 @@ func main() {
 			os.Exit(1)
 		}
 		if production && bootstrapLogin == "" {
-			logger.Error("bootstrap admin credentials are required for first production startup")
-			os.Exit(1)
+			ctx, cancel = context.WithTimeout(context.Background(), 5*time.Second)
+			hasOwner, ownerErr := postgres.HasActiveOwner(ctx)
+			cancel()
+			if ownerErr != nil || !hasOwner {
+				logger.Error("an active owner is required; set bootstrap credentials for first production startup", "error", ownerErr)
+				os.Exit(1)
+			}
 		}
 		if bootstrapLogin != "" {
 			if len(bootstrapLogin) > 128 || !validPasswordForBootstrap(bootstrapPassword) {
@@ -69,6 +74,13 @@ func main() {
 				logger.Error("bootstrap admin initialization failed", "error", err)
 				os.Exit(1)
 			}
+			ctx, cancel = context.WithTimeout(context.Background(), 5*time.Second)
+			hasOwner, ownerErr := postgres.HasActiveOwner(ctx)
+			cancel()
+			if ownerErr != nil || !hasOwner {
+				logger.Error("no active owner account is available after bootstrap", "error", ownerErr)
+				os.Exit(1)
+			}
 			logger.Info("bootstrap admin checked; an existing account was not overwritten")
 		}
 	} else {
@@ -76,6 +88,10 @@ func main() {
 	}
 
 	allowedOrigins := strings.Split(os.Getenv("ZEUS_ALLOWED_ORIGINS"), ",")
+	if production && strings.TrimSpace(os.Getenv("ZEUS_ALLOWED_ORIGINS")) == "" {
+		logger.Error("ZEUS_ALLOWED_ORIGINS must contain one or more exact browser origins in production")
+		os.Exit(1)
+	}
 	api, err := NewAPI(version, store, logger, allowedOrigins)
 	if err != nil {
 		logger.Error("API initialization failed", "error", err)

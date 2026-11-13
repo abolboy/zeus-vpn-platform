@@ -1,7 +1,6 @@
 -- ZEUS Control Plane — initial PostgreSQL schema.
 -- Apply only after taking a database backup. This migration is additive and does not
 -- modify the live WireGuard host or any existing tunnel configuration.
-BEGIN;
 
 CREATE TABLE IF NOT EXISTS operators (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),

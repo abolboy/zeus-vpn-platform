@@ -14,10 +14,10 @@ import (
 	"net/http"
 	"regexp"
 	"strconv"
-	"unicode"
-	"unicode/utf8"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/jackc/pgx/v5"
 )
@@ -75,162 +75,8 @@ type cursorPayload struct {
 	ID        string    `json:"id"`
 }
 
-var uuidPattern = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}package main
-
-import (
-	"context"
-	"crypto/rand"
-	"crypto/sha256"
-	"encoding/base64"
-	"encoding/json"
-	"errors"
-	"fmt"
-	"io"
-	"log/slog"
-	"net"
-	"net/http"
-	"regexp"
-	"strconv"
-	"unicode"
-	"unicode/utf8"
-	"strings"
-	"time"
-
-	"github.com/jackc/pgx/v5"
-)
-
-type API struct {
-	version      string
-	store        ControlStore
-	logger       *slog.Logger
-	limiter      *loginLimiter
-	hashSlots    chan struct{}
-	dummyHash    string
-	allowedOrigin map[string]struct{}
-}
-
-type contextKey string
-
-const operatorContextKey contextKey = "zeus_operator"
-const requestIDContextKey contextKey = "zeus_request_id"
-
-type loginRequest struct {
-	Login    string `json:"login"`
-	Password string `json:"password"`
-}
-
-type sessionResponse struct {
-	AccessToken string         `json:"access_token"`
-	TokenType   string         `json:"token_type"`
-	ExpiresAt   time.Time      `json:"expires_at"`
-	Operator    operatorPublic `json:"operator"`
-}
-
-type operatorPublic struct {
-	ID    string `json:"id"`
-	Login string `json:"login"`
-	Role  string `json:"role"`
-}
-
-type errorEnvelope struct {
-	Error apiError `json:"error"`
-}
-
-type apiError struct {
-	Code      string `json:"code"`
-	Message   string `json:"message"`
-	RequestID string `json:"request_id"`
-}
-
-type userPage struct {
-	Items      []VPNUser `json:"items"`
-	NextCursor string    `json:"next_cursor,omitempty"`
-}
-
-type cursorPayload struct {
-	CreatedAt time.Time `json:"created_at"`
-	ID        string    `json:"id"`
-}
-
-)
-var idempotencyKeyPattern = regexp.MustCompile(`^[A-Za-z0-9._~-]{16,128}package main
-
-import (
-	"context"
-	"crypto/rand"
-	"crypto/sha256"
-	"encoding/base64"
-	"encoding/json"
-	"errors"
-	"fmt"
-	"io"
-	"log/slog"
-	"net"
-	"net/http"
-	"regexp"
-	"strconv"
-	"unicode"
-	"unicode/utf8"
-	"strings"
-	"time"
-
-	"github.com/jackc/pgx/v5"
-)
-
-type API struct {
-	version      string
-	store        ControlStore
-	logger       *slog.Logger
-	limiter      *loginLimiter
-	hashSlots    chan struct{}
-	dummyHash    string
-	allowedOrigin map[string]struct{}
-}
-
-type contextKey string
-
-const operatorContextKey contextKey = "zeus_operator"
-const requestIDContextKey contextKey = "zeus_request_id"
-
-type loginRequest struct {
-	Login    string `json:"login"`
-	Password string `json:"password"`
-}
-
-type sessionResponse struct {
-	AccessToken string         `json:"access_token"`
-	TokenType   string         `json:"token_type"`
-	ExpiresAt   time.Time      `json:"expires_at"`
-	Operator    operatorPublic `json:"operator"`
-}
-
-type operatorPublic struct {
-	ID    string `json:"id"`
-	Login string `json:"login"`
-	Role  string `json:"role"`
-}
-
-type errorEnvelope struct {
-	Error apiError `json:"error"`
-}
-
-type apiError struct {
-	Code      string `json:"code"`
-	Message   string `json:"message"`
-	RequestID string `json:"request_id"`
-}
-
-type userPage struct {
-	Items      []VPNUser `json:"items"`
-	NextCursor string    `json:"next_cursor,omitempty"`
-}
-
-type cursorPayload struct {
-	CreatedAt time.Time `json:"created_at"`
-	ID        string    `json:"id"`
-}
-
-)
+var uuidPattern = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$`)
+var idempotencyKeyPattern = regexp.MustCompile(`^[A-Za-z0-9._~-]{16,128}$`)
 
 func NewAPI(version string, store ControlStore, logger *slog.Logger, allowedOrigins []string) (*API, error) {
 	if logger == nil {
@@ -508,7 +354,8 @@ func (a *API) handleGetUser(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusForbidden, "forbidden", "دسترسی کافی نیست", requestIDFrom(r))
 		return
 	}
-	if !uuidPattern.MatchString(r.PathValue("userID")) {
+	userID := r.PathValue("userID")
+	if !uuidPattern.MatchString(userID) {
 		writeError(w, http.StatusBadRequest, "invalid_user_id", "شناسه کاربر معتبر نیست", requestIDFrom(r))
 		return
 	}
@@ -517,7 +364,7 @@ func (a *API) handleGetUser(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusServiceUnavailable, "not_ready", "ذخیره‌ساز مدیریت کاربران آماده نیست", requestIDFrom(r))
 		return
 	}
-	user, err := store.GetVPNUser(r.Context(), r.PathValue("userID"))
+	user, err := store.GetVPNUser(r.Context(), userID)
 	if errors.Is(err, ErrVPNUserNotFound) {
 		writeError(w, http.StatusNotFound, "user_not_found", "کاربر پیدا نشد", requestIDFrom(r))
 		return
@@ -622,11 +469,9 @@ func (a *API) handleUpdateUser(w http.ResponseWriter, r *http.Request) {
 		}
 		input.DisplayName = &value
 	}
-	if input.Status != nil {
-		if *input.Status != "active" && *input.Status != "suspended" && *input.Status != "disabled" {
-			writeError(w, http.StatusBadRequest, "invalid_status", "وضعیت کاربر معتبر نیست", requestIDFrom(r))
-			return
-		}
+	if input.Status != nil && *input.Status != "active" && *input.Status != "suspended" && *input.Status != "disabled" {
+		writeError(w, http.StatusBadRequest, "invalid_status", "وضعیت کاربر معتبر نیست", requestIDFrom(r))
+		return
 	}
 	if input.MaxDevices != nil && (*input.MaxDevices < 1 || *input.MaxDevices > 20) {
 		writeError(w, http.StatusBadRequest, "invalid_device_limit", "سقف دستگاه باید بین ۱ تا ۲۰ باشد", requestIDFrom(r))

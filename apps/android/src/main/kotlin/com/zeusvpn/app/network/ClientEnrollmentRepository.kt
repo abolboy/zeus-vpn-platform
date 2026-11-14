@@ -48,19 +48,23 @@ class ClientEnrollmentRepository(
     suspend fun enroll(
         activationCode: String,
         deviceName: String = Build.MODEL.orEmpty(),
+        idToken: String? = null,
     ): ClientEnrollmentResult = withContext(Dispatchers.IO) {
         val safeDeviceName = deviceName.trim().ifBlank { "Android device" }.take(80)
+        val cleanActivationCode = activationCode.trim()
+        val cleanIdToken = idToken?.trim()?.takeIf { it.isNotEmpty() }
         val pending = loadPendingEnrollment() ?: createPendingEnrollment(
-            activationCode = activationCode.trim(),
+            activationCode = cleanActivationCode,
             deviceName = safeDeviceName,
+            hasCustomerIdentity = cleanIdToken != null,
         )
 
-        if (activationCode.isNotBlank() && activationCode.trim() != pending.activationCode) {
+        if (cleanActivationCode.isNotBlank() && cleanActivationCode != pending.activationCode) {
             throw PendingEnrollmentExistsException()
         }
 
         val response = try {
-            postEnrollment(pending)
+            postEnrollment(pending, cleanIdToken)
         } catch (error: ClientEnrollmentException) {
             if (error.errorCode in setOf(
                     "activation_code_invalid",
@@ -96,9 +100,13 @@ class ClientEnrollmentRepository(
     private fun createPendingEnrollment(
         activationCode: String,
         deviceName: String,
+        hasCustomerIdentity: Boolean,
     ): PendingEnrollment {
-        require(isActivationCodeShapeValid(activationCode)) {
-            "Activation code must be copied in full."
+        require(
+            (activationCode.isNotBlank() && isActivationCodeShapeValid(activationCode)) ||
+                (activationCode.isBlank() && hasCustomerIdentity)
+        ) {
+            "A valid one-time activation code or verified customer session is required."
         }
         require(deviceName.isNotBlank() && deviceName.length <= 80) {
             "Device name is invalid."
@@ -154,16 +162,21 @@ class ClientEnrollmentRepository(
         }
     }
 
-    private fun postEnrollment(pending: PendingEnrollment): JSONObject {
+    private fun postEnrollment(pending: PendingEnrollment, idToken: String?): JSONObject {
         val body = JSONObject()
-            .put("activation_code", pending.activationCode)
             .put("device_ref", pending.deviceRef)
             .put("device_name", pending.deviceName)
             .put("platform", pending.platform)
             .put("public_key", pending.publicKey)
+            .apply {
+                if (pending.activationCode.isNotBlank()) put("activation_code", pending.activationCode)
+            }
             .toString()
             .toByteArray(Charsets.UTF_8)
 
+        require(pending.activationCode.isNotBlank() || !idToken.isNullOrBlank()) {
+            "A fresh customer identity token is required to continue this enrollment."
+        }
         val connection = enrollmentEndpoint().openConnection() as HttpsURLConnection
         try {
             connection.requestMethod = "POST"
@@ -175,6 +188,7 @@ class ClientEnrollmentRepository(
             connection.setRequestProperty("Accept", "application/json")
             connection.setRequestProperty("Content-Type", "application/json; charset=utf-8")
             connection.setRequestProperty("Idempotency-Key", pending.idempotencyKey)
+            if (!idToken.isNullOrBlank()) connection.setRequestProperty("Authorization", "Bearer $idToken")
             connection.outputStream.use { it.write(body) }
 
             val status = connection.responseCode

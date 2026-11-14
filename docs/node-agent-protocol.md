@@ -16,7 +16,7 @@ Status: the server-side mTLS listener, certificate-to-node mapping, durable comm
 - Build zeus-node-cert from services/vpn-node on a trusted administrator workstation.
 - Create the CA on a separate encrypted/offline workstation. The CA private key must be owner-only and must never be copied to the Control Plane host, CI, or a VPN node.
 - Issue one distinct ECDSA P-256 ClientAuth certificate per pre-registered vpn_nodes.id. The default validity is 90 days (maximum 365 days); the leaf includes spiffe://zeus/node/<UUID> as a URI SAN.
-- The utility prints the certificate SHA-256 fingerprint and a SQL insert statement for vpn_node_agent_certificates. It does not connect to PostgreSQL or configure a node automatically.
+- The utility issues the certificate offline and never connects to PostgreSQL. Upload the public leaf certificate through POST /v1/nodes/{nodeID}/certificates; the API independently verifies its CA chain, ClientAuth-only usage, validity window, and exact node URI SAN before storing the SHA-256 fingerprint.
 - The database registry supports multiple active fingerprints for one node. For routine rotation, register the replacement, install its certificate/key, verify the agent can poll and acknowledge, then set revoked_at on the old fingerprint.
 - Emergency compromise requires immediate revocation of the compromised fingerprint. Availability is not preserved unless a replacement has already been installed.
 - The node receives only its own client certificate/key and the Control Plane server CA, never the CA private key.
@@ -64,7 +64,7 @@ Arbitrary shell text, executable paths, interface names, firewall scripts, arbit
 
 ## Remaining rollout gates
 
-1. Implement operator-managed node inventory, automated certificate revocation/API or UI, and live staging rotation/revocation drills.
+1. Complete operator-managed node inventory and web UI; run live staging rotation/revocation drills for the certificate registration and revocation APIs.
 2. Import/represent existing unmanaged WireGuard peers and addresses before enabling allocation on a real node.
 3. Verify node pools/interface addresses against the actual WireGuard configuration.
 4. Test add/remove on an isolated interface, then a staging VPS.

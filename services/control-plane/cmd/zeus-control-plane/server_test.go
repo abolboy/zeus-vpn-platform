@@ -4,6 +4,14 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/x509"
+	"crypto/x509/pkix"
+	"encoding/pem"
+	"math/big"
+	"net/url"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -394,6 +402,68 @@ func TestPostgresStoreIntegration(t *testing.T) {
 	if err != nil || node.ID != nodeID {
 		t.Fatalf("node certificate binding failed: node=%+v err=%v", node, err)
 	}
+
+	// Certificate management accepts only a trusted ClientAuth leaf bound to this exact node ID.
+	nodeCA, nodeCertificate := makeBoundNodeClientCertificate(t, nodeID)
+	nodeRoots := x509.NewCertPool()
+	if !nodeRoots.AppendCertsFromPEM(nodeCA) {
+		t.Fatal("could not load generated node CA into trust pool")
+	}
+	api.SetNodeClientCAs(nodeRoots)
+	registerBody, err := json.Marshal(RegisterNodeCertificateInput{CertificatePEM: string(nodeCertificate)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	registerRequest := httptest.NewRequest(http.MethodPost, "/v1/nodes/"+nodeID+"/certificates", bytes.NewReader(registerBody))
+	registerRequest.Header.Set("Authorization", "Bearer "+token)
+	registerResponse := httptest.NewRecorder()
+	handler.ServeHTTP(registerResponse, registerRequest)
+	if registerResponse.Code != http.StatusCreated {
+		t.Fatalf("node certificate registration status=%d body=%s", registerResponse.Code, registerResponse.Body.String())
+	}
+	var registeredCertificate NodeAgentCertificate
+	if err := json.Unmarshal(registerResponse.Body.Bytes(), &registeredCertificate); err != nil {
+		t.Fatal(err)
+	}
+	if registeredCertificate.NodeID != nodeID || registeredCertificate.FingerprintSHA256 == "" || registeredCertificate.RevokedAt != nil {
+		t.Fatalf("unexpected registered node certificate: %+v", registeredCertificate)
+	}
+
+	registerReplay := httptest.NewRequest(http.MethodPost, "/v1/nodes/"+nodeID+"/certificates", bytes.NewReader(registerBody))
+	registerReplay.Header.Set("Authorization", "Bearer "+token)
+	registerReplayResponse := httptest.NewRecorder()
+	handler.ServeHTTP(registerReplayResponse, registerReplay)
+	if registerReplayResponse.Code != http.StatusOK || registerReplayResponse.Header().Get("Idempotency-Replayed") != "true" {
+		t.Fatalf("node certificate registration replay status=%d body=%s", registerReplayResponse.Code, registerReplayResponse.Body.String())
+	}
+
+	listCertificates := httptest.NewRequest(http.MethodGet, "/v1/nodes/"+nodeID+"/certificates", nil)
+	listCertificates.Header.Set("Authorization", "Bearer "+token)
+	listCertificatesResponse := httptest.NewRecorder()
+	handler.ServeHTTP(listCertificatesResponse, listCertificates)
+	if listCertificatesResponse.Code != http.StatusOK || !bytes.Contains(listCertificatesResponse.Body.Bytes(), []byte(registeredCertificate.FingerprintSHA256)) {
+		t.Fatalf("node certificate list status=%d body=%s", listCertificatesResponse.Code, listCertificatesResponse.Body.String())
+	}
+
+	revokeCertificate := httptest.NewRequest(http.MethodPost, "/v1/nodes/"+nodeID+"/certificates/"+registeredCertificate.ID+"/revoke", nil)
+	revokeCertificate.Header.Set("Authorization", "Bearer "+token)
+	revokeCertificateResponse := httptest.NewRecorder()
+	handler.ServeHTTP(revokeCertificateResponse, revokeCertificate)
+	if revokeCertificateResponse.Code != http.StatusOK {
+		t.Fatalf("node certificate revoke status=%d body=%s", revokeCertificateResponse.Code, revokeCertificateResponse.Body.String())
+	}
+	var revokedCertificate NodeAgentCertificate
+	if err := json.Unmarshal(revokeCertificateResponse.Body.Bytes(), &revokedCertificate); err != nil || revokedCertificate.RevokedAt == nil {
+		t.Fatalf("node certificate was not marked revoked: %+v err=%v", revokedCertificate, err)
+	}
+	secondRevoke := httptest.NewRequest(http.MethodPost, "/v1/nodes/"+nodeID+"/certificates/"+registeredCertificate.ID+"/revoke", nil)
+	secondRevoke.Header.Set("Authorization", "Bearer "+token)
+	secondRevokeResponse := httptest.NewRecorder()
+	handler.ServeHTTP(secondRevokeResponse, secondRevoke)
+	if secondRevokeResponse.Code != http.StatusOK || secondRevokeResponse.Header().Get("Idempotency-Replayed") != "true" {
+		t.Fatalf("replayed certificate revoke status=%d body=%s", secondRevokeResponse.Code, secondRevokeResponse.Body.String())
+	}
+
 	if _, err := store.FindNodeByCertFingerprint(ctx, []byte("not a fingerprint")); !errors.Is(err, ErrNodeNotFound) {
 		t.Fatalf("invalid node fingerprint error=%v, want ErrNodeNotFound", err)
 	}
@@ -691,4 +761,57 @@ func TestPostgresStoreIntegration(t *testing.T) {
 		t.Fatalf("consumed activation code status=%d body=%s, want 409 activation_code_used", secondClientEnrollResponse.Code, secondClientEnrollResponse.Body.String())
 	}
 
+}
+
+func makeBoundNodeClientCertificate(t *testing.T, nodeID string) ([]byte, []byte) {
+	t.Helper()
+	caKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC().Truncate(time.Second)
+	caTemplate := &x509.Certificate{
+		SerialNumber: big.NewInt(1001),
+		Subject: pkix.Name{CommonName: "ZEUS Integration Node CA"},
+		NotBefore: now.Add(-time.Hour),
+		NotAfter: now.Add(48 * time.Hour),
+		IsCA: true,
+		BasicConstraintsValid: true,
+		MaxPathLen: 0,
+		MaxPathLenZero: true,
+		KeyUsage: x509.KeyUsageCertSign | x509.KeyUsageCRLSign | x509.KeyUsageDigitalSignature,
+	}
+	caDER, err := x509.CreateCertificate(rand.Reader, caTemplate, caTemplate, &caKey.PublicKey, caKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	caCertificate, err := x509.ParseCertificate(caDER)
+	if err != nil {
+		t.Fatal(err)
+	}
+	clientKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	identityURI, err := url.Parse("spiffe://zeus/node/" + nodeID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	leafTemplate := &x509.Certificate{
+		SerialNumber: big.NewInt(1002),
+		Subject: pkix.Name{CommonName: "zeus-node-" + nodeID},
+		NotBefore: now.Add(-5 * time.Minute),
+		NotAfter: now.Add(24 * time.Hour),
+		KeyUsage: x509.KeyUsageDigitalSignature,
+		ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
+		BasicConstraintsValid: true,
+		URIs: []*url.URL{identityURI},
+	}
+	leafDER, err := x509.CreateCertificate(rand.Reader, leafTemplate, caCertificate, &clientKey.PublicKey, caKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	caPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: caDER})
+	leafPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: leafDER})
+	return caPEM, leafPEM
 }

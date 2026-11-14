@@ -37,7 +37,7 @@ The certificate utility is built from services/vpn-node:
 
     go build -o zeus-node-cert ./cmd/zeus-node-cert
 
-Create the root CA on a separate, encrypted offline administrator workstation. Keep its private key offline; it must never be copied to the Control Plane host, a VPN node, or CI. Issue a distinct ClientAuth certificate for each pre-registered vpn_nodes.id, then register the fingerprint and validity interval in vpn_node_agent_certificates. The node receives only its own client certificate/key and the Control Plane server CA. The tool prints a registration SQL statement, but it does not write to the database or automatically configure the node.
+Create the root CA on a separate, encrypted offline administrator workstation. Keep its private key offline; it must never be copied to the Control Plane host, a VPN node, or CI. Issue a distinct ClientAuth certificate for each pre-registered vpn_nodes.id, then register the fingerprint and validity interval in vpn_node_agent_certificates. The node receives only its own client certificate/key and the Control Plane server CA. The tool does not write to PostgreSQL or automatically configure a node. Upload the public leaf certificate through the authenticated registration endpoint; the API independently verifies the certificate chain against the configured node CA, ClientAuth-only usage, validity interval, and exact node URI SAN before storing its fingerprint.
 
 Routine rotation uses two active fingerprints temporarily: register the replacement, install it, verify node polling/acknowledgement, and only then revoke the old fingerprint by setting revoked_at. See docs/node-agent-protocol.md and services/vpn-node/README.md for exact instructions.
 
@@ -50,6 +50,9 @@ Do not register a node for client provisioning until its endpoint, server public
 - POST /v1/auth/login, GET /v1/auth/me, POST /v1/auth/logout: operator sessions.
 - Authenticated user/device APIs support owner/admin mutations and read access for support/read-only roles.
 - POST /v1/client/enroll: public rate-limited activation-code flow; returns HTTP 202 while peer provisioning remains asynchronous.
+- GET /v1/nodes/{nodeID}/certificates: authenticated certificate inventory for owner/admin/support/read_only.
+- POST /v1/nodes/{nodeID}/certificates: owner/admin registration of a CA-verified, node-bound ClientAuth certificate.
+- POST /v1/nodes/{nodeID}/certificates/{certificateID}/revoke: owner/admin certificate revocation.
 - GET /agent/v1/commands/next and POST /agent/v1/commands/{commandID}/ack: separate mTLS-only node-agent routes.
 
 ## Security behavior

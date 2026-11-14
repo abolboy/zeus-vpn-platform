@@ -55,6 +55,7 @@ import com.zeusvpn.app.network.NetworkCondition
 import com.zeusvpn.app.network.NetworkMonitor
 import com.zeusvpn.app.network.TunnelConnectivityChecker
 import com.zeusvpn.app.network.TunnelConnectivityResult
+import com.zeusvpn.app.network.TunnelProbeFailure
 import com.zeusvpn.app.network.TunnelProbeStatus
 import com.zeusvpn.app.vpn.InvalidWireGuardProfileException
 import com.zeusvpn.app.vpn.MissingWireGuardProfileException
@@ -109,6 +110,7 @@ fun ZeusDashboard() {
     var authBusy by remember { mutableStateOf(false) }
     var authMessage by remember { mutableStateOf("") }
     var selectedTab by remember { mutableIntStateOf(0) }
+    var manualProbeRequest by remember { mutableIntStateOf(0) }
 
     val network by produceState(NetworkCondition.UNKNOWN, monitor) {
         monitor.observe().collect { value = it }
@@ -130,6 +132,7 @@ fun ZeusDashboard() {
         TunnelConnectivityResult.IDLE,
         tunnelChecker,
         wireGuardState,
+        manualProbeRequest,
     ) {
         if (wireGuardState != WireGuardState.ENGINE_UP) {
             value = TunnelConnectivityResult.IDLE
@@ -438,7 +441,7 @@ fun ZeusDashboard() {
                             onDisconnect = disconnectWireGuard,
                         )
                         if (wireGuardState == WireGuardState.ENGINE_UP) {
-                            TrafficStatsCard(trafficStats, tunnelReachability)
+                            TrafficStatsCard(trafficStats, tunnelReachability) { manualProbeRequest += 1 }
                         }
                         NetworkSummaryCard(network)
                         ProfileSetupCard(
@@ -489,7 +492,7 @@ fun ZeusDashboard() {
                         SmartRoutingCard()
                         NetworkSummaryCard(network)
                         if (wireGuardState == WireGuardState.ENGINE_UP) {
-                            TrafficStatsCard(trafficStats, tunnelReachability)
+                            TrafficStatsCard(trafficStats, tunnelReachability) { manualProbeRequest += 1 }
                         } else {
                             PanelCard {
                                 Text("آمار زنده پس از فعال‌شدن تونل نمایش داده می‌شود.", color = SecondaryText,
@@ -583,7 +586,7 @@ private fun ConnectionCard(
         WireGuardState.ENGINE_UP -> when {
             internetVerified -> "آزمون HTTPS از داخل برنامه پاسخ معتبر دریافت کرد؛ دسترسی همهٔ سایت‌ها و برنامه‌ها جداگانه تضمین نمی‌شود."
             reachability.status == TunnelProbeStatus.CHECKING -> "موتور تونل روشن است؛ اکنون مسیر اینترنت از داخل برنامه بررسی می‌شود."
-            handshakeFresh -> "Handshake تازه ثبت شده، اما آزمون HTTPS پاسخ نگرفته است. DNS، IP forwarding، NAT و مسیر خروجی VPS را بررسی کنید."
+            handshakeFresh -> "Handshake تازه ثبت شده، اما آزمون HTTPS موفق نبود. " + probeFailureMessage(reachability.failure)
             else -> "فقط موتور محلی فعال است؛ هنوز Handshake معتبر و دسترسی اینترنت تأیید نشده است."
         }
         WireGuardState.CONNECTING -> "در حال ایجاد تونل رمزگذاری‌شده..."
@@ -639,6 +642,16 @@ private fun ConnectionCard(
             )
         }
     }
+}
+
+@Composable
+private fun probeFailureMessage(failure: TunnelProbeFailure?): String = when (failure) {
+    TunnelProbeFailure.DNS -> "نام دامنه resolve نشد؛ DNS پروفایل و دسترسی DNS از مسیر VPN را بررسی کنید."
+    TunnelProbeFailure.TIMEOUT -> "پاسخ در مهلت مقرر نرسید؛ مسیر خروجی، فایروال، NAT و MTU نود را بررسی کنید."
+    TunnelProbeFailure.ROUTE -> "مسیر شبکه برقرار نشد؛ IP forwarding، NAT و مسیر پیش‌فرض سرور را بررسی کنید."
+    TunnelProbeFailure.TLS -> "ارتباط HTTPS در مرحله TLS شکست خورد؛ ساعت دستگاه و فیلتر یا بازرسی TLS را بررسی کنید."
+    TunnelProbeFailure.HTTP_STATUS -> "مقصد آزمون پاسخ ۲۰۴ مورد انتظار را نداد؛ ممکن است مقصد فیلتر یا پاسخ آن تغییر کرده باشد."
+    TunnelProbeFailure.UNKNOWN, null -> "DNS، IP forwarding، NAT، مسیر خروجی و فایروال VPS را بررسی کنید."
 }
 
 @Composable
@@ -726,12 +739,16 @@ private fun NetworkSummaryCard(network: NetworkCondition) {
 private fun TrafficStatsCard(
     stats: WireGuardTrafficStats,
     reachability: TunnelConnectivityResult,
+    onRefresh: () -> Unit,
 ) {
     PanelCard {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
                 Text("ترافیک تونل", color = MainText, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
                 Text("به‌روزرسانی خودکار هر ۳ ثانیه", color = MutedText, style = MaterialTheme.typography.labelSmall)
+            }
+            TextButton(onClick = onRefresh, enabled = reachability.status != TunnelProbeStatus.CHECKING) {
+                Text("آزمون مجدد")
             }
             StatusPill(
                 when (reachability.status) {
@@ -788,7 +805,7 @@ private fun TrafficStatsCard(
             TunnelProbeStatus.CHECKING ->
                 "در حال آزمون HTTPS از داخل نشست برنامه..."
             TunnelProbeStatus.UNREACHABLE ->
-                "دو مقصد آزمون HTTPS پاسخ معتبر ندادند؛ DNS، NAT/forwarding، مسیر خروجی و فایروال VPS را بررسی کنید."
+                "آزمون HTTPS از داخل برنامه شکست خورد. " + probeFailureMessage(reachability.failure)
             TunnelProbeStatus.IDLE ->
                 "آزمون اینترنت پس از فعال‌شدن موتور اجرا می‌شود."
         }

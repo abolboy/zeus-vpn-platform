@@ -102,3 +102,10 @@ export function revokeVPNDevice(token, userID, deviceID, idempotencyKey = create
     { method: 'POST', token, idempotencyKey },
   )
 }
+
+export function createDeviceEnrollmentCode(token, userID) {
+  return requestJSON(
+    '/v1/users/' + encodeURIComponent(userID) + '/enrollment-code',
+    { method: 'POST', token },
+  )
+}

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { getControlPlaneHealth, isControlPlaneConfigured, loginOperator, logoutOperator, listVPNUsers, createVPNUser, updateVPNUser, createIdempotencyKey, listVPNDevices, revokeVPNDevice } from './api.js'
+import { getControlPlaneHealth, isControlPlaneConfigured, loginOperator, logoutOperator, listVPNUsers, createVPNUser, updateVPNUser, createIdempotencyKey, listVPNDevices, revokeVPNDevice, createDeviceEnrollmentCode } from './api.js'
 
 const initialServers = [
   { id: 1, name: 'ZEUS • Frankfurt', region: 'آلمان', ip: '185.220.101.14', protocol: 'WireGuard', load: 38, latency: 82, status: 'online', users: 128 },
@@ -73,6 +73,9 @@ export default function App() {
   const [updateUserKey, setUpdateUserKey] = useState('')
   const [userMutationBusy, setUserMutationBusy] = useState(false)
   const [userMutationError, setUserMutationError] = useState('')
+  const [enrollmentCodeInfo, setEnrollmentCodeInfo] = useState(null)
+  const [enrollmentCodeBusy, setEnrollmentCodeBusy] = useState(false)
+  const [enrollmentCodeError, setEnrollmentCodeError] = useState('')
   const [devicesUserId, setDevicesUserId] = useState('')
   const [remoteDevices, setRemoteDevices] = useState([])
   const [remoteDevicesState, setRemoteDevicesState] = useState('idle')
@@ -152,6 +155,8 @@ export default function App() {
     setOperator(null)
     setRemoteUsers([])
     setRemoteUsersNextCursor('')
+    setEnrollmentCodeInfo(null)
+    setEnrollmentCodeError('')
     deviceFetchSequence.current += 1
     setDevicesUserId('')
     setRemoteDevices([])
@@ -308,6 +313,45 @@ export default function App() {
     }
   }
 
+
+
+  async function issueEnrollmentCode(user) {
+    if (!accessToken || !canManageRemoteUsers || !user?.id || enrollmentCodeBusy) return
+    setEnrollmentCodeBusy(true)
+    setEnrollmentCodeError('')
+    try {
+      const result = await createDeviceEnrollmentCode(accessToken, user.id)
+      if (!result?.code || !result?.expires_at) throw new Error('پاسخ کد فعال‌سازی معتبر نیست.')
+      setEnrollmentCodeInfo({
+        userId: user.id,
+        userName: user.display_name,
+        code: result.code,
+        expiresAt: result.expires_at,
+      })
+      toast('کد فعال‌سازی ۱۵ دقیقه اعتبار دارد و فقط همین بار نمایش داده می‌شود.')
+    } catch (error) {
+      setEnrollmentCodeError(error.message || 'صدور کد فعال‌سازی انجام نشد.')
+      if (error.status === 401) {
+        setAccessToken('')
+        setOperator(null)
+        setRemoteUsers([])
+        setEnrollmentCodeInfo(null)
+        setLoginError('نشست منقضی شده است؛ دوباره وارد شوید.')
+      }
+    } finally {
+      setEnrollmentCodeBusy(false)
+    }
+  }
+
+  async function copyEnrollmentCode() {
+    if (!enrollmentCodeInfo?.code) return
+    try {
+      await navigator.clipboard.writeText(enrollmentCodeInfo.code)
+      toast('کد فعال‌سازی کپی شد؛ آن را فقط در اختیار صاحب حساب قرار بده.')
+    } catch {
+      setEnrollmentCodeError('دسترسی کپی خودکار در این مرورگر فراهم نیست؛ کد را دستی انتخاب و کپی کن.')
+    }
+  }
 
   async function refreshRemoteDevices(userID = devicesUserId) {
     if (!accessToken || !userID) return
@@ -497,6 +541,21 @@ export default function App() {
           </div>
         </form>}
         {isControlPlaneConfigured && userMutationError && !showCreateUser && <div className="remote-users-error" role="alert">{userMutationError}</div>}
+        {isControlPlaneConfigured && enrollmentCodeError && <div className="remote-users-error" role="alert">{enrollmentCodeError}</div>}
+        {isControlPlaneConfigured && enrollmentCodeInfo && <section className="enrollment-code-panel glass">
+          <div className="enrollment-code-heading">
+            <div>
+              <b>کد اتصال دستگاه · {enrollmentCodeInfo.userName}</b>
+              <p>این کد یک‌بارمصرف است؛ فقط در اختیار صاحب همین حساب قرار بده. با صدور کد تازه برای این کاربر، کد مصرف‌نشدهٔ قبلی باطل می‌شود.</p>
+            </div>
+            <button className="mini-action subtle" onClick={() => setEnrollmentCodeInfo(null)}>بستن</button>
+          </div>
+          <code className="enrollment-code-value" dir="ltr">{enrollmentCodeInfo.code}</code>
+          <div className="enrollment-code-footer">
+            <span>مهلت استفاده تا {new Date(enrollmentCodeInfo.expiresAt).toLocaleTimeString('fa-IR')}</span>
+            <button className="button primary" onClick={copyEnrollmentCode}>کپی کد</button>
+          </div>
+        </section>}
         <div className="table-wrap">
           <table>
             <thead><tr><th>شناسه</th><th>کاربر</th><th>اشتراک</th><th>مصرف</th><th>انقضا</th><th>وضعیت</th><th>سقف دستگاه</th><th>عملیات</th></tr></thead>
@@ -525,6 +584,7 @@ export default function App() {
                 <td>{isControlPlaneConfigured
                   ? <div className="user-row-actions">
                       <button className={devicesOpen ? 'mini-action selected' : 'mini-action'} onClick={() => toggleUserDevices(remoteUser)} disabled={!remoteUser}>دستگاه‌ها</button>
+                      {canManageRemoteUsers && <button className="mini-action subtle" onClick={() => issueEnrollmentCode(remoteUser)} disabled={!remoteUser || enrollmentCodeBusy || remoteUser?.status !== 'active'}>{enrollmentCodeBusy ? '...' : 'کد اتصال'}</button>}
                       {canManageRemoteUsers && (editing
                         ? <>
                             <button className="mini-action" onClick={() => saveRemoteUser(remoteUser)} disabled={userMutationBusy}>{userMutationBusy ? '...' : 'ذخیره'}</button>

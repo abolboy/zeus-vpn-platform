@@ -34,7 +34,7 @@ Mutation requests use cryptographically random idempotency keys. A key is preser
 - Persian-first, responsive dashboard with Neon Core, Cyberpunk and Aurora themes.
 - Operator login/logout and authenticated user listing from the Control Plane.
 - Create user and edit name/status/device limit with server-side role enforcement.
-- Authenticated device list and owner/admin revocation workflow.
+- Authenticated device list, owner/admin revocation workflow, and one-time client activation-code issuance.
 - Device and peer status comes from the database; revocation completes only after node acknowledgement.
 - User suspension blocks new device enrollment but does not automatically revoke already-provisioned peers.
 - The API connection indicator calls only \`GET /healthz\`; it does not prove database readiness or VPN-node health.

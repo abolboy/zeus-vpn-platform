@@ -462,3 +462,17 @@ tbody tr:hover { background: rgba(var(--accent-rgb),.045); }
   .device-card-actions { align-items:flex-start; flex-direction:column; }
   .device-addresses { grid-template-columns:1fr; }
 }
+
+/* One-time client activation code panel */
+.enrollment-code-panel { margin-top:14px; padding:16px; border:1px solid rgba(var(--accent-rgb),.24); border-radius:14px; background:linear-gradient(135deg,rgba(var(--accent-rgb),.07),rgba(9,16,30,.58)); }
+.enrollment-code-heading { display:flex; align-items:flex-start; justify-content:space-between; gap:12px; }
+.enrollment-code-heading b { color:#edf4ff; font-size:11px; }
+.enrollment-code-heading p { margin:6px 0 0; color:#92a2bb; font-size:9px; line-height:1.9; }
+.enrollment-code-value { display:block; width:100%; margin-top:13px; padding:13px 14px; border:1px dashed rgba(var(--accent-rgb),.4); border-radius:9px; background:rgba(4,9,18,.72); color:#8ff0d4; font:600 13px/1.7 ui-monospace,SFMono-Regular,Menlo,monospace; letter-spacing:1.1px; text-align:center; overflow-wrap:anywhere; user-select:all; }
+.enrollment-code-footer { display:flex; align-items:center; justify-content:space-between; gap:12px; margin-top:12px; }
+.enrollment-code-footer span { color:#a2b1c6; font-size:9px; }
+@media (max-width:600px) {
+  .enrollment-code-panel { padding:12px; }
+  .enrollment-code-value { font-size:11px; letter-spacing:.4px; }
+  .enrollment-code-footer { align-items:flex-start; flex-direction:column; }
+}

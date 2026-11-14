@@ -20,6 +20,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.zeusvpn.app.R
 import com.zeusvpn.app.data.SettingsRepository
+import com.zeusvpn.app.network.ClientEnrollmentException
+import com.zeusvpn.app.network.ClientEnrollmentRepository
 import com.zeusvpn.app.network.NetworkCondition
 import com.zeusvpn.app.network.NetworkMonitor
 import com.zeusvpn.app.vpn.InvalidWireGuardProfileException
@@ -28,6 +30,7 @@ import com.zeusvpn.app.vpn.WireGuardEngine
 import com.zeusvpn.app.vpn.WireGuardState
 import android.app.Activity
 import android.net.VpnService
+import android.os.Build
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import kotlinx.coroutines.flow.collect
@@ -46,8 +49,13 @@ fun ZeusDashboard() {
     val monitor = remember(context) { NetworkMonitor(context) }
     val settings = remember(context) { SettingsRepository(context) }
     val wireGuard = remember(context) { WireGuardEngine.getInstance(context) }
+    val enrollment = remember(context) { ClientEnrollmentRepository(context) }
     val wireGuardState by wireGuard.state.collectAsState()
     var profileSaved by remember { mutableStateOf(false) }
+    var activationCodeDraft by remember { mutableStateOf("") }
+    var enrollmentBusy by remember { mutableStateOf(false) }
+    var enrollmentMessage by remember { mutableStateOf("") }
+    var hasPendingEnrollment by remember { mutableStateOf(false) }
     var profileDraft by remember { mutableStateOf("") }
     var wireGuardMessage by remember { mutableStateOf("") }
     val scope = rememberCoroutineScope()
@@ -68,8 +76,15 @@ fun ZeusDashboard() {
     val disconnectedMessage = stringResource(R.string.wg_disconnected_message)
     val profileDeletedMessage = stringResource(R.string.wg_profile_deleted)
 
-    LaunchedEffect(wireGuard) {
+    LaunchedEffect(wireGuard, enrollment) {
         profileSaved = runCatching { wireGuard.hasProfile() }.getOrDefault(false)
+        hasPendingEnrollment = runCatching { enrollment.hasPendingEnrollment() }.getOrDefault(false)
+        // A crash may occur after the encrypted profile is committed but before the pending
+        // enrollment marker is deleted. In that case the profile is already the successful result.
+        if (profileSaved && hasPendingEnrollment) {
+            runCatching { enrollment.completeEnrollment() }
+            hasPendingEnrollment = runCatching { enrollment.hasPendingEnrollment() }.getOrDefault(false)
+        }
     }
 
     val connectWireGuard: () -> Unit = {
@@ -145,6 +160,44 @@ fun ZeusDashboard() {
         }
     }
 
+    val enrollDevice: () -> Unit = {
+        if (!enrollment.isConfigured) {
+            enrollmentMessage = "نشانی HTTPS کنترل‌پلین در تنظیمات ساخت اندروید تعیین نشده است."
+        } else if (profileSaved) {
+            enrollmentMessage = "ابتدا پروفایل فعلی را از این گوشی حذف کنید."
+        } else if (!hasPendingEnrollment && activationCodeDraft.isBlank()) {
+            enrollmentMessage = "کد فعال‌سازی را وارد کنید."
+        } else if (!enrollmentBusy) {
+            scope.launch {
+                enrollmentBusy = true
+                enrollmentMessage = if (hasPendingEnrollment) {
+                    "در حال ادامهٔ ثبت قبلی با همان کلید امن..."
+                } else {
+                    "در حال ساخت کلید روی گوشی و ثبت کلید عمومی..."
+                }
+                try {
+                    val result = enrollment.enroll(
+                        activationCode = activationCodeDraft,
+                        deviceName = Build.MODEL.orEmpty(),
+                    )
+                    wireGuard.saveProfile(result.profileText)
+                    enrollment.completeEnrollment()
+                    profileSaved = true
+                    hasPendingEnrollment = false
+                    activationCodeDraft = ""
+                    enrollmentMessage = "دستگاه ثبت شد و پروفایل با رمزگذاری محلی ذخیره شد. وضعیت تونل را جداگانه بررسی کنید."
+                } catch (error: ClientEnrollmentException) {
+                    enrollmentMessage = error.message ?: "فعال‌سازی دستگاه انجام نشد."
+                } catch (error: Exception) {
+                    enrollmentMessage = error.message ?: "فعال‌سازی انجام نشد؛ تلاش امن برای ادامه روی همین گوشی نگهداری شده است."
+                } finally {
+                    hasPendingEnrollment = runCatching { enrollment.hasPendingEnrollment() }.getOrDefault(false)
+                    enrollmentBusy = false
+                }
+            }
+        }
+    }
+
     Box(
         Modifier.fillMaxSize()
             .background(Brush.verticalGradient(listOf(Ink, Color(0xFF0A1729), Ink)))
@@ -178,13 +231,24 @@ fun ZeusDashboard() {
             WireGuardCard(
                 state = wireGuardState,
                 profileSaved = profileSaved,
+                pendingEnrollment = hasPendingEnrollment,
                 profileDraft = profileDraft,
-                message = wireGuardMessage,
+                message = if (hasPendingEnrollment) "ثبت دستگاه در انتظار تکمیل است؛ قبل از جایگزینی پروفایل، همان ثبت قبلی را ادامه دهید." else wireGuardMessage,
                 onProfileDraftChange = { profileDraft = it },
                 onSaveProfile = saveWireGuardProfile,
                 onConnect = requestWireGuardConnection,
                 onDisconnect = disconnectWireGuard,
                 onForgetProfile = forgetWireGuardProfile,
+            )
+            EnrollmentCard(
+                configured = enrollment.isConfigured,
+                profileSaved = profileSaved,
+                hasPendingEnrollment = hasPendingEnrollment,
+                activationCode = activationCodeDraft,
+                busy = enrollmentBusy,
+                message = enrollmentMessage,
+                onActivationCodeChange = { activationCodeDraft = it },
+                onEnroll = enrollDevice,
             )
             OfflineCard()
             SettingsCard(
@@ -207,6 +271,93 @@ fun ZeusDashboard() {
                 style = MaterialTheme.typography.bodySmall,
             )
         }
+    }
+}
+
+
+@Composable
+private fun EnrollmentCard(
+    configured: Boolean,
+    profileSaved: Boolean,
+    hasPendingEnrollment: Boolean,
+    activationCode: String,
+    busy: Boolean,
+    message: String,
+    onActivationCodeChange: (String) -> Unit,
+    onEnroll: () -> Unit,
+) {
+    PanelCard {
+        Text(
+            "DEVICE ENROLLMENT",
+            color = Mint,
+            style = MaterialTheme.typography.labelMedium,
+            letterSpacing = 1.0.sp,
+        )
+        Text(
+            "فعال‌سازی امن دستگاه",
+            color = Color.White,
+            style = MaterialTheme.typography.titleMedium,
+            fontWeight = FontWeight.Bold,
+        )
+        Text(
+            when {
+                profileSaved -> "یک پروفایل روی این گوشی ذخیره شده است. برای جلوگیری از جایگزینی ناخواسته، ثبت دستگاه جدید غیرفعال است."
+                hasPendingEnrollment -> "یک درخواست ثبت نیمه‌تمام به‌صورت رمزگذاری‌شده روی این گوشی وجود دارد. ادامه، همان کلید و شناسه را دوباره استفاده می‌کند."
+                else -> "کد ۱۵ دقیقه‌ای را از مدیر بگیرید. کلید خصوصی همین‌جا ساخته می‌شود و فقط کلید عمومی به سرور می‌رود."
+            },
+            color = SoftText,
+            style = MaterialTheme.typography.bodySmall,
+            lineHeight = 20.sp,
+        )
+        if (configured && !profileSaved && !hasPendingEnrollment) {
+            OutlinedTextField(
+                value = activationCode,
+                onValueChange = onActivationCodeChange,
+                modifier = Modifier.fillMaxWidth(),
+                label = { Text("کد فعال‌سازی") },
+                placeholder = { Text("کد یک‌بارمصرف ۴۳ نویسه‌ای") },
+                singleLine = true,
+                textStyle = MaterialTheme.typography.bodyMedium,
+            )
+        }
+        if (!configured) {
+            Text(
+                "این نسخه هنوز با ZEUS_API_BASE_URL ساخته نشده است. تا زمان انتشار HTTPS کنترل‌پلین، فعال‌سازی آنلاین در دسترس نیست.",
+                color = Color(0xFFFFC879),
+                style = MaterialTheme.typography.bodySmall,
+                lineHeight = 19.sp,
+            )
+        }
+        Button(
+            onClick = onEnroll,
+            enabled = configured && !profileSaved && !busy &&
+                (hasPendingEnrollment || activationCode.isNotBlank()),
+            modifier = Modifier.fillMaxWidth(),
+            colors = ButtonDefaults.buttonColors(containerColor = Mint, contentColor = Ink),
+        ) {
+            Text(
+                when {
+                    busy -> "در حال انجام..."
+                    hasPendingEnrollment -> "ادامهٔ ثبت قبلی"
+                    else -> "ساخت کلید و فعال‌سازی"
+                },
+                fontWeight = FontWeight.SemiBold,
+            )
+        }
+        if (message.isNotBlank()) {
+            Text(
+                message,
+                color = if (message.contains("ثبت شد")) Mint else Color(0xFFFFC879),
+                style = MaterialTheme.typography.bodySmall,
+                lineHeight = 19.sp,
+            )
+        }
+        Text(
+            "کلید خصوصی در فایل رمزگذاری‌شدهٔ Android Keystore باقی می‌ماند؛ هیچ توکن مدیریتی در اپ کاربر استفاده نمی‌شود.",
+            color = SoftText,
+            style = MaterialTheme.typography.bodySmall,
+            lineHeight = 19.sp,
+        )
     }
 }
 
@@ -336,6 +487,7 @@ private fun EngineCard() {
 private fun WireGuardCard(
     state: WireGuardState,
     profileSaved: Boolean,
+    pendingEnrollment: Boolean,
     profileDraft: String,
     message: String,
     onProfileDraftChange: (String) -> Unit,
@@ -403,7 +555,7 @@ private fun WireGuardCard(
         ) {
             Button(
                 onClick = onSaveProfile,
-                enabled = profileDraft.isNotBlank() && state != WireGuardState.ENGINE_UP,
+                enabled = profileDraft.isNotBlank() && state != WireGuardState.ENGINE_UP && !pendingEnrollment,
                 modifier = Modifier.weight(1f),
                 colors = ButtonDefaults.buttonColors(containerColor = Mint, contentColor = Ink),
             ) {

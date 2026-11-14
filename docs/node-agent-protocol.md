@@ -1,93 +1,60 @@
 # ZEUS VPN Node Agent Protocol
 
-Status: the server-side mTLS listener, certificate-to-node lookup, command queue, outbound mTLS client, command worker, and dry-run-first WireGuard executor are implemented. The standalone service has no certificate enrollment/rotation workflow, and production WireGuard mutation remains disabled by default. The current AWS VPN node is not connected to this agent.
+Status: the server-side mTLS listener, certificate-to-node mapping, durable command queue, outbound mTLS client, command worker, and dry-run-first WireGuard executor are implemented. Certificate enrollment/rotation tooling and real staging-node mutation tests remain pending. The current AWS VPN node is not enrolled or connected.
 
 ## Security boundary
 
-- Each node initiates outbound HTTPS polling; the control plane does not open inbound management connections to VPN nodes.
-- The node-agent listener is separate from the browser/admin HTTP listener.
-- TLS 1.2 or newer and a verified client certificate from the configured node CA are required.
-- The leaf certificate must have ClientAuth EKU, must not be a CA certificate, and its SHA-256 fingerprint must match exactly one non-disabled vpn_nodes row.
-- Headers such as X-Forwarded-Client-Cert, X-Node-ID, and X-Forwarded-For are not identity sources.
-- The server listener is disabled unless all three ZEUS_NODE_TLS_CERT_FILE, ZEUS_NODE_TLS_KEY_FILE, and ZEUS_NODE_CA_FILE settings are supplied. Its default bind address is 127.0.0.1:8443.
-- The node client uses a separate client certificate and private key. Private key files must be regular, no-follow files with owner-only permissions. HTTPS redirects and ambient proxy settings are disabled.
+- Nodes initiate outbound HTTPS polling; the control plane does not open SSH or arbitrary inbound management connections to nodes.
+- The node-agent listener is separate from the browser/admin listener and is disabled unless the three dedicated TLS settings are supplied.
+- TLS 1.2+ with a verified ClientAuth certificate is required. The leaf cannot be a CA, and its SHA-256 fingerprint must match one non-disabled node record.
+- Identity is never inferred from X-Forwarded headers or caller-supplied node IDs.
+- Client private key files must be regular no-follow files with owner-only permissions; server-side TLS private keys are also read without following symlinks and must be owner-only.
+- The current AWS WireGuard node has not been enrolled and has not been modified.
 
-## Implemented mTLS endpoints
+## Device lifecycle and queued commands
 
-Available only on the separate node listener:
+- Device registration stores a client-generated public key only. Client private keys never leave the device.
+- Registration is accepted only for an active VPN user and an online mTLS-registered node with explicit client pools and interface addresses.
+- IP allocation considers the node's interface IPs and every non-revoked peer assignment. Per-node unique indexes prevent concurrent duplicate assignment.
+- Device and peer records, the `peer.ensure` command, idempotency response, and audit event are committed in the same PostgreSQL transaction.
+- A newly registered device is `provisioning` and its peer is `pending`.
+- A successful `peer.ensure` acknowledgement moves both records to `active`. A failure or expired command moves the associated records to `error`.
+- Revocation moves the device and peer to `revoking`, then queues `peer.remove`. Only a successful acknowledgement changes them to `revoked`.
+- An address remains reserved while a peer is pending, active, revoking, or error. It becomes reusable only after removal has been acknowledged and the peer status is `revoked`.
 
-- GET /agent/v1/commands/next — leases one command for the node identified by the verified certificate; returns 204 when no command is ready.
-- POST /agent/v1/commands/{commandID}/ack — acknowledges a leased command with status succeeded or failed.
+## Node-agent endpoints
 
-Acknowledgements accept only these error codes: validation_failed, config_rejected, wg_apply_failed, command_expired, internal_error, and mutation_disabled. Arbitrary logs, shell text, file paths, or commands are rejected.
+On the separate mTLS listener:
+- `GET /agent/v1/commands/next` leases one command for the verified node identity; 204 means no command is ready.
+- `POST /agent/v1/commands/{commandID}/ack` acknowledges `succeeded` or `failed` using a constrained error-code allowlist.
 
-## Command envelope
+The command enum is closed:
+- `peer.ensure`: payload includes only the WireGuard public key and assigned IPv4/IPv6 host addresses.
+- `peer.remove`: payload includes only the public key to remove.
 
-    {
-      "id": "command UUID",
-      "node_id": "authenticated node UUID",
-      "type": "peer.ensure",
-      "payload": {
-        "public_key": "base64 WireGuard public key",
-        "ipv4": "assigned-address",
-        "ipv6": "assigned-address"
-      },
-      "attempt": 1,
-      "expires_at": "RFC3339 UTC"
-    }
+Arbitrary shell text, executable paths, interface names, firewall scripts, arbitrary logs, or opaque command strings are not accepted.
 
-Allowed command types are a closed enum:
-- peer.ensure: ensure one public key has exactly its assigned host routes.
-- peer.remove: remove one known public key.
+## Queue guarantees
 
-No arbitrary shell command, executable path, interface name, firewall script, or opaque command string is accepted.
+- Commands are node-scoped and delivered at least once.
+- A command receives a 45-second lease and can be re-leased after a lease timeout, provided it has not expired and has attempts remaining.
+- Commands expire and are limited to 10 attempts.
+- Acknowledgements are scoped to the authenticated node ID and command ID. Identical replays are idempotent; conflicting replies are rejected.
+- Node heartbeat updates do not prove successful peer application.
 
-## Queue lifecycle and device state
-- User/device APIs create peer.ensure and peer.remove commands in the same PostgreSQL transaction as device/peer desired-state changes.
-- A newly registered device stays provisioning until the node acknowledges peer.ensure successfully.
-- A revocation stays revoking until peer.remove succeeds; only then are the device and peer marked revoked.
-- Failed commands mark the peer/device error and preserve an operator-visible error code.
-- Device limits are checked while locking the owning user row. Provisioning, active, revoking, and error devices count against the limit; revoked devices do not.
+## Local executor
 
-## Queue lifecycle
+- The worker checks expiry, strictly decodes payloads, and dispatches only `peer.ensure` / `peer.remove`.
+- The local executor's mutation flag defaults to false. In dry-run mode it validates and previews operations, then reports `mutation_disabled`; it does not claim a successful mutation.
+- Real execution uses a fixed `wg set` argument list with no shell, validates public keys/pool membership/address collisions, reads config without following symlinks, and writes atomically with rollback handling.
+- Explicitly enabling mutations requires a staging node, a backup, failure-injection tests, and least-privilege OS review.
 
-- Commands are persisted in PostgreSQL and scoped to one vpn_nodes row.
-- A successful poll leases one command for 45 seconds.
-- Commands expire after their configured expiry; the schema default is 10 minutes.
-- Delivery is at least once; the client retries after transport failures and the worker must be idempotent.
-- The maximum attempt count is 10.
-- Identical acknowledgements are idempotent; conflicting acknowledgements are rejected.
-- Expired leases can be re-leased after their deadline. Expired commands are never executed.
-- Polling updates the node last-seen heartbeat, but a heartbeat does not prove a successful peer mutation.
+## Remaining rollout gates
 
-## Standalone node client and worker
-
-The node client:
-- Requires an HTTPS origin without path, query, fragment, or URL credentials.
-- Verifies the server certificate using an explicit CA bundle and presents a dedicated client certificate.
-- Disables redirects and system proxy settings.
-- Limits response size, rejects unknown fields, and accepts only peer.ensure and peer.remove.
-- Uses bounded HTTP request timeouts.
-
-The worker:
-- Checks command expiry and strictly decodes the command payload.
-- Calls the local executor only for peer.ensure and peer.remove.
-- Acknowledges command_expired or validation_failed without calling WireGuard.
-- Reports mutation_disabled when the executor is in its default dry-run mode; it never reports a dry-run as a successful mutation.
-- Reports wg_apply_failed for an executor failure.
-- Retries transport and acknowledgement failures with bounded exponential backoff. A command may be redelivered after its lease expires.
-
-## WireGuard executor
-
-The local Go executor validates public keys and pool membership, checks existing AllowedIPs and interface-address collisions, and writes only the target [Peer] block. Its AllowMutations setting defaults to false.
-
-Before mutation is enabled:
-1. Confirm the interface, client pools, and config path against the actual node.
-2. Ensure the agent service has only the privileges it needs.
-3. Test peer add/remove on an isolated interface.
-4. Verify rollback after wg set failure and crash recovery after config writes.
-5. Test duplicate command delivery and expired leases.
-6. Verify existing peers, routes, NAT, IPv4/IPv6 forwarding, and reboot persistence.
-7. Obtain explicit production approval before enrolling or enabling this on any live node.
-
-The current AWS WireGuard node has not been modified, enrolled, or connected to this agent.
+1. Implement secure certificate enrollment, rotation, and revocation.
+2. Import/represent existing unmanaged WireGuard peers and addresses before enabling allocation on a real node.
+3. Verify node pools/interface addresses against the actual WireGuard configuration.
+4. Test add/remove on an isolated interface, then a staging VPS.
+5. Test duplicate delivery, lease expiry, failed `wg set`, process termination, and reboot persistence.
+6. Confirm encrypted client profile delivery and offline reconnect.
+7. Obtain explicit approval before connecting or mutating any production node.

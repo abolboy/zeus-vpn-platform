@@ -25,16 +25,7 @@ function Metric({ icon, label, value, note, tone = '' }) {
   return <article className="metric glass"><div className="metric-top"><span className="metric-icon">{icon}</span><span className="metric-note">{note}</span></div><div className="metric-value">{value}</div><div className="metric-label">{label}</div><div className={`metric-line ${tone}`} /></article>
 }
 function Status({ value }) {
-  const label = value === 'online' || value === 'active' ? 'فعال'
-    : value === 'pending' || value === 'provisioning' ? 'در انتظار'
-    : value === 'revoking' ? 'در حال لغو'
-    : value === 'revoked' ? 'لغوشده'
-    : value === 'error' ? 'خطا'
-    : value === 'offline' ? 'آفلاین'
-    : value === 'degraded' ? 'ناپایدار'
-    : value === 'suspended' ? 'معلق'
-    : value === 'disabled' ? 'غیرفعال'
-    : 'منقضی'
+  const label = value === 'online' || value === 'active' ? 'فعال' : value === 'pending' ? 'در انتظار' : value === 'suspended' ? 'معلق' : value === 'disabled' ? 'غیرفعال' : 'منقضی'
   return <span className={`status ${value}`}><i />{label}</span>
 }
 
@@ -82,14 +73,15 @@ export default function App() {
   const [updateUserKey, setUpdateUserKey] = useState('')
   const [userMutationBusy, setUserMutationBusy] = useState(false)
   const [userMutationError, setUserMutationError] = useState('')
-  const [devicePanelUserId, setDevicePanelUserId] = useState('')
-  const latestDeviceUserRef = useRef('')
+  const [devicesUserId, setDevicesUserId] = useState('')
   const [remoteDevices, setRemoteDevices] = useState([])
   const [remoteDevicesState, setRemoteDevicesState] = useState('idle')
   const [remoteDevicesError, setRemoteDevicesError] = useState('')
-  const [deviceMutationBusyId, setDeviceMutationBusyId] = useState('')
-  const [deviceRevokeConfirmId, setDeviceRevokeConfirmId] = useState('')
-  const [deviceRevokeKeys, setDeviceRevokeKeys] = useState({})
+  const [deviceMutationBusy, setDeviceMutationBusy] = useState(false)
+  const [deviceMutationError, setDeviceMutationError] = useState('')
+  const [revokeDeviceKey, setRevokeDeviceKey] = useState('')
+  const [revokeDeviceKeyFor, setRevokeDeviceKeyFor] = useState('')
+  const deviceFetchSequence = useRef(0)
 
   async function checkControlPlane() {
     setApiStatus('checking')
@@ -160,6 +152,14 @@ export default function App() {
     setOperator(null)
     setRemoteUsers([])
     setRemoteUsersNextCursor('')
+    deviceFetchSequence.current += 1
+    setDevicesUserId('')
+    setRemoteDevices([])
+    setRemoteDevicesState('idle')
+    setRemoteDevicesError('')
+    setDeviceMutationError('')
+    setRevokeDeviceKey('')
+    setRevokeDeviceKeyFor('')
     setRemoteUsersState('idle')
     try {
       await logoutOperator(token)
@@ -215,77 +215,6 @@ export default function App() {
     return () => { active = false }
   }, [accessToken])
 
-
-  async function refreshRemoteDevices(userID = devicePanelUserId) {
-    if (!accessToken || !userID) return
-    setRemoteDevicesState('loading')
-    setRemoteDevicesError('')
-    try {
-      const result = await listVPNDevices(accessToken, userID)
-      if (latestDeviceUserRef.current !== userID) return
-      setRemoteDevices(Array.isArray(result?.items) ? result.items : [])
-      setRemoteDevicesState('loaded')
-    } catch (error) {
-      if (latestDeviceUserRef.current !== userID) return
-      setRemoteDevicesError(error.message || 'دریافت دستگاه‌ها انجام نشد.')
-      setRemoteDevicesState('error')
-      if (error.status === 401) {
-        setAccessToken('')
-        setOperator(null)
-        setRemoteUsers([])
-        setRemoteDevices([])
-        setLoginError('نشست منقضی شده است؛ دوباره وارد شوید.')
-      }
-    }
-  }
-
-  function toggleRemoteDevices(userID) {
-    if (devicePanelUserId === userID) {
-      latestDeviceUserRef.current = ''
-      setDevicePanelUserId('')
-      return
-    }
-    latestDeviceUserRef.current = userID
-    setDevicePanelUserId(userID)
-    setRemoteDevices([])
-    void refreshRemoteDevices(userID)
-  }
-
-  async function revokeRemoteDevice(device) {
-    if (!accessToken || !canManageRemoteUsers || deviceMutationBusyId) return
-    if (!['provisioning', 'active', 'error'].includes(device.status)) return
-    setDeviceMutationBusyId(device.id)
-    setRemoteDevicesError('')
-    let key = deviceRevokeKeys[device.id]
-    try {
-      if (!key) {
-        key = createIdempotencyKey()
-        setDeviceRevokeKeys(current => ({ ...current, [device.id]: key }))
-      }
-      const updated = await revokeVPNDevice(accessToken, device.user_id, device.id, key)
-      if (latestDeviceUserRef.current === device.user_id) {
-        setRemoteDevices(current => current.map(item => item.id === updated.id ? updated : item))
-      }
-      setDeviceRevokeConfirmId('')
-      setDeviceRevokeKeys(current => {
-        const next = { ...current }
-        delete next[device.id]
-        return next
-      })
-      toast('درخواست لغو به نود ارسال شد؛ وضعیت نهایی پس از تأیید نود ثبت می‌شود.')
-    } catch (error) {
-      setRemoteDevicesError(error.message || 'ارسال درخواست لغو دستگاه انجام نشد.')
-      if (error.status === 401) {
-        setAccessToken('')
-        setOperator(null)
-        setRemoteUsers([])
-        setRemoteDevices([])
-        setLoginError('نشست منقضی شده است؛ دوباره وارد شوید.')
-      }
-    } finally {
-      setDeviceMutationBusyId('')
-    }
-  }
 
   async function createRemoteUser(event) {
     event.preventDefault()
@@ -379,6 +308,90 @@ export default function App() {
     }
   }
 
+
+  async function refreshRemoteDevices(userID = devicesUserId) {
+    if (!accessToken || !userID) return
+    const requestSequence = ++deviceFetchSequence.current
+    setRemoteDevicesState('loading')
+    setRemoteDevicesError('')
+    try {
+      const result = await listVPNDevices(accessToken, userID)
+      if (requestSequence !== deviceFetchSequence.current) return
+      setRemoteDevices(Array.isArray(result?.items) ? result.items : [])
+      setRemoteDevicesState('loaded')
+    } catch (error) {
+      if (requestSequence !== deviceFetchSequence.current) return
+      setRemoteDevicesError(error.message || 'دریافت دستگاه‌ها انجام نشد.')
+      setRemoteDevicesState('error')
+      if (error.status === 401) {
+        setAccessToken('')
+        setOperator(null)
+        setRemoteUsers([])
+        setDevicesUserId('')
+        setRemoteDevices([])
+        setLoginError('نشست منقضی شده است؛ دوباره وارد شوید.')
+      }
+    }
+  }
+
+  async function toggleUserDevices(user) {
+    if (!user?.id || !accessToken) return
+    if (devicesUserId === user.id) {
+      deviceFetchSequence.current += 1
+      setDevicesUserId('')
+      setRemoteDevices([])
+      setRemoteDevicesState('idle')
+      setRemoteDevicesError('')
+      setDeviceMutationError('')
+      setRevokeDeviceKey('')
+      setRevokeDeviceKeyFor('')
+      return
+    }
+    deviceFetchSequence.current += 1
+    setDevicesUserId(user.id)
+    setRemoteDevices([])
+    setRemoteDevicesState('loading')
+    setRemoteDevicesError('')
+    setDeviceMutationError('')
+    setRevokeDeviceKey('')
+    setRevokeDeviceKeyFor('')
+    await refreshRemoteDevices(user.id)
+  }
+
+  async function revokeRemoteDevice(device) {
+    if (!accessToken || !canManageRemoteUsers || !devicesUserId || !device?.id || deviceMutationBusy) return
+    if (device.status === 'revoked' || device.status === 'revoking') return
+    const approved = window.confirm('دستگاه «' + device.device_name + '» لغو شود؟ حذف همتای WireGuard پس از دریافت و اجرای فرمان توسط نود تأیید می‌شود.')
+    if (!approved) return
+    setDeviceMutationBusy(true)
+    setDeviceMutationError('')
+    let key = revokeDeviceKeyFor === device.id ? revokeDeviceKey : ''
+    try {
+      if (!key) {
+        key = createIdempotencyKey()
+        setRevokeDeviceKey(key)
+        setRevokeDeviceKeyFor(device.id)
+      }
+      const updated = await revokeVPNDevice(accessToken, devicesUserId, device.id, key)
+      setRemoteDevices(current => current.map(item => item.id === updated.id ? updated : item))
+      setRevokeDeviceKey('')
+      setRevokeDeviceKeyFor('')
+      toast('درخواست لغو دستگاه در صف نود ثبت شد؛ نتیجه پس از تأیید نود به‌روزرسانی می‌شود.')
+    } catch (error) {
+      setDeviceMutationError(error.message || 'ثبت درخواست لغو دستگاه انجام نشد.')
+      if (error.status === 401) {
+        setAccessToken('')
+        setOperator(null)
+        setRemoteUsers([])
+        setDevicesUserId('')
+        setRemoteDevices([])
+        setLoginError('نشست منقضی شده است؛ دوباره وارد شوید.')
+      }
+    } finally {
+      setDeviceMutationBusy(false)
+    }
+  }
+
   function addServer(event) {
     event.preventDefault()
     if (!serverName.trim() || !serverRegion.trim()) return
@@ -459,20 +472,20 @@ export default function App() {
         <div className="panel-heading">
           <div>
             <h2>مدیریت کاربران</h2>
-            <p>{isControlPlaneConfigured ? 'مدیریت حساب، مشاهده وضعیت واقعی دستگاه‌ها و پیگیری عملیات WireGuard از Control Plane.' : 'جست‌وجوی داده‌های نمونه؛ هنوز به API متصل نیست'}</p>
+            <p>{isControlPlaneConfigured ? 'حساب‌ها و دستگاه‌ها از Control Plane احراز هویت‌شده مدیریت می‌شوند.' : 'جست‌وجوی داده‌های نمونه؛ هنوز به API متصل نیست'}</p>
           </div>
           <div className="users-head-actions">
             <div className="search-box">⌕ <input value={query} onChange={e=>setQuery(e.target.value)} placeholder="جست‌وجوی نام یا شناسه..." /></div>
             {isControlPlaneConfigured && canManageRemoteUsers && <button className="button primary" onClick={() => { setShowCreateUser(v => !v); setUserMutationError('') }}>{showCreateUser ? 'بستن فرم' : '＋ کاربر جدید'}</button>}
           </div>
         </div>
-        {isControlPlaneConfigured && <div className="remote-users-note">تعلیق حساب، ثبت دستگاه جدید را متوقف می‌کند؛ اما دستگاه‌های فعال باید جداگانه لغو شوند. وضعیت «لغوشده» فقط پس از تأیید حذف peer توسط نود ثبت می‌شود.</div>}
+        {isControlPlaneConfigured && <div className="remote-users-note">تعلیق حساب جلوی ثبت دستگاه جدید را می‌گیرد، اما peerهای موجود را خودکار قطع نمی‌کند. برای قطع دسترسی، دستگاه مربوط را از بخش دستگاه‌ها لغو کنید و منتظر تأیید نود بمانید.</div>}
         {isControlPlaneConfigured && <div className="remote-users-toolbar">
           <span>{remoteUsersState === 'loading' ? 'در حال دریافت کاربران...' : remoteUsersState === 'error' ? remoteUsersError : remoteUsers.length + ' کاربر در صفحهٔ جاری'}</span>
           <button className="button secondary" onClick={refreshRemoteUsers} disabled={remoteUsersState === 'loading'}>↻ بروزرسانی</button>
         </div>}
         {isControlPlaneConfigured && showCreateUser && canManageRemoteUsers && <form className="remote-user-form glass" onSubmit={createRemoteUser}>
-          <div className="remote-user-form-title"><b>ایجاد کاربر جدید</b><span>فقط رکورد حساب در PostgreSQL ساخته می‌شود؛ هنوز پروفایل یا تونل VPN ایجاد نمی‌شود</span></div>
+          <div className="remote-user-form-title"><b>ایجاد کاربر جدید</b><span>رکورد حساب در PostgreSQL ساخته می‌شود؛ ثبت دستگاه از کلید عمومی تولیدشده روی گوشی انجام می‌شود.</span></div>
           <div className="remote-user-form-fields">
             <label>نام کاربر<input value={createUserName} onChange={event => { setCreateUserName(event.target.value); setCreateUserKey('') }} maxLength={80} required placeholder="نام نمایشی کاربر" /></label>
             <label>حداکثر دستگاه<input type="number" min="1" max="20" step="1" value={createUserMaxDevices} onChange={event => { setCreateUserMaxDevices(event.target.value); setCreateUserKey('') }} required /></label>
@@ -489,6 +502,8 @@ export default function App() {
             <thead><tr><th>شناسه</th><th>کاربر</th><th>اشتراک</th><th>مصرف</th><th>انقضا</th><th>وضعیت</th><th>سقف دستگاه</th><th>عملیات</th></tr></thead>
             <tbody>{filteredUsers.map(u => {
               const editing = isControlPlaneConfigured && editingUserId === u.id
+              const remoteUser = remoteUsers.find(user => user.id === u.id)
+              const devicesOpen = devicesUserId === u.id
               return <tr key={u.id}>
                 <td>{u.id}</td>
                 <td>{editing
@@ -509,13 +524,13 @@ export default function App() {
                   : isControlPlaneConfigured ? <span>{u.maxDevices} دستگاه</span> : '—'}</td>
                 <td>{isControlPlaneConfigured
                   ? <div className="user-row-actions">
+                      <button className={devicesOpen ? 'mini-action selected' : 'mini-action'} onClick={() => toggleUserDevices(remoteUser)} disabled={!remoteUser}>دستگاه‌ها</button>
                       {canManageRemoteUsers && (editing
                         ? <>
-                            <button className="mini-action" onClick={() => saveRemoteUser(u)} disabled={userMutationBusy}>{userMutationBusy ? '...' : 'ذخیره'}</button>
+                            <button className="mini-action" onClick={() => saveRemoteUser(remoteUser)} disabled={userMutationBusy}>{userMutationBusy ? '...' : 'ذخیره'}</button>
                             <button className="mini-action subtle" onClick={cancelEditRemoteUser} disabled={userMutationBusy}>لغو</button>
                           </>
-                        : <button className="mini-action" onClick={() => startEditRemoteUser(remoteUsers.find(user => user.id === u.id))}>ویرایش</button>)}
-                      <button className="mini-action subtle" onClick={() => toggleRemoteDevices(u.id)}>{devicePanelUserId === u.id ? 'بستن دستگاه‌ها' : 'دستگاه‌ها'}</button>
+                        : <button className="mini-action subtle" onClick={() => startEditRemoteUser(remoteUser)} disabled={!remoteUser}>ویرایش</button>)}
                     </div>
                   : <button className="mini-action" onClick={()=>toggleUser(u.id)}>{u.status==='active'?'غیرفعال‌سازی':'فعال‌سازی'}</button>}</td>
               </tr>
@@ -524,42 +539,48 @@ export default function App() {
           {filteredUsers.length===0&&<div className="empty">{remoteUsersState === 'loading' ? 'در حال دریافت اطلاعات...' : remoteUsersState === 'error' ? 'دریافت اطلاعات ناموفق بود.' : 'کاربری با این مشخصات پیدا نشد.'}</div>}
         </div>
         {isControlPlaneConfigured && remoteUsersNextCursor && <div className="remote-users-more"><button className="button secondary" onClick={() => refreshRemoteUsers(remoteUsersNextCursor)} disabled={remoteUsersState === 'loading'}>دریافت کاربران بیشتر ←</button></div>}
-        {isControlPlaneConfigured && devicePanelUserId && <section className="remote-devices-panel glass">
-          <div className="remote-devices-heading">
+        {isControlPlaneConfigured && devicesUserId && <section className="devices-panel glass">
+          <div className="devices-panel-heading">
             <div>
-              <b>دستگاه‌های کاربر</b>
-              <span>{remoteUsers.find(user => user.id === devicePanelUserId)?.display_name || devicePanelUserId}</span>
+              <h3>دستگاه‌های {remoteUsers.find(user => user.id === devicesUserId)?.display_name || 'کاربر'}</h3>
+              <p>وضعیت peer و آدرس تخصیص‌یافته از سرور خوانده می‌شود؛ کلید خصوصی در دستگاه باقی می‌ماند.</p>
             </div>
-            <button className="button secondary" onClick={() => refreshRemoteDevices()} disabled={remoteDevicesState === 'loading'}>↻ بروزرسانی</button>
+            <div className="devices-panel-actions">
+              <button className="button secondary" onClick={() => refreshRemoteDevices()} disabled={remoteDevicesState === 'loading'}>↻ بروزرسانی</button>
+              <button className="mini-action subtle" onClick={() => toggleUserDevices({ id: devicesUserId })}>بستن</button>
+            </div>
           </div>
-          {remoteDevicesState === 'loading' && <div className="remote-devices-empty">در حال دریافت دستگاه‌ها...</div>}
+          {remoteDevicesState === 'loading' && <div className="devices-empty">در حال دریافت دستگاه‌ها از Control Plane...</div>}
           {remoteDevicesState === 'error' && <div className="remote-users-error" role="alert">{remoteDevicesError}</div>}
-          {remoteDevicesState === 'loaded' && remoteDevices.length === 0 && <div className="remote-devices-empty">برای این کاربر هنوز دستگاهی ثبت نشده است. ثبت دستگاه باید از اپ کاربر و با کلید خصوصی تولیدشده روی همان دستگاه انجام شود.</div>}
-          {remoteDevicesState === 'loaded' && remoteDevices.length > 0 && <div className="table-wrap">
-            <table>
-              <thead><tr><th>دستگاه</th><th>سیستم‌عامل</th><th>وضعیت دستگاه</th><th>IPv4 / IPv6</th><th>نود / اتصال</th><th>عملیات</th></tr></thead>
-              <tbody>{remoteDevices.map(device => {
-                const canRevoke = canManageRemoteUsers && ['provisioning', 'active', 'error'].includes(device.status)
-                return <tr key={device.id}>
-                  <td><b>{device.device_name}</b><small className="cell-sub">{device.device_ref}</small></td>
-                  <td>{device.platform}</td>
-                  <td><Status value={device.status}/>{device.last_error && <small className="device-error">{device.last_error}</small>}</td>
-                  <td><span className="device-address">{device.peer?.assigned_ipv4 || '—'}</span><small className="cell-sub">{device.peer?.assigned_ipv6 || '—'}</small></td>
-                  <td><span>{device.peer?.endpoint_host || '—'}{device.peer?.endpoint_port ? ':' + device.peer.endpoint_port : ''}</span><small className="cell-sub">Peer: {device.peer?.status || 'نامشخص'}</small></td>
-                  <td>{canRevoke
-                    ? deviceRevokeConfirmId === device.id
-                      ? <div className="device-revoke-confirm">
-                          <button className="mini-action danger" onClick={() => revokeRemoteDevice(device)} disabled={Boolean(deviceMutationBusyId)}>{deviceMutationBusyId === device.id ? 'در حال ارسال...' : 'تأیید لغو'}</button>
-                          <button className="mini-action subtle" onClick={() => setDeviceRevokeConfirmId('')} disabled={Boolean(deviceMutationBusyId)}>انصراف</button>
-                        </div>
-                      : <button className="mini-action danger" onClick={() => setDeviceRevokeConfirmId(device.id)} disabled={Boolean(deviceMutationBusyId)}>لغو دستگاه</button>
-                    : device.status === 'revoking' ? <span className="device-pending">منتظر تأیید نود</span> : '—'}</td>
-                </tr>
-              })}</tbody>
-            </table>
+          {deviceMutationError && <div className="remote-users-error" role="alert">{deviceMutationError}</div>}
+          {remoteDevicesState === 'loaded' && remoteDevices.length === 0 && <div className="devices-empty">برای این کاربر هنوز دستگاهی ثبت نشده است. ثبت دستگاه از کلاینت اندروید انجام می‌شود.</div>}
+          {remoteDevicesState === 'loaded' && remoteDevices.length > 0 && <div className="devices-grid">
+            {remoteDevices.map(device => {
+              const statusLabels = { provisioning: 'در حال راه‌اندازی', active: 'فعال', revoking: 'در حال لغو', revoked: 'لغوشده', error: 'نیازمند بررسی' }
+              const peer = device.peer || {}
+              const canRevoke = canManageRemoteUsers && device.status !== 'revoked' && device.status !== 'revoking'
+              return <article className="device-card" key={device.id}>
+                <div className="device-card-top">
+                  <div>
+                    <b>{device.device_name}</b>
+                    <small>{device.platform} · {device.device_ref}</small>
+                  </div>
+                  <span className={'device-state ' + device.status}><i />{statusLabels[device.status] || device.status}</span>
+                </div>
+                <div className="device-addresses">
+                  <div><span>IPv4</span><code>{peer.assigned_ipv4 || '—'}</code></div>
+                  <div><span>IPv6</span><code>{peer.assigned_ipv6 || '—'}</code></div>
+                  <div><span>نود</span><code>{peer.endpoint_host ? peer.endpoint_host + ':' + peer.endpoint_port : '—'}</code></div>
+                  <div><span>Peer</span><code>{peer.public_key ? peer.public_key.slice(0, 14) + '…' : '—'}</code></div>
+                </div>
+                {device.last_error && <div className="device-error">خطا: {device.last_error}</div>}
+                <div className="device-card-actions">
+                  <span>{peer.status === 'active' ? 'همتای WireGuard فعال است' : peer.status === 'revoked' ? 'همتا از نود حذف شده است' : 'منتظر پاسخ نود'}</span>
+                  {canRevoke && <button className="mini-action danger" onClick={() => revokeRemoteDevice(device)} disabled={deviceMutationBusy}>{deviceMutationBusy ? 'در حال ارسال...' : 'لغو دستگاه'}</button>}
+                </div>
+              </article>
+            })}
           </div>}
-          {remoteDevicesError && remoteDevicesState !== 'error' && <div className="remote-users-error" role="alert">{remoteDevicesError}</div>}
-          <div className="remote-devices-footnote">لغو دستگاه یک فرمان امن peer.remove در صف نود ثبت می‌کند. تا زمان دریافت پاسخ موفق از نود، وضعیت دستگاه «در حال لغو» باقی می‌ماند.</div>
         </section>}
       </section>}
 

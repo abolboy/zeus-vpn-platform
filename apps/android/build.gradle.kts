@@ -25,7 +25,8 @@ android {
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
     buildTypes {
-        debug { applicationIdSuffix = ".debug"; versionNameSuffix = "-dev" }
+        // Keep this diagnostics APK installable beside an earlier .debug build.
+        debug { applicationIdSuffix = ".diagnostics"; versionNameSuffix = "-diagnostics" }
         release {
             isMinifyEnabled = true
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")

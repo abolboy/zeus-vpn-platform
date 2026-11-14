@@ -619,7 +619,7 @@ func TestPostgresStoreIntegration(t *testing.T) {
 		DeviceRef: "ci-enrollment-device-0001",
 		DeviceName: "Enrollment Android",
 		Platform: "android",
-		PublicKey: "AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgI=",
+		PublicKey: "BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc=",
 	}
 	enrollmentBody, err := json.Marshal(enrollmentInput)
 	if err != nil {

@@ -196,6 +196,7 @@ func (s *PostgresStore) ListVPNNodes(ctx context.Context) ([]VPNNode, error) {
 	}
 	defer rows.Close()
 	nodes := make([]VPNNode, 0)
+	now := time.Now().UTC()
 	for rows.Next() {
 		var node VPNNode
 		if err := rows.Scan(
@@ -206,6 +207,7 @@ func (s *PostgresStore) ListVPNNodes(ctx context.Context) ([]VPNNode, error) {
 		); err != nil {
 			return nil, err
 		}
+		node.Status = effectiveNodeStatus(node.Status, node.LastSeenAt, now, nodeHeartbeatStaleAfter)
 		nodes = append(nodes, node)
 	}
 	return nodes, rows.Err()

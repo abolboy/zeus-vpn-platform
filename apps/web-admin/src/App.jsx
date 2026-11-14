@@ -877,13 +877,14 @@ export default function App() {
           {remoteNodesError && <div className="remote-users-error" role="alert">{remoteNodesError}</div>}
           <div className="table-wrap">
             <table>
-              <thead><tr><th>نام نود</th><th>منطقه</th><th>Endpoint</th><th>اینترفیس / Pool</th><th>گواهی فعال</th><th>وضعیت</th><th>عملیات</th></tr></thead>
+              <thead><tr><th>نام نود</th><th>منطقه</th><th>Endpoint</th><th>اینترفیس / Pool</th><th>گواهی فعال</th><th>آخرین ارتباط</th><th>وضعیت</th><th>عملیات</th></tr></thead>
               <tbody>{remoteNodes.map(node => <tr key={node.id}>
                 <td><b>{node.name}</b><small className="cell-sub" dir="ltr">{node.id}</small></td>
                 <td>{node.region}</td>
                 <td dir="ltr">{node.endpoint_host}:{node.endpoint_port}</td>
                 <td><span dir="ltr">{node.interface_name}</span><small className="cell-sub" dir="ltr">{node.client_ipv4_pool || '—'} / {node.client_ipv6_pool || '—'}</small></td>
                 <td>{node.active_certificate_count} فعال</td>
+                <td>{node.last_seen_at ? new Date(node.last_seen_at).toLocaleString('fa-IR') : 'هرگز'}</td>
                 <td><Status value={node.status}/></td>
                 <td><button className={selectedNodeID === node.id ? 'mini-action selected' : 'mini-action'} onClick={() => toggleNodeCertificates(node)}>{selectedNodeID === node.id ? 'بستن گواهی‌ها' : 'مدیریت گواهی'}</button></td>
               </tr>)}</tbody>

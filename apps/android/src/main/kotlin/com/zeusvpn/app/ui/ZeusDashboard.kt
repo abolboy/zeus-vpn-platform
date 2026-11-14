@@ -53,6 +53,9 @@ import com.zeusvpn.app.network.ClientEnrollmentRepository
 import com.zeusvpn.app.network.CustomerIdentityRepository
 import com.zeusvpn.app.network.NetworkCondition
 import com.zeusvpn.app.network.NetworkMonitor
+import com.zeusvpn.app.network.TunnelConnectivityChecker
+import com.zeusvpn.app.network.TunnelConnectivityResult
+import com.zeusvpn.app.network.TunnelProbeStatus
 import com.zeusvpn.app.vpn.InvalidWireGuardProfileException
 import com.zeusvpn.app.vpn.MissingWireGuardProfileException
 import com.zeusvpn.app.vpn.WireGuardEngine
@@ -87,6 +90,7 @@ fun ZeusDashboard() {
     val wireGuard = remember(context) { WireGuardEngine.getInstance(context) }
     val enrollment = remember(context) { ClientEnrollmentRepository(context) }
     val identity = remember(context) { CustomerIdentityRepository(context) }
+    val tunnelChecker = remember { TunnelConnectivityChecker() }
     val wireGuardState by wireGuard.state.collectAsState()
     val scope = rememberCoroutineScope()
 
@@ -119,6 +123,21 @@ fun ZeusDashboard() {
             while (true) {
                 runCatching { wireGuard.trafficStats() }.onSuccess { value = it }
                 delay(3_000L)
+            }
+        }
+    }
+    val tunnelReachability by produceState(
+        TunnelConnectivityResult.IDLE,
+        tunnelChecker,
+        wireGuardState,
+    ) {
+        if (wireGuardState != WireGuardState.ENGINE_UP) {
+            value = TunnelConnectivityResult.IDLE
+        } else {
+            while (true) {
+                value = TunnelConnectivityResult.CHECKING
+                value = tunnelChecker.check()
+                delay(30_000L)
             }
         }
     }
@@ -413,10 +432,14 @@ fun ZeusDashboard() {
                             state = wireGuardState,
                             profileSaved = profileSaved,
                             message = wireGuardMessage,
+                            stats = trafficStats,
+                            reachability = tunnelReachability,
                             onConnect = requestWireGuardConnection,
                             onDisconnect = disconnectWireGuard,
                         )
-                        if (wireGuardState == WireGuardState.ENGINE_UP) TrafficStatsCard(trafficStats)
+                        if (wireGuardState == WireGuardState.ENGINE_UP) {
+                            TrafficStatsCard(trafficStats, tunnelReachability)
+                        }
                         NetworkSummaryCard(network)
                         ProfileSetupCard(
                             configured = enrollment.isConfigured,
@@ -466,7 +489,7 @@ fun ZeusDashboard() {
                         SmartRoutingCard()
                         NetworkSummaryCard(network)
                         if (wireGuardState == WireGuardState.ENGINE_UP) {
-                            TrafficStatsCard(trafficStats)
+                            TrafficStatsCard(trafficStats, tunnelReachability)
                         } else {
                             PanelCard {
                                 Text("آمار زنده پس از فعال‌شدن تونل نمایش داده می‌شود.", color = SecondaryText,
@@ -531,24 +554,38 @@ private fun ConnectionCard(
     state: WireGuardState,
     profileSaved: Boolean,
     message: String,
+    stats: WireGuardTrafficStats,
+    reachability: TunnelConnectivityResult,
     onConnect: () -> Unit,
     onDisconnect: () -> Unit,
 ) {
     val connected = state == WireGuardState.ENGINE_UP
     val busy = state == WireGuardState.CONNECTING || state == WireGuardState.DISCONNECTING
+    val handshakeFresh = stats.latestHandshakeEpochMillis > 0L &&
+        System.currentTimeMillis() - stats.latestHandshakeEpochMillis <= 180_000L
+    val internetVerified = connected && reachability.status == TunnelProbeStatus.REACHABLE
     val statusColor = when (state) {
-        WireGuardState.ENGINE_UP -> Positive
+        WireGuardState.ENGINE_UP -> if (internetVerified) Positive else Warning
         WireGuardState.CONNECTING, WireGuardState.DISCONNECTING -> Warning
         WireGuardState.DISCONNECTED -> MutedText
     }
     val title = when (state) {
-        WireGuardState.ENGINE_UP -> "اتصال برقرار است"
+        WireGuardState.ENGINE_UP -> when {
+            internetVerified -> "اینترنت از مسیر VPN پاسخ می‌دهد"
+            handshakeFresh -> "تونل فعال است؛ اینترنت تأیید نشده"
+            else -> "موتور فعال است؛ Handshake تأیید نشده"
+        }
         WireGuardState.CONNECTING -> "در حال اتصال"
         WireGuardState.DISCONNECTING -> "در حال قطع اتصال"
         WireGuardState.DISCONNECTED -> "آمادهٔ اتصال"
     }
     val detail = when (state) {
-        WireGuardState.ENGINE_UP -> "موتور WireGuard فعال است؛ تأیید Handshake در بخش ترافیک نمایش داده می‌شود."
+        WireGuardState.ENGINE_UP -> when {
+            internetVerified -> "آزمون HTTPS از داخل برنامه پاسخ معتبر دریافت کرد؛ دسترسی همهٔ سایت‌ها و برنامه‌ها جداگانه تضمین نمی‌شود."
+            reachability.status == TunnelProbeStatus.CHECKING -> "موتور تونل روشن است؛ اکنون مسیر اینترنت از داخل برنامه بررسی می‌شود."
+            handshakeFresh -> "Handshake تازه ثبت شده، اما آزمون HTTPS پاسخ نگرفته است. DNS، IP forwarding، NAT و مسیر خروجی VPS را بررسی کنید."
+            else -> "فقط موتور محلی فعال است؛ هنوز Handshake معتبر و دسترسی اینترنت تأیید نشده است."
+        }
         WireGuardState.CONNECTING -> "در حال ایجاد تونل رمزگذاری‌شده..."
         WireGuardState.DISCONNECTING -> "در حال بستن تونل امن..."
         WireGuardState.DISCONNECTED -> if (profileSaved) "پروفایل این دستگاه آمادهٔ استفاده است." else "برای شروع، حساب بسازید یا اتصال را با کد دعوت دریافت کنید."
@@ -561,7 +598,7 @@ private fun ConnectionCard(
                 Text(title, color = MainText, style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
             }
             StatusPill(statusColor, when (state) {
-                WireGuardState.ENGINE_UP -> "LIVE"
+                WireGuardState.ENGINE_UP -> if (internetVerified) "ONLINE" else "VERIFY"
                 WireGuardState.CONNECTING, WireGuardState.DISCONNECTING -> "BUSY"
                 WireGuardState.DISCONNECTED -> "READY"
             })
@@ -598,7 +635,7 @@ private fun ConnectionCard(
         if (message.isNotBlank()) {
             InlineNotice(
                 text = message,
-                color = if (connected || message.contains("ذخیره شد") || message.contains("معتبر")) Positive else Warning,
+                color = if (internetVerified || message.contains("ذخیره شد") || message.contains("معتبر")) Positive else Warning,
             )
         }
     }
@@ -651,8 +688,8 @@ private fun ConnectionOrb(statusColor: Color, connected: Boolean, busy: Boolean)
                     modifier = Modifier.size(39.dp),
                 )
                 Spacer(Modifier.height(7.dp))
-                Text(if (connected) "SECURE" else if (busy) "WORKING" else "ZEUS", color = MainText, fontWeight = FontWeight.ExtraBold, letterSpacing = 1.3.sp)
-                Text(if (connected) "TUNNEL ON" else "TUNNEL OFF", color = MutedText, style = MaterialTheme.typography.labelSmall, letterSpacing = 0.7.sp)
+                Text(if (connected) "ACTIVE" else if (busy) "WORKING" else "ZEUS", color = MainText, fontWeight = FontWeight.ExtraBold, letterSpacing = 1.3.sp)
+                Text(if (connected) "ENGINE ON" else "TUNNEL OFF", color = MutedText, style = MaterialTheme.typography.labelSmall, letterSpacing = 0.7.sp)
             }
         }
     }
@@ -686,14 +723,30 @@ private fun NetworkSummaryCard(network: NetworkCondition) {
 }
 
 @Composable
-private fun TrafficStatsCard(stats: WireGuardTrafficStats) {
+private fun TrafficStatsCard(
+    stats: WireGuardTrafficStats,
+    reachability: TunnelConnectivityResult,
+) {
     PanelCard {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
                 Text("ترافیک تونل", color = MainText, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
                 Text("به‌روزرسانی خودکار هر ۳ ثانیه", color = MutedText, style = MaterialTheme.typography.labelSmall)
             }
-            StatusPill(Positive, "LIVE")
+            StatusPill(
+                when (reachability.status) {
+                    TunnelProbeStatus.REACHABLE -> Positive
+                    TunnelProbeStatus.UNREACHABLE -> Danger
+                    TunnelProbeStatus.CHECKING -> Warning
+                    TunnelProbeStatus.IDLE -> MutedText
+                },
+                when (reachability.status) {
+                    TunnelProbeStatus.REACHABLE -> "ONLINE"
+                    TunnelProbeStatus.UNREACHABLE -> "NO NET"
+                    TunnelProbeStatus.CHECKING -> "CHECK"
+                    TunnelProbeStatus.IDLE -> "IDLE"
+                },
+            )
         }
         Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
             TrafficValue(
@@ -729,8 +782,29 @@ private fun TrafficStatsCard(stats: WireGuardTrafficStats) {
                 style = MaterialTheme.typography.bodySmall,
             )
         }
+        val probeMessage = when (reachability.status) {
+            TunnelProbeStatus.REACHABLE ->
+                "آزمون HTTPS از داخل برنامه موفق بود (${reachability.successfulProvider ?: "مقصد تأییدشده"})."
+            TunnelProbeStatus.CHECKING ->
+                "در حال آزمون HTTPS از داخل نشست برنامه..."
+            TunnelProbeStatus.UNREACHABLE ->
+                "دو مقصد آزمون HTTPS پاسخ معتبر ندادند؛ DNS، NAT/forwarding، مسیر خروجی و فایروال VPS را بررسی کنید."
+            TunnelProbeStatus.IDLE ->
+                "آزمون اینترنت پس از فعال‌شدن موتور اجرا می‌شود."
+        }
         Text(
-            "این شمارنده‌ها از موتور WireGuard خوانده می‌شوند؛ فعال بودن موتور به‌تنهایی عبور موفق ترافیک را تضمین نمی‌کند.",
+            probeMessage,
+            color = when (reachability.status) {
+                TunnelProbeStatus.REACHABLE -> Positive
+                TunnelProbeStatus.UNREACHABLE -> Danger
+                TunnelProbeStatus.CHECKING -> Warning
+                TunnelProbeStatus.IDLE -> MutedText
+            },
+            style = MaterialTheme.typography.bodySmall,
+            lineHeight = 18.sp,
+        )
+        Text(
+            "شمارنده‌ها و Handshake از موتور WireGuard خوانده می‌شوند. آزمون HTTPS فقط دسترسی همان مقصدها را می‌سنجد و سلامت تمام سایت‌ها را تضمین نمی‌کند.",
             color = MutedText,
             style = MaterialTheme.typography.labelSmall,
             lineHeight = 17.sp,

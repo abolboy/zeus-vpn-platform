@@ -26,6 +26,7 @@ var (
 	ErrEnrollmentCodeUsed      = errors.New("enrollment code has already been consumed")
 	ErrNodeCertificateNotFound = errors.New("node certificate not found")
 	ErrNodeCertificateConflict = errors.New("node certificate fingerprint is already registered with different metadata")
+	ErrNodeConflict            = errors.New("VPN node name is already registered")
 )
 
 type Operator struct {
@@ -187,4 +188,21 @@ type VPNNode struct {
 
 type NodeInventoryStore interface {
 	ListVPNNodes(context.Context) ([]VPNNode, error)
+}
+
+type CreateVPNNodeInput struct {
+	Name            string `json:"name"`
+	Region          string `json:"region"`
+	EndpointHost    string `json:"endpoint_host"`
+	EndpointPort    int    `json:"endpoint_port"`
+	PublicKey       string `json:"public_key"`
+	InterfaceName   string `json:"interface_name"`
+	ClientIPv4Pool  string `json:"client_ipv4_pool"`
+	ClientIPv6Pool  string `json:"client_ipv6_pool"`
+	InterfaceIPv4   string `json:"interface_ipv4"`
+	InterfaceIPv6   string `json:"interface_ipv6"`
+}
+
+type NodeMutationStore interface {
+	CreateVPNNode(context.Context, string, string, string, []byte, CreateVPNNodeInput, string, *string) (VPNNode, bool, error)
 }

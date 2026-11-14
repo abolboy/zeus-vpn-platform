@@ -99,6 +99,10 @@ func (a *API) handleRegisterNodeCertificate(w http.ResponseWriter, r *http.Reque
 		writeError(w, http.StatusBadRequest, "invalid_node_id", "شناسه سرور معتبر نیست", requestIDFrom(r))
 		return
 	}
+	if a.nodeClientCAs == nil {
+		writeError(w, http.StatusServiceUnavailable, "node_ca_not_configured", "CA احراز هویت نودها روی Control Plane تنظیم نشده است", requestIDFrom(r))
+		return
+	}
 	var input RegisterNodeCertificateInput
 	if err := decodeJSON(w, r, &input, 32*1024); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid_request", "گواهی ارسالی معتبر نیست", requestIDFrom(r))

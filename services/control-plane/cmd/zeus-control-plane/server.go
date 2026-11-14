@@ -127,6 +127,7 @@ func (a *API) Handler() http.Handler {
 	mux.HandleFunc("POST /v1/client/enroll", a.handleClientEnrollment)
 	mux.HandleFunc("POST /v1/users/{userID}/devices/{deviceID}/revoke", a.handleRevokeDevice)
 	mux.HandleFunc("GET /v1/nodes", a.handleListNodes)
+	mux.HandleFunc("POST /v1/nodes", a.handleCreateNode)
 	mux.HandleFunc("GET /v1/nodes/{nodeID}/certificates", a.handleListNodeCertificates)
 	mux.HandleFunc("POST /v1/nodes/{nodeID}/certificates", a.handleRegisterNodeCertificate)
 	mux.HandleFunc("POST /v1/nodes/{nodeID}/certificates/{certificateID}/revoke", a.handleRevokeNodeCertificate)

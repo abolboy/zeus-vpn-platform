@@ -228,6 +228,75 @@ func TestCORSRequiresExactOrigin(t *testing.T) {
 	}
 }
 
+func TestNodeCertificateRegistrationRequiresConfiguredCA(t *testing.T) {
+	store := newFakeControlStore(Operator{
+		ID: "00000000-0000-4000-8000-000000000001",
+		Login: "owner",
+		Role: "owner",
+		Status: "active",
+	})
+	token, hash, err := generateSessionToken()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.CreateSession(context.Background(), store.operator.ID, hash, time.Now().Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	api, err := NewAPI("test", store, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := `{"certificate_pem":"not-a-certificate"}`
+	request := httptest.NewRequest(http.MethodPost, "/v1/nodes/00000000-0000-4000-8000-000000000002/certificates", bytes.NewBufferString(body))
+	request.Header.Set("Authorization", "Bearer "+token)
+	response := httptest.NewRecorder()
+	api.Handler().ServeHTTP(response, request)
+	if response.Code != http.StatusServiceUnavailable || !bytes.Contains(response.Body.Bytes(), []byte("node_ca_not_configured")) {
+		t.Fatalf("missing CA status=%d body=%s, want 503 node_ca_not_configured", response.Code, response.Body.String())
+	}
+}
+
+func TestValidateCreateVPNNodeInput(t *testing.T) {
+	valid := CreateVPNNodeInput{
+		Name: "ZEUS Staging",
+		Region: "Test Region",
+		EndpointHost: "VPN.Example.Test",
+		EndpointPort: 51820,
+		PublicKey: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+		InterfaceName: "wg0",
+		ClientIPv4Pool: "10.77.77.0/24",
+		ClientIPv6Pool: "fd77:77:77::/64",
+		InterfaceIPv4: "10.77.77.1",
+		InterfaceIPv6: "fd77:77:77::1",
+	}
+	normalized, err := validateCreateVPNNodeInput(valid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if normalized.EndpointHost != "vpn.example.test" || normalized.ClientIPv4Pool != "10.77.77.0/24" {
+		t.Fatalf("input was not normalized: %+v", normalized)
+	}
+	cases := []struct {
+		name string
+		mutate func(*CreateVPNNodeInput)
+	}{
+		{"invalid key", func(v *CreateVPNNodeInput) { v.PublicKey = "not-a-key" }},
+		{"invalid interface name", func(v *CreateVPNNodeInput) { v.InterfaceName = "interface-name-too-long" }},
+		{"wrong ipv4 family", func(v *CreateVPNNodeInput) { v.ClientIPv4Pool = "fd77:77:77::/64" }},
+		{"outside pool", func(v *CreateVPNNodeInput) { v.InterfaceIPv4 = "10.88.88.1" }},
+		{"url endpoint", func(v *CreateVPNNodeInput) { v.EndpointHost = "https://vpn.example.test" }},
+	}
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			input := valid
+			testCase.mutate(&input)
+			if _, err := validateCreateVPNNodeInput(input); err == nil {
+				t.Fatal("invalid node configuration was accepted")
+			}
+		})
+	}
+}
+
 func TestPostgresStoreIntegration(t *testing.T) {
 	dsn := os.Getenv("ZEUS_TEST_DATABASE_URL")
 	if dsn == "" {
@@ -293,7 +362,56 @@ func TestPostgresStoreIntegration(t *testing.T) {
 		t.Fatal(err)
 	}
 	handler := api.Handler()
-	createKey := newRequestID()
+	// A newly registered node is pending until a verified mTLS agent first polls.
+	nodeInput := CreateVPNNodeInput{
+		Name: "ZEUS CI Node " + newRequestID(),
+		Region: "CI",
+		EndpointHost: "vpn-ci.example.test",
+		EndpointPort: 51820,
+		PublicKey: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+		InterfaceName: "wg0",
+		ClientIPv4Pool: "10.88.77.0/24",
+		ClientIPv6Pool: "fd88:77:77::/64",
+		InterfaceIPv4: "10.88.77.1",
+		InterfaceIPv6: "fd88:77:77::1",
+	}
+	nodeBody, err := json.Marshal(nodeInput)
+	if err != nil {
+		t.Fatal(err)
+	}
+	nodeKey := newRequestID()
+	createNode := func(payload []byte) *httptest.ResponseRecorder {
+		request := httptest.NewRequest(http.MethodPost, "/v1/nodes", bytes.NewReader(payload))
+		request.Header.Set("Authorization", "Bearer "+token)
+		request.Header.Set("Idempotency-Key", nodeKey)
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, request)
+		return response
+	}
+	createdNodeResponse := createNode(nodeBody)
+	if createdNodeResponse.Code != http.StatusCreated {
+		t.Fatalf("create node status=%d body=%s", createdNodeResponse.Code, createdNodeResponse.Body.String())
+	}
+	var createdNode VPNNode
+	if err := json.Unmarshal(createdNodeResponse.Body.Bytes(), &createdNode); err != nil {
+		t.Fatal(err)
+	}
+	if createdNode.Status != "pending" || createdNode.Name != nodeInput.Name || createdNode.ActiveCertificateCount != 0 {
+		t.Fatalf("unexpected new node: %+v", createdNode)
+	}
+	replayedNodeResponse := createNode(nodeBody)
+	if replayedNodeResponse.Code != http.StatusCreated || replayedNodeResponse.Header().Get("Idempotency-Replayed") != "true" {
+		t.Fatalf("node idempotent replay status=%d body=%s", replayedNodeResponse.Code, replayedNodeResponse.Body.String())
+	}
+	var replayedNode VPNNode
+	if err := json.Unmarshal(replayedNodeResponse.Body.Bytes(), &replayedNode); err != nil || replayedNode.ID != createdNode.ID {
+		t.Fatalf("node replay did not return original record: %+v err=%v", replayedNode, err)
+	}
+	conflictingNodeResponse := createNode([]byte(`{"name":"different","region":"CI","endpoint_host":"vpn-ci.example.test","endpoint_port":51820,"public_key":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=","interface_name":"wg0","client_ipv4_pool":"10.88.77.0/24","client_ipv6_pool":"fd88:77:77::/64","interface_ipv4":"10.88.77.1","interface_ipv6":"fd88:77:77::1"}`))
+	if conflictingNodeResponse.Code != http.StatusConflict {
+		t.Fatalf("node idempotency conflict status=%d body=%s", conflictingNodeResponse.Code, conflictingNodeResponse.Body.String())
+	}
+	createKey = newRequestID()
 	createBody := `{"display_name":"ZEUS Integration User","max_devices":4}`
 	createRequest := func(body string) *httptest.ResponseRecorder {
 		request := httptest.NewRequest(http.MethodPost, "/v1/users", bytes.NewBufferString(body))

@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useState } from 'react'
-import { getControlPlaneHealth, isControlPlaneConfigured, loginOperator, logoutOperator, listVPNUsers, createVPNUser, updateVPNUser, createIdempotencyKey } from './api.js'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import { getControlPlaneHealth, isControlPlaneConfigured, loginOperator, logoutOperator, listVPNUsers, createVPNUser, updateVPNUser, createIdempotencyKey, listVPNDevices, revokeVPNDevice } from './api.js'
 
 const initialServers = [
   { id: 1, name: 'ZEUS • Frankfurt', region: 'آلمان', ip: '185.220.101.14', protocol: 'WireGuard', load: 38, latency: 82, status: 'online', users: 128 },
@@ -25,7 +25,16 @@ function Metric({ icon, label, value, note, tone = '' }) {
   return <article className="metric glass"><div className="metric-top"><span className="metric-icon">{icon}</span><span className="metric-note">{note}</span></div><div className="metric-value">{value}</div><div className="metric-label">{label}</div><div className={`metric-line ${tone}`} /></article>
 }
 function Status({ value }) {
-  const label = value === 'online' || value === 'active' ? 'فعال' : value === 'pending' ? 'در انتظار' : value === 'suspended' ? 'معلق' : value === 'disabled' ? 'غیرفعال' : 'منقضی'
+  const label = value === 'online' || value === 'active' ? 'فعال'
+    : value === 'pending' || value === 'provisioning' ? 'در انتظار'
+    : value === 'revoking' ? 'در حال لغو'
+    : value === 'revoked' ? 'لغوشده'
+    : value === 'error' ? 'خطا'
+    : value === 'offline' ? 'آفلاین'
+    : value === 'degraded' ? 'ناپایدار'
+    : value === 'suspended' ? 'معلق'
+    : value === 'disabled' ? 'غیرفعال'
+    : 'منقضی'
   return <span className={`status ${value}`}><i />{label}</span>
 }
 
@@ -73,6 +82,14 @@ export default function App() {
   const [updateUserKey, setUpdateUserKey] = useState('')
   const [userMutationBusy, setUserMutationBusy] = useState(false)
   const [userMutationError, setUserMutationError] = useState('')
+  const [devicePanelUserId, setDevicePanelUserId] = useState('')
+  const latestDeviceUserRef = useRef('')
+  const [remoteDevices, setRemoteDevices] = useState([])
+  const [remoteDevicesState, setRemoteDevicesState] = useState('idle')
+  const [remoteDevicesError, setRemoteDevicesError] = useState('')
+  const [deviceMutationBusyId, setDeviceMutationBusyId] = useState('')
+  const [deviceRevokeConfirmId, setDeviceRevokeConfirmId] = useState('')
+  const [deviceRevokeKeys, setDeviceRevokeKeys] = useState({})
 
   async function checkControlPlane() {
     setApiStatus('checking')
@@ -198,6 +215,77 @@ export default function App() {
     return () => { active = false }
   }, [accessToken])
 
+
+  async function refreshRemoteDevices(userID = devicePanelUserId) {
+    if (!accessToken || !userID) return
+    setRemoteDevicesState('loading')
+    setRemoteDevicesError('')
+    try {
+      const result = await listVPNDevices(accessToken, userID)
+      if (latestDeviceUserRef.current !== userID) return
+      setRemoteDevices(Array.isArray(result?.items) ? result.items : [])
+      setRemoteDevicesState('loaded')
+    } catch (error) {
+      if (latestDeviceUserRef.current !== userID) return
+      setRemoteDevicesError(error.message || 'دریافت دستگاه‌ها انجام نشد.')
+      setRemoteDevicesState('error')
+      if (error.status === 401) {
+        setAccessToken('')
+        setOperator(null)
+        setRemoteUsers([])
+        setRemoteDevices([])
+        setLoginError('نشست منقضی شده است؛ دوباره وارد شوید.')
+      }
+    }
+  }
+
+  function toggleRemoteDevices(userID) {
+    if (devicePanelUserId === userID) {
+      latestDeviceUserRef.current = ''
+      setDevicePanelUserId('')
+      return
+    }
+    latestDeviceUserRef.current = userID
+    setDevicePanelUserId(userID)
+    setRemoteDevices([])
+    void refreshRemoteDevices(userID)
+  }
+
+  async function revokeRemoteDevice(device) {
+    if (!accessToken || !canManageRemoteUsers || deviceMutationBusyId) return
+    if (!['provisioning', 'active', 'error'].includes(device.status)) return
+    setDeviceMutationBusyId(device.id)
+    setRemoteDevicesError('')
+    let key = deviceRevokeKeys[device.id]
+    try {
+      if (!key) {
+        key = createIdempotencyKey()
+        setDeviceRevokeKeys(current => ({ ...current, [device.id]: key }))
+      }
+      const updated = await revokeVPNDevice(accessToken, device.user_id, device.id, key)
+      if (latestDeviceUserRef.current === device.user_id) {
+        setRemoteDevices(current => current.map(item => item.id === updated.id ? updated : item))
+      }
+      setDeviceRevokeConfirmId('')
+      setDeviceRevokeKeys(current => {
+        const next = { ...current }
+        delete next[device.id]
+        return next
+      })
+      toast('درخواست لغو به نود ارسال شد؛ وضعیت نهایی پس از تأیید نود ثبت می‌شود.')
+    } catch (error) {
+      setRemoteDevicesError(error.message || 'ارسال درخواست لغو دستگاه انجام نشد.')
+      if (error.status === 401) {
+        setAccessToken('')
+        setOperator(null)
+        setRemoteUsers([])
+        setRemoteDevices([])
+        setLoginError('نشست منقضی شده است؛ دوباره وارد شوید.')
+      }
+    } finally {
+      setDeviceMutationBusyId('')
+    }
+  }
 
   async function createRemoteUser(event) {
     event.preventDefault()
@@ -371,14 +459,14 @@ export default function App() {
         <div className="panel-heading">
           <div>
             <h2>مدیریت کاربران</h2>
-            <p>{isControlPlaneConfigured ? 'فهرست کاربران از API احراز هویت‌شده دریافت می‌شود؛ تغییر وضعیت و سقف دستگاه فعلاً فقط در پایگاه داده ثبت می‌شود.' : 'جست‌وجوی داده‌های نمونه؛ هنوز به API متصل نیست'}</p>
+            <p>{isControlPlaneConfigured ? 'مدیریت حساب، مشاهده وضعیت واقعی دستگاه‌ها و پیگیری عملیات WireGuard از Control Plane.' : 'جست‌وجوی داده‌های نمونه؛ هنوز به API متصل نیست'}</p>
           </div>
           <div className="users-head-actions">
             <div className="search-box">⌕ <input value={query} onChange={e=>setQuery(e.target.value)} placeholder="جست‌وجوی نام یا شناسه..." /></div>
             {isControlPlaneConfigured && canManageRemoteUsers && <button className="button primary" onClick={() => { setShowCreateUser(v => !v); setUserMutationError('') }}>{showCreateUser ? 'بستن فرم' : '＋ کاربر جدید'}</button>}
           </div>
         </div>
-        {isControlPlaneConfigured && <div className="remote-users-note">توجه: تعلیق حساب یا تغییر سقف دستگاه در این نسخه هنوز اتصال‌های فعال WireGuard را قطع یا محدود نمی‌کند؛ مدیریت واقعی دستگاه و همتا در مرحلهٔ بعد اضافه می‌شود.</div>}
+        {isControlPlaneConfigured && <div className="remote-users-note">تعلیق حساب، ثبت دستگاه جدید را متوقف می‌کند؛ اما دستگاه‌های فعال باید جداگانه لغو شوند. وضعیت «لغوشده» فقط پس از تأیید حذف peer توسط نود ثبت می‌شود.</div>}
         {isControlPlaneConfigured && <div className="remote-users-toolbar">
           <span>{remoteUsersState === 'loading' ? 'در حال دریافت کاربران...' : remoteUsersState === 'error' ? remoteUsersError : remoteUsers.length + ' کاربر در صفحهٔ جاری'}</span>
           <button className="button secondary" onClick={refreshRemoteUsers} disabled={remoteUsersState === 'loading'}>↻ بروزرسانی</button>
@@ -420,14 +508,15 @@ export default function App() {
                   ? <input className="table-edit-number" type="number" min="1" max="20" step="1" value={editUserMaxDevices} onChange={event => { setEditUserMaxDevices(event.target.value); setUpdateUserKey('') }} />
                   : isControlPlaneConfigured ? <span>{u.maxDevices} دستگاه</span> : '—'}</td>
                 <td>{isControlPlaneConfigured
-                  ? canManageRemoteUsers
-                    ? editing
-                      ? <div className="user-row-actions">
-                          <button className="mini-action" onClick={() => saveRemoteUser(u)} disabled={userMutationBusy}>{userMutationBusy ? '...' : 'ذخیره'}</button>
-                          <button className="mini-action subtle" onClick={cancelEditRemoteUser} disabled={userMutationBusy}>لغو</button>
-                        </div>
-                      : <button className="mini-action" onClick={() => startEditRemoteUser(remoteUsers.find(user => user.id === u.id))}>ویرایش</button>
-                    : '—'
+                  ? <div className="user-row-actions">
+                      {canManageRemoteUsers && (editing
+                        ? <>
+                            <button className="mini-action" onClick={() => saveRemoteUser(u)} disabled={userMutationBusy}>{userMutationBusy ? '...' : 'ذخیره'}</button>
+                            <button className="mini-action subtle" onClick={cancelEditRemoteUser} disabled={userMutationBusy}>لغو</button>
+                          </>
+                        : <button className="mini-action" onClick={() => startEditRemoteUser(remoteUsers.find(user => user.id === u.id))}>ویرایش</button>)}
+                      <button className="mini-action subtle" onClick={() => toggleRemoteDevices(u.id)}>{devicePanelUserId === u.id ? 'بستن دستگاه‌ها' : 'دستگاه‌ها'}</button>
+                    </div>
                   : <button className="mini-action" onClick={()=>toggleUser(u.id)}>{u.status==='active'?'غیرفعال‌سازی':'فعال‌سازی'}</button>}</td>
               </tr>
             })}</tbody>
@@ -435,6 +524,43 @@ export default function App() {
           {filteredUsers.length===0&&<div className="empty">{remoteUsersState === 'loading' ? 'در حال دریافت اطلاعات...' : remoteUsersState === 'error' ? 'دریافت اطلاعات ناموفق بود.' : 'کاربری با این مشخصات پیدا نشد.'}</div>}
         </div>
         {isControlPlaneConfigured && remoteUsersNextCursor && <div className="remote-users-more"><button className="button secondary" onClick={() => refreshRemoteUsers(remoteUsersNextCursor)} disabled={remoteUsersState === 'loading'}>دریافت کاربران بیشتر ←</button></div>}
+        {isControlPlaneConfigured && devicePanelUserId && <section className="remote-devices-panel glass">
+          <div className="remote-devices-heading">
+            <div>
+              <b>دستگاه‌های کاربر</b>
+              <span>{remoteUsers.find(user => user.id === devicePanelUserId)?.display_name || devicePanelUserId}</span>
+            </div>
+            <button className="button secondary" onClick={() => refreshRemoteDevices()} disabled={remoteDevicesState === 'loading'}>↻ بروزرسانی</button>
+          </div>
+          {remoteDevicesState === 'loading' && <div className="remote-devices-empty">در حال دریافت دستگاه‌ها...</div>}
+          {remoteDevicesState === 'error' && <div className="remote-users-error" role="alert">{remoteDevicesError}</div>}
+          {remoteDevicesState === 'loaded' && remoteDevices.length === 0 && <div className="remote-devices-empty">برای این کاربر هنوز دستگاهی ثبت نشده است. ثبت دستگاه باید از اپ کاربر و با کلید خصوصی تولیدشده روی همان دستگاه انجام شود.</div>}
+          {remoteDevicesState === 'loaded' && remoteDevices.length > 0 && <div className="table-wrap">
+            <table>
+              <thead><tr><th>دستگاه</th><th>سیستم‌عامل</th><th>وضعیت دستگاه</th><th>IPv4 / IPv6</th><th>نود / اتصال</th><th>عملیات</th></tr></thead>
+              <tbody>{remoteDevices.map(device => {
+                const canRevoke = canManageRemoteUsers && ['provisioning', 'active', 'error'].includes(device.status)
+                return <tr key={device.id}>
+                  <td><b>{device.device_name}</b><small className="cell-sub">{device.device_ref}</small></td>
+                  <td>{device.platform}</td>
+                  <td><Status value={device.status}/>{device.last_error && <small className="device-error">{device.last_error}</small>}</td>
+                  <td><span className="device-address">{device.peer?.assigned_ipv4 || '—'}</span><small className="cell-sub">{device.peer?.assigned_ipv6 || '—'}</small></td>
+                  <td><span>{device.peer?.endpoint_host || '—'}{device.peer?.endpoint_port ? ':' + device.peer.endpoint_port : ''}</span><small className="cell-sub">Peer: {device.peer?.status || 'نامشخص'}</small></td>
+                  <td>{canRevoke
+                    ? deviceRevokeConfirmId === device.id
+                      ? <div className="device-revoke-confirm">
+                          <button className="mini-action danger" onClick={() => revokeRemoteDevice(device)} disabled={Boolean(deviceMutationBusyId)}>{deviceMutationBusyId === device.id ? 'در حال ارسال...' : 'تأیید لغو'}</button>
+                          <button className="mini-action subtle" onClick={() => setDeviceRevokeConfirmId('')} disabled={Boolean(deviceMutationBusyId)}>انصراف</button>
+                        </div>
+                      : <button className="mini-action danger" onClick={() => setDeviceRevokeConfirmId(device.id)} disabled={Boolean(deviceMutationBusyId)}>لغو دستگاه</button>
+                    : device.status === 'revoking' ? <span className="device-pending">منتظر تأیید نود</span> : '—'}</td>
+                </tr>
+              })}</tbody>
+            </table>
+          </div>}
+          {remoteDevicesError && remoteDevicesState !== 'error' && <div className="remote-users-error" role="alert">{remoteDevicesError}</div>}
+          <div className="remote-devices-footnote">لغو دستگاه یک فرمان امن peer.remove در صف نود ثبت می‌کند. تا زمان دریافت پاسخ موفق از نود، وضعیت دستگاه «در حال لغو» باقی می‌ماند.</div>
+        </section>}
       </section>}
 
       {page === 'plans' && <section className="plan-grid">{[['STARTER','۷ روزه','برای استفاده کوتاه‌مدت','۷ روز','۵۰ GB'],['PRO','۳۰ روزه','برای استفاده روزمره','۳۰ روز','نامحدود'],['ULTRA','۹۰ روزه','برای کاربران حرفه‌ای','۹۰ روز','نامحدود']].map((p,i)=><article className="plan-card glass" key={p[0]}><span className="plan-index">۰{i+1}</span><h2>{p[0]}</h2><h3>{p[1]}</h3><p>{p[2]}</p><div className="plan-detail"><span>مدت اعتبار</span><b>{p[3]}</b></div><div className="plan-detail"><span>سقف ترافیک</span><b>{p[4]}</b></div><button className="button secondary" onClick={()=>toast('تعریف و قیمت‌گذاری اشتراک‌ها پس از اتصال API فعال می‌شود.')}>ویرایش طرح</button></article>)}</section>}

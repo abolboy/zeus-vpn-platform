@@ -91,3 +91,14 @@ export function updateVPNUser(token, userID, input, idempotencyKey = createIdemp
     idempotencyKey,
   })
 }
+
+export function listVPNDevices(token, userID) {
+  return requestJSON('/v1/users/' + encodeURIComponent(userID) + '/devices', { token })
+}
+
+export function revokeVPNDevice(token, userID, deviceID, idempotencyKey = createIdempotencyKey()) {
+  return requestJSON(
+    '/v1/users/' + encodeURIComponent(userID) + '/devices/' + encodeURIComponent(deviceID) + '/revoke',
+    { method: 'POST', token, idempotencyKey },
+  )
+}

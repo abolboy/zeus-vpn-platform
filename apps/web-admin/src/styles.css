@@ -425,3 +425,75 @@ tbody tr:hover { background: rgba(var(--accent-rgb),.045); }
 }
 
 .remote-users-note { margin:0 0 12px; padding:10px 12px; border:1px solid rgba(255,190,90,.18); border-radius:9px; background:rgba(255,190,90,.045); color:#c4b28f; font-size:9px; line-height:1.9; }
+
+/* Authenticated device lifecycle panel */
+.remote-devices-panel {
+  margin-top:18px;
+  padding:16px;
+  border:1px solid rgba(var(--accent-rgb),.16);
+  background:rgba(5,10,22,.38);
+}
+.remote-devices-heading {
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:12px;
+  margin-bottom:12px;
+}
+.remote-devices-heading>div { display:grid; gap:5px; min-width:0; }
+.remote-devices-heading b { color:var(--accent); font-size:12px; }
+.remote-devices-heading span { color:#8c9ab4; font-size:9px; overflow-wrap:anywhere; }
+.remote-devices-empty {
+  padding:18px 12px;
+  text-align:center;
+  color:#8c9ab4;
+  font-size:10px;
+  line-height:1.9;
+}
+.remote-devices-panel table { min-width:760px; }
+.device-address {
+  display:block;
+  color:#d8e4f8;
+  font-variant-numeric:tabular-nums;
+  white-space:nowrap;
+}
+.device-error {
+  display:block;
+  max-width:170px;
+  margin-top:5px;
+  color:#ff9eaf;
+  font-size:8px;
+  overflow-wrap:anywhere;
+}
+.device-pending {
+  color:#ffc17f;
+  font-size:8px;
+}
+.device-revoke-confirm {
+  display:flex;
+  flex-wrap:wrap;
+  gap:5px;
+}
+.mini-action.danger {
+  color:#ffb0bf;
+  border-color:rgba(255,105,130,.3);
+  background:rgba(255,105,130,.08);
+}
+.mini-action.danger:hover {
+  background:rgba(255,105,130,.15);
+}
+.remote-devices-footnote {
+  margin-top:12px;
+  color:#8694ad;
+  font-size:9px;
+  line-height:1.8;
+}
+.status.revoking i { background:#ffc17f; box-shadow:0 0 7px #ffc17f; }
+.status.revoked i { background:#8794ad; box-shadow:none; }
+.status.error i { background:#ff6f88; box-shadow:0 0 7px #ff6f88; }
+.status.provisioning i { background:#73c8ff; box-shadow:0 0 7px #73c8ff; }
+@media (max-width:760px) {
+  .remote-devices-heading { align-items:flex-start; }
+  .remote-devices-heading .button { flex:none; }
+  .device-revoke-confirm { flex-direction:column; }
+}

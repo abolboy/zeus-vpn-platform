@@ -6,6 +6,7 @@ import android.content.Intent
 import android.net.Uri
 import android.net.VpnService
 import android.os.Build
+import android.os.SystemClock
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.core.FastOutSlowInEasing
@@ -37,6 +38,7 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.graphicsLayer
@@ -58,6 +60,8 @@ import com.zeusvpn.app.network.TunnelConnectivityResult
 import com.zeusvpn.app.network.TunnelProbeFailure
 import com.zeusvpn.app.network.TunnelProbeStatus
 import com.zeusvpn.app.network.TunnelReconnectPolicy
+import com.zeusvpn.app.network.TrafficRateSampler
+import com.zeusvpn.app.network.TrafficRateSample
 import com.zeusvpn.app.vpn.InvalidWireGuardProfileException
 import com.zeusvpn.app.vpn.MissingWireGuardProfileException
 import com.zeusvpn.app.vpn.WireGuardEngine
@@ -797,6 +801,17 @@ private fun TrafficStatsCard(
     reachability: TunnelConnectivityResult,
     onRefresh: () -> Unit,
 ) {
+    val rateSampler = remember { TrafficRateSampler(maxSamples = 24) }
+    var rateHistory by remember { mutableStateOf(emptyList<TrafficRateSample>()) }
+    LaunchedEffect(stats.receivedBytes, stats.sentBytes) {
+        rateHistory = rateSampler.addSnapshot(
+            receivedBytes = stats.receivedBytes,
+            sentBytes = stats.sentBytes,
+            timestampMillis = SystemClock.elapsedRealtime(),
+        )
+    }
+    val latestRate = rateHistory.lastOrNull()
+
     PanelCard {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
@@ -837,6 +852,21 @@ private fun TrafficStatsCard(
                 symbol = "↑",
             )
         }
+        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            ThroughputMetric(
+                modifier = Modifier.weight(1f),
+                label = "دانلود لحظه‌ای",
+                value = formatThroughputMbps(latestRate?.downloadBytesPerSecond),
+                accent = Primary,
+            )
+            ThroughputMetric(
+                modifier = Modifier.weight(1f),
+                label = "آپلود لحظه‌ای",
+                value = formatThroughputMbps(latestRate?.uploadBytesPerSecond),
+                accent = Positive,
+            )
+        }
+        LiveThroughputChart(rateHistory)
         HorizontalDivider(color = DividerColor)
         val handshakeLabel = if (stats.latestHandshakeEpochMillis > 0L) {
             "آخرین Handshake: " + elapsedSince(stats.latestHandshakeEpochMillis)
@@ -914,6 +944,174 @@ private fun TrafficValue(
         )
     }
 }
+
+@Composable
+private fun ThroughputMetric(
+    modifier: Modifier,
+    label: String,
+    value: String,
+    accent: Color,
+) {
+    Column(
+        modifier
+            .background(PanelRaised, RoundedCornerShape(12.dp))
+            .border(1.dp, DividerColor, RoundedCornerShape(12.dp))
+            .padding(horizontal = 12.dp, vertical = 11.dp),
+        verticalArrangement = Arrangement.spacedBy(7.dp),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Box(Modifier.size(7.dp).background(accent, CircleShape))
+            Spacer(Modifier.width(7.dp))
+            Text(label, color = SecondaryText, style = MaterialTheme.typography.labelSmall)
+        }
+        Text(
+            value,
+            color = MainText,
+            fontSize = 16.sp,
+            fontWeight = FontWeight.Bold,
+            maxLines = 1,
+        )
+    }
+}
+
+@Composable
+private fun LiveThroughputChart(samples: List<TrafficRateSample>) {
+    val glowTransition = rememberInfiniteTransition(label = "zeus-throughput-glow")
+    val glowAlpha by glowTransition.animateFloat(
+        initialValue = 0.45f,
+        targetValue = 1f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(durationMillis = 1_700, easing = FastOutSlowInEasing),
+            repeatMode = RepeatMode.Reverse,
+        ),
+        label = "zeus-throughput-glow-alpha",
+    )
+
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text("نمودار زندهٔ پهنای باند", color = MainText, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Box(Modifier.size(6.dp).background(Positive.copy(alpha = glowAlpha), CircleShape))
+                Spacer(Modifier.width(6.dp))
+                Text("LIVE · 3s", color = Positive, style = MaterialTheme.typography.labelSmall, letterSpacing = 0.6.sp)
+            }
+        }
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(116.dp)
+                .background(Panel.copy(alpha = 0.76f), RoundedCornerShape(13.dp))
+                .border(1.dp, DividerColor, RoundedCornerShape(13.dp))
+                .padding(horizontal = 10.dp, vertical = 9.dp),
+        ) {
+            Canvas(Modifier.fillMaxSize()) {
+                val top = size.height * 0.08f
+                val bottom = size.height * 0.92f
+                for (index in 0..3) {
+                    val y = top + (bottom - top) * index / 3f
+                    drawLine(
+                        color = DividerColor.copy(alpha = 0.7f),
+                        start = Offset(0f, y),
+                        end = Offset(size.width, y),
+                        strokeWidth = 1.dp.toPx(),
+                    )
+                }
+
+                if (samples.size == 1) {
+                    drawCircle(
+                        color = Primary.copy(alpha = glowAlpha),
+                        radius = 4.dp.toPx(),
+                        center = Offset(size.width / 2f, bottom),
+                    )
+                } else if (samples.size >= 2) {
+                    val peakBytesPerSecond = samples.maxOf {
+                        maxOf(it.downloadBytesPerSecond, it.uploadBytesPerSecond)
+                    }.coerceAtLeast(32_000.0)
+
+                    fun point(index: Int, bytesPerSecond: Double): Offset {
+                        val x = size.width * index.toFloat() / (samples.size - 1).toFloat()
+                        val normalized = (bytesPerSecond / peakBytesPerSecond).toFloat().coerceIn(0f, 1f)
+                        val y = bottom - normalized * (bottom - top)
+                        return Offset(x, y)
+                    }
+
+                    val downloadPath = Path()
+                    val uploadPath = Path()
+                    samples.forEachIndexed { index, sample ->
+                        val download = point(index, sample.downloadBytesPerSecond)
+                        val upload = point(index, sample.uploadBytesPerSecond)
+                        if (index == 0) {
+                            downloadPath.moveTo(download.x, download.y)
+                            uploadPath.moveTo(upload.x, upload.y)
+                        } else {
+                            downloadPath.lineTo(download.x, download.y)
+                            uploadPath.lineTo(upload.x, upload.y)
+                        }
+                    }
+
+                    drawPath(
+                        path = downloadPath,
+                        color = Primary.copy(alpha = 0.14f + 0.10f * glowAlpha),
+                        style = Stroke(width = 8.dp.toPx(), cap = StrokeCap.Round),
+                    )
+                    drawPath(
+                        path = uploadPath,
+                        color = Positive.copy(alpha = 0.14f + 0.10f * glowAlpha),
+                        style = Stroke(width = 8.dp.toPx(), cap = StrokeCap.Round),
+                    )
+                    drawPath(
+                        path = downloadPath,
+                        color = Primary,
+                        style = Stroke(width = 2.5.dp.toPx(), cap = StrokeCap.Round),
+                    )
+                    drawPath(
+                        path = uploadPath,
+                        color = Positive,
+                        style = Stroke(width = 2.5.dp.toPx(), cap = StrokeCap.Round),
+                    )
+
+                    val last = samples.last()
+                    val lastIndex = samples.lastIndex
+                    val downloadPoint = point(lastIndex, last.downloadBytesPerSecond)
+                    val uploadPoint = point(lastIndex, last.uploadBytesPerSecond)
+                    drawCircle(Primary, radius = 3.5.dp.toPx(), center = downloadPoint)
+                    drawCircle(Positive, radius = 3.5.dp.toPx(), center = uploadPoint)
+                }
+            }
+            if (samples.size < 2) {
+                Text(
+                    "در حال جمع‌آوری نمونه‌های واقعی تونل...",
+                    modifier = Modifier.align(Alignment.Center),
+                    color = MutedText,
+                    style = MaterialTheme.typography.labelSmall,
+                )
+            }
+        }
+        Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Box(Modifier.size(7.dp).background(Primary, CircleShape))
+                Spacer(Modifier.width(6.dp))
+                Text("دریافت از سرور", color = SecondaryText, style = MaterialTheme.typography.labelSmall)
+            }
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Box(Modifier.size(7.dp).background(Positive, CircleShape))
+                Spacer(Modifier.width(6.dp))
+                Text("ارسال به سرور", color = SecondaryText, style = MaterialTheme.typography.labelSmall)
+            }
+        }
+    }
+}
+
+private fun formatThroughputMbps(bytesPerSecond: Double?): String {
+    if (bytesPerSecond == null) return "در حال سنجش"
+    val megabitsPerSecond = bytesPerSecond * 8.0 / 1_000_000.0
+    return String.format(Locale.US, "%.1f Mbps", megabitsPerSecond)
+}
+
 
 @Composable
 private fun ProfileSetupCard(

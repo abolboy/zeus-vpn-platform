@@ -58,9 +58,12 @@ Deliver authenticated multi-user management while keeping the already-working pr
 - [x] Authenticated paginated user listing and owner/admin create/edit flows.
 - [x] User device list with peer state, assigned addresses, and endpoint details.
 - [x] Owner/admin-triggered device revocation with idempotent retry behavior.
-- [ ] Android-generated keypair/device registration and profile delivery.
+- [x] Android-generated WireGuard keypair, public-key enrollment over HTTPS, local profile construction, and Android Keystore AES-GCM persistence.
+- [x] Encrypted pending-enrollment recovery with a stable device identity and idempotency key after a lost response.
+- [ ] End-to-end enrollment and tunnel handshake against a deployed Control Plane and isolated staging WireGuard node.
 - [ ] Real server inventory, live telemetry, subscriptions, billing, and audit log screens.
-- [ ] Ensure tunnel reconnect from encrypted local profiles while Control Plane is unavailable.
+- [x] Previously provisioned encrypted local profile remains available for reconnect without Control Plane access.
+- [ ] Verify reconnect and sustained traffic after process death, network changes, and device reboot on a physical Android device.
 
 ## Exit criteria
 - Unit/integration/race/static/browser checks pass.
@@ -71,5 +74,6 @@ Deliver authenticated multi-user management while keeping the already-working pr
 
 ## Current status
 - Branch: `phase2-multiplayer-control-plane`.
-- Current verified scope: authenticated user management, device lifecycle, node command queue, mTLS node transport, and a web device-management view.
+- Current verified scope: authenticated user management, one-time client activation, device lifecycle, node command queue, mTLS node transport, authenticated web device management, and Android debug build/unit tests with local key generation/profile persistence.
+- The Android default build has no Control Plane URL configured; a deployed HTTPS URL is required to enable client enrollment.
 - No AWS server, security group, production WireGuard peer, or `main` branch was changed.

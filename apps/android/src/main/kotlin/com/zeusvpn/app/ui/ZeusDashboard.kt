@@ -16,6 +16,9 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardOptions
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.zeusvpn.app.R
@@ -317,6 +320,8 @@ private fun EnrollmentCard(
                 label = { Text("کد فعال‌سازی") },
                 placeholder = { Text("کد یک‌بارمصرف ۴۳ نویسه‌ای") },
                 singleLine = true,
+                visualTransformation = PasswordVisualTransformation(),
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Ascii),
                 textStyle = MaterialTheme.typography.bodyMedium,
             )
         }

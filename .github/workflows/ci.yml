@@ -83,6 +83,16 @@ jobs:
           cache: gradle
       - name: Build Android app and run unit tests
         run: ./gradlew --no-daemon :apps:android:assembleDebug :apps:android:testDebugUnitTest
+      - name: Upload debug APK and unit-test report
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: zeus-vpn-android-debug
+          path: |
+            apps/android/build/outputs/apk/debug/*.apk
+            apps/android/build/reports/tests/testDebugUnitTest/
+          if-no-files-found: error
+          retention-days: 7
 
   vpn-node:
     name: VPN node agent and executor tests

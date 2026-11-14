@@ -2,9 +2,10 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/json"
 	"errors"
 	"fmt"
-	"net/http"
 	"strings"
 	"time"
 
@@ -169,5 +170,3 @@ func (a *API) handleCustomerClientEnrollment(w http.ResponseWriter, r *http.Requ
 		writeJSON(w, http.StatusAccepted, device)
 	}
 }
-
-var _ = http.StatusAccepted

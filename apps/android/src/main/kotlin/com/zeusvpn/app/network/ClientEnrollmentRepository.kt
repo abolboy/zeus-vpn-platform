@@ -188,7 +188,9 @@ class ClientEnrollmentRepository(
             connection.setRequestProperty("Accept", "application/json")
             connection.setRequestProperty("Content-Type", "application/json; charset=utf-8")
             connection.setRequestProperty("Idempotency-Key", pending.idempotencyKey)
-            if (!idToken.isNullOrBlank()) connection.setRequestProperty("Authorization", "Bearer $idToken")
+            if (pending.activationCode.isBlank() && !idToken.isNullOrBlank()) {
+                connection.setRequestProperty("Authorization", "Bearer $idToken")
+            }
             connection.outputStream.use { it.write(body) }
 
             val status = connection.responseCode

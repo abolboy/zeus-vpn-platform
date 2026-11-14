@@ -32,6 +32,31 @@ Optional settings:
 - ZEUS_ALLOWED_ORIGINS: comma-separated exact browser origins; no wildcard is accepted.
 - ZEUS_OIDC_ISSUER and ZEUS_OIDC_CLIENT_ID: configure together to enable self-service customer enrollment through a verified OIDC identity provider. The app client is a public native client; no client secret belongs in the Android app.
 
+## Customer self-service identity
+
+For a staging account, deploy the Cognito stack from the repository root:
+
+    aws cloudformation deploy \
+      --template-file infra/aws-cognito/zeus-customer-user-pool.yaml \
+      --stack-name zeus-vpn-customer-identity \
+      --capabilities CAPABILITY_IAM
+
+Read the stack outputs OidcIssuer, OidcClientId, and HostedUiDomain. Configure the Control Plane process with:
+
+    ZEUS_OIDC_ISSUER=<OidcIssuer>
+    ZEUS_OIDC_CLIENT_ID=<OidcClientId>
+
+Build the Android client with the matching public settings and the deployed HTTPS API URL:
+
+    ./gradlew --no-daemon :apps:android:assembleDebug \
+      -PZEUS_API_BASE_URL=https://<your-api-host> \
+      -PZEUS_OIDC_ISSUER=<OidcIssuer> \
+      -PZEUS_OIDC_CLIENT_ID=<OidcClientId>
+
+The Cognito stack enables public self-registration, email verification, browser sign-in, a public native app client with no client secret, and the Authorization Code grant. AppAuth supplies PKCE and uses the exact callback URI com.zeusvpn.app:/oauth2redirect. Do not add a client secret to the Android package.
+
+This setting makes registration publicly available to anyone who can reach the hosted login page. The current ZEUS alpha applies a per-IP enrollment throttle and a default device cap, but does not yet include billing, subscription enforcement, CAPTCHA, or a customer support workflow. Do not expose public self-registration on a production service until capacity limits, abuse controls, monitoring, and the intended free/trial/paid policy are decided. The template uses Cognito's default email sender for initial setup; configure and verify an Amazon SES identity for production-scale email delivery.
+
 ## Node-agent certificates
 
 The certificate utility is built from services/vpn-node:

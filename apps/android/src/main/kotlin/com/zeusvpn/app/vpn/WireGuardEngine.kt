@@ -18,6 +18,18 @@ enum class WireGuardState {
     DISCONNECTING,
 }
 
+/** Byte counters and handshake timestamp reported by the official WireGuard backend. */
+data class WireGuardTrafficStats(
+    val receivedBytes: Long,
+    val sentBytes: Long,
+    val latestHandshakeEpochMillis: Long,
+) {
+    companion object {
+        val EMPTY = WireGuardTrafficStats(0L, 0L, 0L)
+    }
+}
+
+
 class MissingWireGuardProfileException : Exception()
 
 /**
@@ -51,6 +63,32 @@ class WireGuardEngine private constructor(context: Context) {
     suspend fun hasProfile(): Boolean = withContext(Dispatchers.IO) {
         profileStore.hasProfile()
     }
+
+    /**
+     * Read transfer counters from the official WireGuard backend.
+     * The mutex prevents statistics reads from racing with connect/disconnect/profile changes.
+     */
+    suspend fun trafficStats(): WireGuardTrafficStats = withContext(Dispatchers.IO) {
+        operationMutex.withLock {
+            if (mutableState.value != WireGuardState.ENGINE_UP) {
+                return@withLock WireGuardTrafficStats.EMPTY
+            }
+
+            val snapshot = backend.getStatistics(tunnel)
+            val latestHandshake = snapshot.peers()
+                .mapNotNull { peerKey ->
+                    snapshot.peer(peerKey)?.latestHandshakeEpochMillis()?.takeIf { it > 0L }
+                }
+                .maxOrNull() ?: 0L
+
+            WireGuardTrafficStats(
+                receivedBytes = snapshot.totalRx().coerceAtLeast(0L),
+                sentBytes = snapshot.totalTx().coerceAtLeast(0L),
+                latestHandshakeEpochMillis = latestHandshake,
+            )
+        }
+    }
+
 
     suspend fun saveProfile(profileText: String) = withContext(Dispatchers.IO) {
         operationMutex.withLock {

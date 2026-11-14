@@ -57,11 +57,13 @@ import com.zeusvpn.app.network.TunnelConnectivityChecker
 import com.zeusvpn.app.network.TunnelConnectivityResult
 import com.zeusvpn.app.network.TunnelProbeFailure
 import com.zeusvpn.app.network.TunnelProbeStatus
+import com.zeusvpn.app.network.TunnelReconnectPolicy
 import com.zeusvpn.app.vpn.InvalidWireGuardProfileException
 import com.zeusvpn.app.vpn.MissingWireGuardProfileException
 import com.zeusvpn.app.vpn.WireGuardEngine
 import com.zeusvpn.app.vpn.WireGuardState
 import com.zeusvpn.app.vpn.WireGuardTrafficStats
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collect
@@ -118,6 +120,9 @@ fun ZeusDashboard() {
     val autoReconnect by produceState(true, settings) {
         settings.autoReconnectEnabled.collect { value = it }
     }
+    val tunnelDesired by produceState(false, settings) {
+        settings.tunnelDesired.collect { value = it }
+    }
     val trafficStats by produceState(WireGuardTrafficStats.EMPTY, wireGuard, wireGuardState) {
         if (wireGuardState != WireGuardState.ENGINE_UP) {
             value = WireGuardTrafficStats.EMPTY
@@ -156,6 +161,7 @@ fun ZeusDashboard() {
     val profileDeletedMessage = stringResource(R.string.wg_profile_deleted)
 
     LaunchedEffect(wireGuard, enrollment, identity) {
+        runCatching { wireGuard.refreshState() }
         profileSaved = runCatching { wireGuard.hasProfile() }.getOrDefault(false)
         hasPendingEnrollment = runCatching { enrollment.hasPendingEnrollment() }.getOrDefault(false)
         customerSignedIn = identity.hasStoredSession()
@@ -170,6 +176,7 @@ fun ZeusDashboard() {
             wireGuardMessage = connectingMessage
             try {
                 wireGuard.connect()
+                settings.setTunnelDesired(true)
                 wireGuardMessage = connectedMessage
             } catch (_: MissingWireGuardProfileException) {
                 profileSaved = false
@@ -180,11 +187,54 @@ fun ZeusDashboard() {
         }
     }
 
+    LaunchedEffect(autoReconnect, tunnelDesired, profileSaved) {
+        if (!autoReconnect || !tunnelDesired || !profileSaved) return@LaunchedEffect
+
+        var failedAttempts = 0
+        while (true) {
+            if (network == NetworkCondition.ONLINE || network == NetworkCondition.LIMITED) {
+                val actualState = runCatching { wireGuard.refreshState() }
+                    .getOrDefault(wireGuard.state.value)
+                when (actualState) {
+                    WireGuardState.ENGINE_UP -> {
+                        failedAttempts = 0
+                        delay(8_000L)
+                    }
+                    WireGuardState.CONNECTING, WireGuardState.DISCONNECTING -> delay(1_000L)
+                    WireGuardState.DISCONNECTED -> {
+                        if (VpnService.prepare(context) != null) {
+                            wireGuardMessage = "برای اتصال مجدد، مجوز VPN اندروید را دوباره تأیید کنید."
+                            settings.setTunnelDesired(false)
+                            return@LaunchedEffect
+                        }
+                        try {
+                            wireGuardMessage = "شبکه در دسترس است؛ در حال برقراری مجدد تونل..."
+                            wireGuard.connect()
+                            wireGuardMessage = "اتصال پس از بازگشت شبکه برقرار شد."
+                            failedAttempts = 0
+                        } catch (cancelled: CancellationException) {
+                            throw cancelled
+                        } catch (_: Exception) {
+                            failedAttempts += 1
+                            wireGuardMessage = "اتصال مجدد انجام نشد؛ تلاش بعدی با فاصلهٔ کنترل‌شده انجام می‌شود."
+                            delay(TunnelReconnectPolicy.delayAfterFailure(failedAttempts - 1))
+                        }
+                    }
+                }
+            } else {
+                delay(5_000L)
+            }
+        }
+    }
+
     val vpnPermissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.StartActivityForResult(),
     ) { result ->
         if (result.resultCode == Activity.RESULT_OK) connectWireGuard()
-        else wireGuardMessage = permissionDeniedMessage
+        else {
+            scope.launch { settings.setTunnelDesired(false) }
+            wireGuardMessage = permissionDeniedMessage
+        }
     }
 
     val requestWireGuardConnection: () -> Unit = {
@@ -195,6 +245,7 @@ fun ZeusDashboard() {
 
     val disconnectWireGuard: () -> Unit = {
         scope.launch {
+            settings.setTunnelDesired(false)
             try {
                 wireGuard.disconnect()
                 wireGuardMessage = disconnectedMessage
@@ -222,6 +273,7 @@ fun ZeusDashboard() {
 
     val forgetWireGuardProfile: () -> Unit = {
         scope.launch {
+            settings.setTunnelDesired(false)
             try {
                 wireGuard.forgetProfile()
                 profileSaved = false
@@ -1187,7 +1239,7 @@ private fun SettingsCard(
             Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 Text("اتصال مجدد خودکار", color = MainText, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
                 Text(
-                    "ترجیح این دستگاه برای استفاده در مرحلهٔ بازیابی اتصال ذخیره می‌شود.",
+                    "اگر تونل قبلاً فعال بوده و شبکه قطع شود، هنگام بازگشت اینترنت و فعال‌بودن برنامه اتصال دوباره برقرار می‌شود.",
                     color = SecondaryText,
                     style = MaterialTheme.typography.bodySmall,
                     lineHeight = 18.sp,

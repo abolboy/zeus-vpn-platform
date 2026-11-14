@@ -29,7 +29,6 @@ data class WireGuardTrafficStats(
     }
 }
 
-
 class MissingWireGuardProfileException : Exception()
 
 /**
@@ -52,11 +51,17 @@ class WireGuardEngine private constructor(context: Context) {
         override fun getName(): String = TUNNEL_NAME
 
         override fun onStateChange(newState: Tunnel.State) {
-            mutableState.value = if (newState == Tunnel.State.UP) {
-                WireGuardState.ENGINE_UP
-            } else {
-                WireGuardState.DISCONNECTED
-            }
+            mutableState.value = newState.toAppState()
+        }
+    }
+
+    /**
+     * Reconcile the UI's cached state with the WireGuard backend.
+     * This avoids treating the in-memory StateFlow as the source of truth.
+     */
+    suspend fun refreshState(): WireGuardState = withContext(Dispatchers.IO) {
+        operationMutex.withLock {
+            syncBackendStateLocked()
         }
     }
 
@@ -70,7 +75,7 @@ class WireGuardEngine private constructor(context: Context) {
      */
     suspend fun trafficStats(): WireGuardTrafficStats = withContext(Dispatchers.IO) {
         operationMutex.withLock {
-            if (mutableState.value != WireGuardState.ENGINE_UP) {
+            if (syncBackendStateLocked() != WireGuardState.ENGINE_UP) {
                 return@withLock WireGuardTrafficStats.EMPTY
             }
 
@@ -89,10 +94,9 @@ class WireGuardEngine private constructor(context: Context) {
         }
     }
 
-
     suspend fun saveProfile(profileText: String) = withContext(Dispatchers.IO) {
         operationMutex.withLock {
-            if (mutableState.value != WireGuardState.DISCONNECTED) {
+            if (syncBackendStateLocked() != WireGuardState.DISCONNECTED) {
                 throw IllegalStateException("Stop the tunnel before replacing the profile")
             }
             WireGuardProfileValidator.parse(profileText)
@@ -118,7 +122,8 @@ class WireGuardEngine private constructor(context: Context) {
                 }
                 mutableState.value = WireGuardState.ENGINE_UP
             } catch (error: Exception) {
-                mutableState.value = WireGuardState.DISCONNECTED
+                mutableState.value = runCatching { syncBackendStateLocked() }
+                    .getOrDefault(WireGuardState.DISCONNECTED)
                 throw error
             }
         }
@@ -126,7 +131,7 @@ class WireGuardEngine private constructor(context: Context) {
 
     suspend fun disconnect() = withContext(Dispatchers.IO) {
         operationMutex.withLock {
-            if (mutableState.value == WireGuardState.ENGINE_UP) {
+            if (syncBackendStateLocked() == WireGuardState.ENGINE_UP) {
                 mutableState.value = WireGuardState.DISCONNECTING
                 try {
                     val finalState = backend.setState(tunnel, Tunnel.State.DOWN, null)
@@ -135,7 +140,8 @@ class WireGuardEngine private constructor(context: Context) {
                     }
                     mutableState.value = WireGuardState.DISCONNECTED
                 } catch (error: Exception) {
-                    mutableState.value = WireGuardState.ENGINE_UP
+                    mutableState.value = runCatching { syncBackendStateLocked() }
+                        .getOrDefault(WireGuardState.ENGINE_UP)
                     throw error
                 }
             } else {
@@ -146,7 +152,7 @@ class WireGuardEngine private constructor(context: Context) {
 
     suspend fun forgetProfile() = withContext(Dispatchers.IO) {
         operationMutex.withLock {
-            if (mutableState.value == WireGuardState.ENGINE_UP) {
+            if (syncBackendStateLocked() == WireGuardState.ENGINE_UP) {
                 mutableState.value = WireGuardState.DISCONNECTING
                 try {
                     val finalState = backend.setState(tunnel, Tunnel.State.DOWN, null)
@@ -155,7 +161,8 @@ class WireGuardEngine private constructor(context: Context) {
                     }
                     mutableState.value = WireGuardState.DISCONNECTED
                 } catch (error: Exception) {
-                    mutableState.value = WireGuardState.ENGINE_UP
+                    mutableState.value = runCatching { syncBackendStateLocked() }
+                        .getOrDefault(WireGuardState.ENGINE_UP)
                     throw error
                 }
             } else if (mutableState.value != WireGuardState.DISCONNECTED) {
@@ -164,6 +171,15 @@ class WireGuardEngine private constructor(context: Context) {
             profileStore.clear()
         }
     }
+
+    private fun syncBackendStateLocked(): WireGuardState {
+        val actualState = backend.getState(tunnel).toAppState()
+        mutableState.value = actualState
+        return actualState
+    }
+
+    private fun Tunnel.State.toAppState(): WireGuardState =
+        if (this == Tunnel.State.UP) WireGuardState.ENGINE_UP else WireGuardState.DISCONNECTED
 
     companion object {
         private const val TUNNEL_NAME = "zeus-vpn"

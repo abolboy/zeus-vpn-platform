@@ -26,8 +26,8 @@ class WireGuardProfileBuilderTest {
         assertTrue(profile.contains("AllowedIPs = 0.0.0.0/0, ::/0"))
         assertTrue(profile.contains("Endpoint = vpn.example.test:51820"))
         assertTrue(profile.contains("PersistentKeepalive = 25"))
-        assertTrue(profile.contains("PrivateKey = \${clientKeys.privateKey.toBase64()}"))
-        assertTrue(profile.contains("PublicKey = \${serverKeys.publicKey.toBase64()}"))
+        assertTrue(profile.contains("PrivateKey = ${clientKeys.privateKey.toBase64()}"))
+        assertTrue(profile.contains("PublicKey = ${serverKeys.publicKey.toBase64()}"))
     }
 
     @Test

@@ -50,6 +50,7 @@ import android.net.VpnService
 import android.os.Build
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
 
@@ -83,6 +84,19 @@ fun ZeusDashboard() {
     val autoReconnect by produceState(true, settings) {
         settings.autoReconnectEnabled.collect { value = it }
     }
+
+    val trafficStats by produceState(WireGuardTrafficStats.EMPTY, wireGuard, wireGuardState) {
+        if (wireGuardState != WireGuardState.ENGINE_UP) {
+            value = WireGuardTrafficStats.EMPTY
+        } else {
+            while (true) {
+                runCatching { wireGuard.trafficStats() }
+                    .onSuccess { value = it }
+                delay(3_000L)
+            }
+        }
+    }
+
 
     val connectingMessage = stringResource(R.string.wg_connecting)
     val connectedMessage = stringResource(R.string.wg_engine_started)
@@ -234,6 +248,9 @@ fun ZeusDashboard() {
                 onConnect = requestWireGuardConnection,
                 onDisconnect = disconnectWireGuard,
             )
+            if (wireGuardState == WireGuardState.ENGINE_UP) {
+                TrafficStatsCard(trafficStats)
+            }
             NetworkCard(network)
             EngineCard()
             WireGuardCard(
@@ -664,6 +681,125 @@ private fun HeroCard(
             }
         }
     }
+}
+
+
+@Composable
+private fun TrafficStatsCard(stats: WireGuardTrafficStats) {
+    PanelCard {
+        Row(
+            Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Text("LIVE TUNNEL TRAFFIC", color = Mint,
+                    style = MaterialTheme.typography.labelSmall, letterSpacing = 1.05.sp)
+                Text("آمار ترافیک تونل", color = Color.White,
+                    style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+            }
+            StatusPill(Mint, "WireGuard")
+        }
+        Row(
+            Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            TrafficValue(
+                modifier = Modifier.weight(1f),
+                label = "دریافت‌شده",
+                value = formatTrafficBytes(stats.receivedBytes),
+                accent = ElectricBlue,
+                symbol = "↓",
+            )
+            TrafficValue(
+                modifier = Modifier.weight(1f),
+                label = "ارسال‌شده",
+                value = formatTrafficBytes(stats.sentBytes),
+                accent = Mint,
+                symbol = "↑",
+            )
+        }
+        HorizontalDivider(color = Line.copy(alpha = 0.75f))
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Box(Modifier.size(7.dp).background(
+                if (stats.latestHandshakeEpochMillis > 0L) Mint else Color(0xFFFFC46B),
+                CircleShape,
+            ))
+            Spacer(Modifier.width(9.dp))
+            Text(
+                formatLatestHandshake(stats.latestHandshakeEpochMillis),
+                color = if (stats.latestHandshakeEpochMillis > 0L) Mint else Color(0xFFFFC879),
+                style = MaterialTheme.typography.bodySmall,
+            )
+        }
+        Text(
+            "شمارنده‌ها از موتور WireGuard خوانده می‌شوند؛ فعال بودن موتور به‌تنهایی تضمین‌کنندهٔ عبور ترافیک نیست.",
+            color = SoftText,
+            style = MaterialTheme.typography.labelSmall,
+            lineHeight = 17.sp,
+        )
+    }
+}
+
+@Composable
+private fun TrafficValue(
+    modifier: Modifier,
+    label: String,
+    value: String,
+    accent: Color,
+    symbol: String,
+) {
+    Surface(
+        modifier = modifier,
+        shape = RoundedCornerShape(15.dp),
+        color = accent.copy(alpha = 0.07f),
+        border = BorderStroke(1.dp, accent.copy(alpha = 0.18f)),
+    ) {
+        Column(
+            Modifier.padding(horizontal = 12.dp, vertical = 13.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(symbol, color = accent, fontSize = 16.sp, fontWeight = FontWeight.Bold)
+                Spacer(Modifier.width(6.dp))
+                Text(label, color = SoftText, style = MaterialTheme.typography.labelSmall)
+            }
+            Text(
+                value,
+                color = Color.White,
+                fontSize = 16.sp,
+                fontWeight = FontWeight.Bold,
+                maxLines = 1,
+            )
+        }
+    }
+}
+
+private fun formatTrafficBytes(bytes: Long): String {
+    val safeBytes = bytes.coerceAtLeast(0L).toDouble()
+    val units = arrayOf("B", "KB", "MB", "GB", "TB")
+    var value = safeBytes
+    var unitIndex = 0
+    while (value >= 1024.0 && unitIndex < units.lastIndex) {
+        value /= 1024.0
+        unitIndex++
+    }
+    return if (unitIndex == 0) {
+        "${value.toLong()} ${units[unitIndex]}"
+    } else {
+        String.format(java.util.Locale.US, "%.1f %s", value, units[unitIndex])
+    }
+}
+
+private fun formatLatestHandshake(epochMillis: Long): String {
+    if (epochMillis <= 0L) return "هنوز Handshake موفقی ثبت نشده است"
+    val seconds = ((System.currentTimeMillis() - epochMillis).coerceAtLeast(0L)) / 1_000L
+    val elapsed = when {
+        seconds < 60L -> "${seconds} ثانیه قبل"
+        seconds < 3_600L -> "${seconds / 60L} دقیقه قبل"
+        seconds < 86_400L -> "${seconds / 3_600L} ساعت قبل"
+        else -> "${seconds / 86_400L} روز قبل"
+    }
+    return "آخرین Handshake: $elapsed"
 }
 
 @Composable

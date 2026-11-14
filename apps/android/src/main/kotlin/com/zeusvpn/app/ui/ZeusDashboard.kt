@@ -1,7 +1,16 @@
 package com.zeusvpn.app.ui
 
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
@@ -11,10 +20,17 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.rotate
+import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.role
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
@@ -41,6 +57,7 @@ private val Ink = Color(0xFF070D19)
 private val Panel = Color(0xFF111D31)
 private val Mint = Color(0xFF62E6C2)
 private val Violet = Color(0xFF9D85FF)
+private val ElectricBlue = Color(0xFF67C8FF)
 private val SoftText = Color(0xFF91A4B9)
 private val Line = Color(0xFF263650)
 
@@ -201,24 +218,9 @@ fun ZeusDashboard() {
 
     Box(
         Modifier.fillMaxSize()
-            .background(Brush.verticalGradient(listOf(Ink, Color(0xFF0A1729), Ink)))
+            .background(Brush.verticalGradient(listOf(Color(0xFF050A14), Color(0xFF0A1729), Ink)))
     ) {
-        Box(
-            Modifier.align(Alignment.TopEnd).offset(x = 72.dp, y = (-70).dp)
-                .size(250.dp)
-                .background(
-                    Brush.radialGradient(listOf(Mint.copy(alpha = 0.17f), Color.Transparent)),
-                    CircleShape,
-                )
-        )
-        Box(
-            Modifier.align(Alignment.BottomStart).offset(x = (-110).dp, y = 90.dp)
-                .size(260.dp)
-                .background(
-                    Brush.radialGradient(listOf(Violet.copy(alpha = 0.13f), Color.Transparent)),
-                    CircleShape,
-                )
-        )
+        AnimatedAuroraBackground()
 
         Column(
             Modifier.fillMaxSize().verticalScroll(rememberScrollState())
@@ -226,7 +228,12 @@ fun ZeusDashboard() {
             verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
             BrandHeader()
-            HeroCard()
+            HeroCard(
+                state = wireGuardState,
+                profileSaved = profileSaved,
+                onConnect = requestWireGuardConnection,
+                onDisconnect = disconnectWireGuard,
+            )
             NetworkCard(network)
             EngineCard()
             WireGuardCard(
@@ -237,8 +244,6 @@ fun ZeusDashboard() {
                 message = if (hasPendingEnrollment) "ثبت دستگاه در انتظار تکمیل است؛ قبل از جایگزینی پروفایل، همان ثبت قبلی را ادامه دهید." else wireGuardMessage,
                 onProfileDraftChange = { profileDraft = it },
                 onSaveProfile = saveWireGuardProfile,
-                onConnect = requestWireGuardConnection,
-                onDisconnect = disconnectWireGuard,
                 onForgetProfile = forgetWireGuardProfile,
             )
             EnrollmentCard(
@@ -364,76 +369,298 @@ private fun EnrollmentCard(
 }
 
 @Composable
+private fun AnimatedAuroraBackground() {
+    val transition = rememberInfiniteTransition(label = "zeus-aurora")
+    val driftX by transition.animateFloat(
+        initialValue = -20f,
+        targetValue = 24f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(durationMillis = 13_000, easing = FastOutSlowInEasing),
+            repeatMode = RepeatMode.Reverse,
+        ),
+        label = "aurora-drift-x",
+    )
+    val driftY by transition.animateFloat(
+        initialValue = 18f,
+        targetValue = -18f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(durationMillis = 16_000, easing = FastOutSlowInEasing),
+            repeatMode = RepeatMode.Reverse,
+        ),
+        label = "aurora-drift-y",
+    )
+
+    Box(Modifier.fillMaxSize()) {
+        Box(
+            Modifier
+                .align(Alignment.TopEnd)
+                .offset(x = (48f + driftX).dp, y = (-82f + driftY).dp)
+                .size(340.dp)
+                .background(
+                    Brush.radialGradient(
+                        listOf(Mint.copy(alpha = 0.19f), ElectricBlue.copy(alpha = 0.045f), Color.Transparent)
+                    ),
+                    CircleShape,
+                )
+        )
+        Box(
+            Modifier
+                .align(Alignment.BottomStart)
+                .offset(x = (-118f - driftY).dp, y = (82f + driftX).dp)
+                .size(310.dp)
+                .background(
+                    Brush.radialGradient(
+                        listOf(Violet.copy(alpha = 0.17f), ElectricBlue.copy(alpha = 0.035f), Color.Transparent)
+                    ),
+                    CircleShape,
+                )
+        )
+    }
+}
+
+@Composable
 private fun BrandHeader() {
+    val transition = rememberInfiniteTransition(label = "zeus-brand")
+    val logoPulse by transition.animateFloat(
+        initialValue = 0.97f,
+        targetValue = 1.035f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(durationMillis = 3_600, easing = FastOutSlowInEasing),
+            repeatMode = RepeatMode.Reverse,
+        ),
+        label = "brand-pulse",
+    )
+
     Row(
         Modifier.fillMaxWidth().padding(top = 4.dp, bottom = 2.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-            Text("ZEUS", color = Color.White, fontSize = 31.sp,
-                fontWeight = FontWeight.Black, letterSpacing = 3.sp)
-            Text(stringResource(R.string.brand_subtitle), color = SoftText,
-                style = MaterialTheme.typography.labelSmall, letterSpacing = 1.4.sp)
+        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+            Text(
+                "ZEUS",
+                color = Color.White,
+                fontSize = 32.sp,
+                fontWeight = FontWeight.Black,
+                letterSpacing = 3.5.sp,
+            )
+            Text(
+                stringResource(R.string.brand_subtitle).uppercase(),
+                color = SoftText,
+                style = MaterialTheme.typography.labelSmall,
+                letterSpacing = 1.6.sp,
+            )
         }
-        Surface(
-            shape = RoundedCornerShape(17.dp),
-            color = Mint.copy(alpha = 0.10f),
-            border = BorderStroke(1.dp, Mint.copy(alpha = 0.42f)),
+        Box(
+            Modifier
+                .size(58.dp)
+                .scale(logoPulse)
+                .clip(RoundedCornerShape(19.dp))
+                .background(Brush.linearGradient(listOf(Mint.copy(alpha = 0.20f), Violet.copy(alpha = 0.18f))))
+                .border(
+                    BorderStroke(1.dp, Brush.linearGradient(listOf(Mint, Violet, ElectricBlue))),
+                    RoundedCornerShape(19.dp),
+                ),
+            contentAlignment = Alignment.Center,
         ) {
-            Box(Modifier.size(52.dp), contentAlignment = Alignment.Center) {
-                Text("Z", color = Mint, fontSize = 26.sp, fontWeight = FontWeight.Black)
-            }
+            Text(
+                "Z",
+                color = Mint,
+                fontSize = 29.sp,
+                fontWeight = FontWeight.Black,
+            )
         }
     }
 }
 
 @Composable
-private fun HeroCard() {
+private fun HeroCard(
+    state: WireGuardState,
+    profileSaved: Boolean,
+    onConnect: () -> Unit,
+    onDisconnect: () -> Unit,
+) {
+    val transition = rememberInfiniteTransition(label = "zeus-connection-orbit")
+    val orbitRotation by transition.animateFloat(
+        initialValue = 0f,
+        targetValue = 360f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(durationMillis = 18_000, easing = LinearEasing),
+            repeatMode = RepeatMode.Restart,
+        ),
+        label = "connection-orbit-rotation",
+    )
+    val connectedPulse by transition.animateFloat(
+        initialValue = 0.96f,
+        targetValue = 1.045f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(durationMillis = 2_400, easing = FastOutSlowInEasing),
+            repeatMode = RepeatMode.Reverse,
+        ),
+        label = "connection-pulse",
+    )
+
+    val isConnected = state == WireGuardState.ENGINE_UP
+    val isBusy = state == WireGuardState.CONNECTING || state == WireGuardState.DISCONNECTING
+    val canToggle = isConnected || (state == WireGuardState.DISCONNECTED && profileSaved)
+    val (statusLabel, statusColor, helperText) = when (state) {
+        WireGuardState.DISCONNECTED -> Triple(
+            stringResource(R.string.wg_disconnected),
+            SoftText,
+            if (profileSaved) stringResource(R.string.wg_profile_is_saved)
+            else stringResource(R.string.wg_profile_required),
+        )
+        WireGuardState.CONNECTING -> Triple(
+            stringResource(R.string.wg_connecting),
+            Color(0xFFFFC46B),
+            stringResource(R.string.wg_connecting_message),
+        )
+        WireGuardState.ENGINE_UP -> Triple(
+            stringResource(R.string.wg_engine_up),
+            Mint,
+            stringResource(R.string.wg_engine_started),
+        )
+        WireGuardState.DISCONNECTING -> Triple(
+            stringResource(R.string.wg_disconnecting),
+            Color(0xFFFFC46B),
+            stringResource(R.string.wg_disconnecting),
+        )
+    }
+    val actionLabel = when {
+        isConnected -> stringResource(R.string.wg_disconnect)
+        isBusy -> statusLabel
+        else -> stringResource(R.string.wg_connect)
+    }
+
     Card(
         modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(26.dp),
+        shape = RoundedCornerShape(28.dp),
         colors = CardDefaults.cardColors(containerColor = Panel),
-        elevation = CardDefaults.cardElevation(defaultElevation = 8.dp),
-        border = BorderStroke(1.dp, Mint.copy(alpha = 0.20f)),
+        elevation = CardDefaults.cardElevation(defaultElevation = 10.dp),
+        border = BorderStroke(
+            1.dp,
+            Brush.linearGradient(listOf(Mint.copy(alpha = 0.50f), Violet.copy(alpha = 0.34f), ElectricBlue.copy(alpha = 0.18f))),
+        ),
     ) {
         Box(
             Modifier.fillMaxWidth()
                 .background(
                     Brush.linearGradient(
-                        listOf(Color(0xFF172C42), Color(0xFF122039), Color(0xFF1A2140))
+                        listOf(Color(0xFF142C40), Color(0xFF111D35), Color(0xFF1B1B3A))
                     )
                 )
-                .padding(21.dp)
+                .padding(18.dp)
         ) {
-            Column(
-                Modifier.fillMaxWidth(0.83f),
-                verticalArrangement = Arrangement.spacedBy(9.dp),
-            ) {
-                Text(stringResource(R.string.hero_kicker), color = Mint,
-                    style = MaterialTheme.typography.labelSmall, letterSpacing = 1.2.sp)
-                Text(stringResource(R.string.hero_heading), color = Color.White,
-                    style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
-                Text(stringResource(R.string.hero_description), color = SoftText,
-                    style = MaterialTheme.typography.bodySmall, lineHeight = 20.sp)
-                Surface(
-                    shape = RoundedCornerShape(8.dp),
-                    color = Color(0xFFF2C879).copy(alpha = 0.10f),
-                    border = BorderStroke(1.dp, Color(0xFFF2C879).copy(alpha = 0.22f)),
+            Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
+                Row(
+                    Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    Text(stringResource(R.string.preview_badge),
-                        Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
-                        color = Color(0xFFF2C879), style = MaterialTheme.typography.labelSmall)
+                    Column(
+                        Modifier.weight(1f),
+                        verticalArrangement = Arrangement.spacedBy(9.dp),
+                    ) {
+                        Text(
+                            stringResource(R.string.hero_kicker),
+                            color = Mint,
+                            style = MaterialTheme.typography.labelSmall,
+                            letterSpacing = 1.25.sp,
+                        )
+                        Text(
+                            stringResource(R.string.hero_heading),
+                            color = Color.White,
+                            fontSize = 21.sp,
+                            lineHeight = 27.sp,
+                            fontWeight = FontWeight.Bold,
+                        )
+                        Text(
+                            stringResource(R.string.hero_description),
+                            color = SoftText,
+                            style = MaterialTheme.typography.bodySmall,
+                            lineHeight = 19.sp,
+                        )
+                    }
+
+                    Spacer(Modifier.width(8.dp))
+
+                    Box(Modifier.size(126.dp), contentAlignment = Alignment.Center) {
+                        Box(
+                            Modifier
+                                .fillMaxSize()
+                                .border(
+                                    BorderStroke(
+                                        1.dp,
+                                        Brush.sweepGradient(listOf(Mint.copy(alpha = 0.82f), Violet.copy(alpha = 0.72f), ElectricBlue.copy(alpha = 0.82f), Mint.copy(alpha = 0.82f))),
+                                    ),
+                                    CircleShape,
+                                )
+                        )
+                        Box(
+                            Modifier.fillMaxSize().rotate(orbitRotation),
+                            contentAlignment = Alignment.TopCenter,
+                        ) {
+                            Box(
+                                Modifier
+                                    .size(9.dp)
+                                    .background(if (isConnected) Mint else ElectricBlue, CircleShape)
+                            )
+                        }
+                        Box(
+                            Modifier
+                                .size(88.dp)
+                                .scale(if (isConnected) connectedPulse else 1f)
+                                .clip(CircleShape)
+                                .background(
+                                    Brush.linearGradient(
+                                        if (isConnected) listOf(Mint, ElectricBlue)
+                                        else listOf(Color(0xFF8E86FF), Mint),
+                                    )
+                                )
+                                .border(BorderStroke(1.dp, Color.White.copy(alpha = 0.34f)), CircleShape)
+                                .clickable(enabled = canToggle && !isBusy) {
+                                    if (isConnected) onDisconnect() else onConnect()
+                                }
+                                .semantics {
+                                    contentDescription = actionLabel
+                                    role = Role.Button
+                                },
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Text(
+                                "⏻",
+                                color = Ink,
+                                fontSize = 37.sp,
+                                fontWeight = FontWeight.Bold,
+                            )
+                        }
+                    }
                 }
-            }
-            Surface(
-                modifier = Modifier.align(Alignment.CenterEnd).size(54.dp),
-                shape = RoundedCornerShape(18.dp),
-                color = Mint.copy(alpha = 0.11f),
-                border = BorderStroke(1.dp, Mint.copy(alpha = 0.35f)),
-            ) {
-                Box(contentAlignment = Alignment.Center) {
-                    Text("Z", color = Mint, fontSize = 28.sp, fontWeight = FontWeight.Black)
+
+                Row(
+                    Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                ) {
+                    StatusPill(statusColor, statusLabel)
+                    Text(
+                        actionLabel,
+                        color = if (canToggle) Mint else SoftText,
+                        style = MaterialTheme.typography.labelMedium,
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                    Spacer(Modifier.weight(1f))
+                    Text(
+                        stringResource(R.string.preview_badge),
+                        color = Color(0xFFFFC879),
+                        style = MaterialTheme.typography.labelSmall,
+                    )
                 }
+
+                Text(
+                    helperText,
+                    color = SoftText,
+                    style = MaterialTheme.typography.bodySmall,
+                    lineHeight = 18.sp,
+                )
             }
         }
     }
@@ -494,8 +721,6 @@ private fun WireGuardCard(
     message: String,
     onProfileDraftChange: (String) -> Unit,
     onSaveProfile: () -> Unit,
-    onConnect: () -> Unit,
-    onDisconnect: () -> Unit,
     onForgetProfile: () -> Unit,
 ) {
     val (statusLabel, statusColor) = when (state) {
@@ -550,40 +775,23 @@ private fun WireGuardCard(
             lineHeight = 19.sp,
         )
 
-        Row(
-            Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(9.dp),
-            verticalAlignment = Alignment.CenterVertically,
+        Button(
+            onClick = onSaveProfile,
+            enabled = profileDraft.isNotBlank() && state != WireGuardState.ENGINE_UP && !pendingEnrollment,
+            modifier = Modifier.fillMaxWidth(),
+            colors = ButtonDefaults.buttonColors(containerColor = Mint, contentColor = Ink),
         ) {
-            Button(
-                onClick = onSaveProfile,
-                enabled = profileDraft.isNotBlank() && state != WireGuardState.ENGINE_UP && !pendingEnrollment,
-                modifier = Modifier.weight(1f),
-                colors = ButtonDefaults.buttonColors(containerColor = Mint, contentColor = Ink),
-            ) {
-                Text(
-                    if (profileSaved) stringResource(R.string.wg_replace_profile)
-                    else stringResource(R.string.wg_save_profile),
-                    fontWeight = FontWeight.SemiBold,
-                )
-            }
-            OutlinedButton(
-                onClick = if (state == WireGuardState.ENGINE_UP) onDisconnect else onConnect,
-                enabled = when (state) {
-                    WireGuardState.ENGINE_UP -> true
-                    WireGuardState.CONNECTING, WireGuardState.DISCONNECTING -> false
-                    WireGuardState.DISCONNECTED -> profileSaved
-                },
-                modifier = Modifier.weight(1f),
-                border = BorderStroke(1.dp, statusColor.copy(alpha = 0.55f)),
-            ) {
-                Text(
-                    if (state == WireGuardState.ENGINE_UP) stringResource(R.string.wg_disconnect)
-                    else stringResource(R.string.wg_connect),
-                    color = Color.White,
-                )
-            }
+            Text(
+                if (profileSaved) stringResource(R.string.wg_replace_profile)
+                else stringResource(R.string.wg_save_profile),
+                fontWeight = FontWeight.SemiBold,
+            )
         }
+        Text(
+            "کنترل اتصال از دکمهٔ مرکزی بالای صفحه انجام می‌شود.",
+            color = SoftText,
+            style = MaterialTheme.typography.labelSmall,
+        )
 
         if (profileSaved) {
             TextButton(
@@ -679,7 +887,12 @@ private fun PanelCard(content: @Composable ColumnScope.() -> Unit) {
         shape = RoundedCornerShape(22.dp),
         colors = CardDefaults.cardColors(containerColor = Panel.copy(alpha = 0.96f)),
         elevation = CardDefaults.cardElevation(defaultElevation = 5.dp),
-        border = BorderStroke(1.dp, Color.White.copy(alpha = 0.075f)),
+        border = BorderStroke(
+            1.dp,
+            Brush.linearGradient(
+                listOf(Mint.copy(alpha = 0.18f), Violet.copy(alpha = 0.12f), Color.White.copy(alpha = 0.045f))
+            ),
+        ),
     ) {
         Column(
             Modifier.padding(19.dp),

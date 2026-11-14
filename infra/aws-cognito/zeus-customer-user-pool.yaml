@@ -1,0 +1,107 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: "ZEUS VPN customer identity - Cognito self-registration, verified email, and native OIDC authorization-code PKCE"
+
+Resources:
+  ZeusCustomerUserPool:
+    Type: AWS::Cognito::UserPool
+    Properties:
+      UserPoolName: ZEUS-VPN-Customers
+      UsernameAttributes:
+        - email
+      AutoVerifiedAttributes:
+        - email
+      AdminCreateUserConfig:
+        AllowAdminCreateUserOnly: false
+      Policies:
+        PasswordPolicy:
+          MinimumLength: 14
+          RequireUppercase: true
+          RequireLowercase: true
+          RequireNumbers: true
+          RequireSymbols: true
+          PasswordHistorySize: 8
+          TemporaryPasswordValidityDays: 1
+      AccountRecoverySetting:
+        RecoveryMechanisms:
+          - Name: verified_email
+            Priority: 1
+      EmailConfiguration:
+        EmailSendingAccount: COGNITO_DEFAULT
+      VerificationMessageTemplate:
+        DefaultEmailOption: CONFIRM_WITH_CODE
+        EmailSubject: "ZEUS VPN verification code"
+        EmailMessage: "Your ZEUS VPN verification code is {####}."
+      MfaConfiguration: OPTIONAL
+      EnabledMfas:
+        - SOFTWARE_TOKEN_MFA
+      UserPoolAddOns:
+        AdvancedSecurityMode: AUDIT
+      Schema:
+        - Name: email
+          AttributeDataType: String
+          Mutable: true
+          Required: true
+        - Name: name
+          AttributeDataType: String
+          Mutable: true
+          Required: false
+      UserPoolTags:
+        Application: ZEUS-VPN
+        ManagedBy: CloudFormation
+
+  ZeusCustomerUserPoolDomain:
+    Type: AWS::Cognito::UserPoolDomain
+    Properties:
+      Domain: !Sub "zeusvpn-${AWS::AccountId}-${AWS::Region}"
+      UserPoolId: !Ref ZeusCustomerUserPool
+      ManagedLoginVersion: 2
+
+  ZeusAndroidPublicClient:
+    Type: AWS::Cognito::UserPoolClient
+    DependsOn:
+      - ZeusCustomerUserPoolDomain
+    Properties:
+      ClientName: ZEUS-Android-Public
+      UserPoolId: !Ref ZeusCustomerUserPool
+      GenerateSecret: false
+      EnableTokenRevocation: true
+      PreventUserExistenceErrors: ENABLED
+      ExplicitAuthFlows:
+        - ALLOW_REFRESH_TOKEN_AUTH
+      AllowedOAuthFlowsUserPoolClient: true
+      AllowedOAuthFlows:
+        - code
+      AllowedOAuthScopes:
+        - openid
+        - email
+        - profile
+      CallbackURLs:
+        - "com.zeusvpn.app:/oauth2redirect"
+      LogoutURLs:
+        - "com.zeusvpn.app:/oauth2redirect"
+      SupportedIdentityProviders:
+        - COGNITO
+      AccessTokenValidity: 60
+      IdTokenValidity: 60
+      RefreshTokenValidity: 30
+      TokenValidityUnits:
+        AccessToken: minutes
+        IdToken: minutes
+        RefreshToken: days
+
+Outputs:
+  UserPoolId:
+    Description: Cognito user pool identifier
+    Value: !Ref ZeusCustomerUserPool
+  OidcIssuer:
+    Description: OIDC issuer for ZEUS Control Plane and Android
+    Value: !Sub "https://cognito-idp.${AWS::Region}.amazonaws.com/${ZeusCustomerUserPool}"
+  OidcClientId:
+    Description: Public Android OIDC client ID - not a secret
+    Value: !Ref ZeusAndroidPublicClient
+  HostedUiDomain:
+    Description: Cognito managed login domain for browser-based sign-up and sign-in
+    Value: !Sub "https://zeusvpn-${AWS::AccountId}-${AWS::Region}.auth.${AWS::Region}.amazoncognito.com"
+  RedirectUri:
+    Description: Exact native Android redirect URI to register in AppAuth
+    Value: "com.zeusvpn.app:/oauth2redirect"

@@ -858,6 +858,15 @@ func TestPostgresStoreIntegration(t *testing.T) {
 		t.Fatalf("unexpected client enrollment result: %+v", enrolledDevice)
 	}
 
+	// Customers can poll only their own device's asynchronous node provisioning state.
+	statusDevice, statusErr := store.GetCustomerVPNDevice(ctx, enrollmentUserID, enrolledDevice.ID)
+	if statusErr != nil || statusDevice.Status != "provisioning" || statusDevice.Peer.Status != "pending" {
+		t.Fatalf("customer device status lookup failed: device=%+v err=%v", statusDevice, statusErr)
+	}
+	if _, statusErr := store.GetCustomerVPNDevice(ctx, deviceUserID, enrolledDevice.ID); !errors.Is(statusErr, ErrDeviceNotFound) {
+		t.Fatalf("customer device lookup leaked another user's device: err=%v", statusErr)
+	}
+
 	// Lost-response retry with the same key is idempotent.
 	clientEnrollReplay := httptest.NewRequest(http.MethodPost, "/v1/client/enroll", bytes.NewReader(enrollmentBody))
 	clientEnrollReplay.Header.Set("Idempotency-Key", enrollmentKey)

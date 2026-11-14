@@ -372,6 +372,29 @@ func getVPNDeviceTx(ctx context.Context, tx pgx.Tx, deviceID string) (VPNDevice,
 	return device, err
 }
 
+func (s *PostgresStore) GetCustomerVPNDevice(ctx context.Context, userID, deviceID string) (VPNDevice, error) {
+	if !uuidPattern.MatchString(userID) || !uuidPattern.MatchString(deviceID) {
+		return VPNDevice{}, ErrDeviceNotFound
+	}
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return VPNDevice{}, err
+	}
+	defer tx.Rollback(ctx)
+
+	device, err := getVPNDeviceTx(ctx, tx, deviceID)
+	if errors.Is(err, pgx.ErrNoRows) || (err == nil && device.UserID != userID) {
+		return VPNDevice{}, ErrDeviceNotFound
+	}
+	if err != nil {
+		return VPNDevice{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return VPNDevice{}, err
+	}
+	return device, nil
+}
+
 func (s *PostgresStore) ListVPNDevices(ctx context.Context, userID string) ([]VPNDevice, error) {
 	rows, err := s.pool.Query(ctx, `
 		SELECT d.id::text, d.user_id::text, d.device_ref, d.device_name, d.platform,

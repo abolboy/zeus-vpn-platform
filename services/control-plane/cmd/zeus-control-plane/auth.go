@@ -75,9 +75,13 @@ func newLoginLimiter() *loginLimiter {
 }
 
 func (l *loginLimiter) allow(key string, now time.Time) bool {
-	const window = 5 * time.Minute
-	const maximum = 8
+	return l.allowWindow(key, now, 8, 5*time.Minute)
+}
 
+func (l *loginLimiter) allowWindow(key string, now time.Time, maximum int, window time.Duration) bool {
+	if maximum < 1 || window <= 0 {
+		return false
+	}
 	l.mu.Lock()
 	defer l.mu.Unlock()
 

@@ -76,6 +76,7 @@ Do not register a node for client provisioning until its endpoint, server public
 - POST /v1/auth/login, GET /v1/auth/me, POST /v1/auth/logout: operator sessions.
 - Authenticated user/device APIs support owner/admin mutations and read access for support/read-only roles.
 - POST /v1/client/enroll: accepts either the legacy one-time activation code (no bearer token) or an OIDC ID token (Authorization: Bearer). The OIDC path requires verified email and binds the customer to issuer + subject, provisions the account on first use, and returns HTTP 202 while peer provisioning remains asynchronous.
+- GET /v1/client/devices/{deviceID}: authenticated customer-only status lookup. The Android app polls this endpoint before saving the generated profile and only completes automatic enrollment after the node acknowledges the peer as active.
 - GET /v1/nodes/{nodeID}/certificates: authenticated certificate inventory for owner/admin/support/read_only.
 - POST /v1/nodes/{nodeID}/certificates: owner/admin registration of a CA-verified, node-bound ClientAuth certificate.
 - POST /v1/nodes/{nodeID}/certificates/{certificateID}/revoke: owner/admin certificate revocation.

@@ -70,6 +70,60 @@ func (a *API) verifyCustomerIdentity(ctx context.Context, authorizationHeader st
 	return claims, idToken.Issuer + "|" + idToken.Subject, nil
 }
 
+func (a *API) handleCustomerDeviceStatus(w http.ResponseWriter, r *http.Request) {
+	requestID := requestIDFrom(r)
+	if a.customerVerifier == nil {
+		writeError(w, http.StatusServiceUnavailable, "customer_identity_not_configured", "ورود و ثبت‌نام مشتری هنوز پیکربندی نشده است", requestID)
+		return
+	}
+	ip := remoteIP(r.RemoteAddr)
+	limiterKey := "unknown"
+	if ip != nil {
+		limiterKey = *ip
+	}
+	if a.customerStatusLimiter == nil || !a.customerStatusLimiter.allowWindow(limiterKey, time.Now(), 30, time.Minute) {
+		w.Header().Set("Retry-After", "60")
+		writeError(w, http.StatusTooManyRequests, "rate_limited", "درخواست‌های بررسی وضعیت بیش از حد مجاز است", requestID)
+		return
+	}
+	_, externalRef, err := a.verifyCustomerIdentity(r.Context(), r.Header.Get("Authorization"))
+	if err != nil {
+		writeError(w, http.StatusUnauthorized, "customer_identity_invalid", "نشست مشتری معتبر یا تأییدشده نیست", requestID)
+		return
+	}
+	deviceID := r.PathValue("deviceID")
+	if !uuidPattern.MatchString(deviceID) {
+		writeError(w, http.StatusBadRequest, "invalid_device_id", "شناسه دستگاه معتبر نیست", requestID)
+		return
+	}
+	store, ok := a.store.(CustomerSelfServiceStore)
+	if !ok {
+		writeError(w, http.StatusServiceUnavailable, "not_ready", "بررسی وضعیت دستگاه آماده نیست", requestID)
+		return
+	}
+	user, err := store.EnsureExternalVPNUser(r.Context(), externalRef, "")
+	if err != nil {
+		a.logger.Error("customer account lookup failed", "request_id", requestID)
+		writeError(w, http.StatusInternalServerError, "customer_account_unavailable", "دریافت حساب مشتری انجام نشد", requestID)
+		return
+	}
+	if user.Status != "active" {
+		writeError(w, http.StatusForbidden, "customer_account_inactive", "حساب مشتری فعال نیست", requestID)
+		return
+	}
+	device, err := store.GetCustomerVPNDevice(r.Context(), user.ID, deviceID)
+	if errors.Is(err, ErrDeviceNotFound) {
+		writeError(w, http.StatusNotFound, "device_not_found", "دستگاه پیدا نشد", requestID)
+		return
+	}
+	if err != nil {
+		a.logger.Error("customer device status lookup failed", "request_id", requestID)
+		writeError(w, http.StatusInternalServerError, "device_status_unavailable", "بررسی وضعیت دستگاه انجام نشد", requestID)
+		return
+	}
+	writeJSON(w, http.StatusOK, device)
+}
+
 func (a *API) handleCustomerClientEnrollment(w http.ResponseWriter, r *http.Request) {
 	requestID := requestIDFrom(r)
 	ip := remoteIP(r.RemoteAddr)

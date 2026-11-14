@@ -31,6 +31,7 @@ type API struct {
 	logger       *slog.Logger
 	limiter      *loginLimiter
 	enrollmentLimiter *loginLimiter
+	customerStatusLimiter *loginLimiter
 	hashSlots    chan struct{}
 	dummyHash    string
 	allowedOrigin map[string]struct{}
@@ -107,7 +108,8 @@ func NewAPI(version string, store ControlStore, logger *slog.Logger, allowedOrig
 	}
 	return &API{
 		version: version, store: store, logger: logger,
-		limiter: newLoginLimiter(), enrollmentLimiter: newLoginLimiter(), hashSlots: make(chan struct{}, 2),
+		limiter: newLoginLimiter(), enrollmentLimiter: newLoginLimiter(),
+		customerStatusLimiter: newLoginLimiter(), hashSlots: make(chan struct{}, 2),
 		dummyHash: dummyHash, allowedOrigin: origins,
 	}, nil
 }
@@ -128,6 +130,7 @@ func (a *API) Handler() http.Handler {
 	mux.HandleFunc("POST /v1/users/{userID}/devices", a.handleCreateDevice)
 	mux.HandleFunc("POST /v1/users/{userID}/enrollment-code", a.handleCreateEnrollmentCode)
 	mux.HandleFunc("POST /v1/client/enroll", a.handleClientEnrollment)
+	mux.HandleFunc("GET /v1/client/devices/{deviceID}", a.handleCustomerDeviceStatus)
 	mux.HandleFunc("POST /v1/users/{userID}/devices/{deviceID}/revoke", a.handleRevokeDevice)
 	mux.HandleFunc("GET /v1/nodes", a.handleListNodes)
 	mux.HandleFunc("POST /v1/nodes", a.handleCreateNode)

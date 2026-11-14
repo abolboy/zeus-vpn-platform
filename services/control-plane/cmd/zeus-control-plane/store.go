@@ -150,6 +150,7 @@ type DeviceMutationStore interface {
 type CustomerSelfServiceStore interface {
 	EnsureExternalVPNUser(context.Context, string, string) (VPNUser, error)
 	EnrollCustomerVPNDevice(context.Context, string, string, []byte, CreateDeviceInput, string, *string) (VPNDevice, bool, error)
+	GetCustomerVPNDevice(context.Context, string, string) (VPNDevice, error)
 }
 
 type NodeAgentStore interface {

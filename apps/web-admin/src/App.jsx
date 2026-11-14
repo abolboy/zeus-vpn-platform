@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { getControlPlaneHealth, isControlPlaneConfigured, loginOperator, logoutOperator, listVPNUsers, createVPNUser, updateVPNUser, createIdempotencyKey, listVPNDevices, revokeVPNDevice, createDeviceEnrollmentCode, createVPNNode, listVPNNodes, listNodeCertificates, registerNodeCertificate, revokeNodeCertificate } from './api.js'
+import { getNodeCertificateState } from './certificateLifecycle.js'
 
 const initialServers = [
   { id: 1, name: 'ZEUS • Frankfurt', region: 'آلمان', ip: '185.220.101.14', protocol: 'WireGuard', load: 38, latency: 82, status: 'online', users: 128 },
@@ -25,7 +26,7 @@ function Metric({ icon, label, value, note, tone = '' }) {
   return <article className="metric glass"><div className="metric-top"><span className="metric-icon">{icon}</span><span className="metric-note">{note}</span></div><div className="metric-value">{value}</div><div className="metric-label">{label}</div><div className={`metric-line ${tone}`} /></article>
 }
 function Status({ value }) {
-  const label = value === 'online' || value === 'active' ? 'فعال' : value === 'pending' || value === 'provisioning' ? 'در انتظار' : value === 'degraded' ? 'ناپایدار' : value === 'offline' ? 'آفلاین' : value === 'revoked' ? 'ابطال‌شده' : value === 'suspended' ? 'معلق' : value === 'disabled' ? 'غیرفعال' : 'منقضی'
+  const label = value === 'online' || value === 'active' ? 'فعال' : value === 'pending' || value === 'provisioning' ? 'در انتظار' : value === 'degraded' ? 'ناپایدار' : value === 'offline' ? 'آفلاین' : value === 'revoked' ? 'ابطال‌شده' : value === 'suspended' ? 'معلق' : value === 'disabled' ? 'غیرفعال' : value === 'expiring' ? 'نزدیک انقضا' : value === 'not_yet_valid' ? 'هنوز معتبر نشده' : value === 'unknown' ? 'نامشخص' : 'منقضی'
   return <span className={`status ${value}`}><i />{label}</span>
 }
 
@@ -679,12 +680,14 @@ export default function App() {
       if (inFlight) return
       inFlight = true
       const deviceSequence = deviceFetchSequence.current
+      const certificateSequence = nodeCertificateFetchSequence.current
       try {
-        const [healthResult, nodesResult, usersResult, devicesResult] = await Promise.allSettled([
+        const [healthResult, nodesResult, usersResult, devicesResult, certificatesResult] = await Promise.allSettled([
           getControlPlaneHealth(),
           listVPNNodes(accessToken),
           listVPNUsers(accessToken, { limit: 100 }),
           devicesUserId ? listVPNDevices(accessToken, devicesUserId) : Promise.resolve(null),
+          selectedNodeID ? listNodeCertificates(accessToken, selectedNodeID) : Promise.resolve(null),
         ])
         if (!active) return
 
@@ -693,7 +696,7 @@ export default function App() {
           setApiMessage(healthResult.value.message)
         }
 
-        const unauthorized = [nodesResult, usersResult, devicesResult]
+        const unauthorized = [nodesResult, usersResult, devicesResult, certificatesResult]
           .some(result => result.status === 'rejected' && result.reason?.status === 401)
         if (unauthorized) {
           setAccessToken('')
@@ -739,6 +742,17 @@ export default function App() {
           setRemoteDevicesError(devicesResult.reason?.message || 'بروزرسانی دستگاه‌ها انجام نشد.')
           setRemoteDevicesState('error')
         }
+
+        if (selectedNodeID && certificatesResult.status === 'fulfilled' &&
+            certificateSequence === nodeCertificateFetchSequence.current) {
+          setNodeCertificates(Array.isArray(certificatesResult.value?.items) ? certificatesResult.value.items : [])
+          setNodeCertificatesState('loaded')
+          setNodeCertificatesError('')
+        } else if (selectedNodeID && certificatesResult.status === 'rejected' &&
+                   certificateSequence === nodeCertificateFetchSequence.current) {
+          setNodeCertificatesError(certificatesResult.reason?.message || 'بروزرسانی گواهی‌ها انجام نشد.')
+          setNodeCertificatesState('error')
+        }
       } finally {
         inFlight = false
       }
@@ -749,7 +763,7 @@ export default function App() {
       active = false
       window.clearInterval(timer)
     }
-  }, [autoRefresh, accessToken, devicesUserId])
+  }, [autoRefresh, accessToken, devicesUserId, selectedNodeID])
 
   function addServer(event) {
     event.preventDefault()
@@ -762,6 +776,10 @@ export default function App() {
     setUsers(current => current.map(user => user.id === id ? { ...user, status: user.status === 'active' ? 'expired' : 'active' } : user))
     toast('وضعیت نمایشی کاربر تغییر کرد؛ API هنوز متصل نیست.')
   }
+
+  const expiredCertificateCount = nodeCertificates.filter(certificate => getNodeCertificateState(certificate).status === 'expired').length
+  const expiringCertificateCount = nodeCertificates.filter(certificate => getNodeCertificateState(certificate).status === 'expiring').length
+  const notYetValidCertificateCount = nodeCertificates.filter(certificate => getNodeCertificateState(certificate).status === 'not_yet_valid').length
 
   if (isControlPlaneConfigured && !accessToken) {
     return <div className={`app theme-${theme} login-screen`}>
@@ -909,13 +927,23 @@ export default function App() {
               </div>
             </form>}
             {nodeCertificatesError && <div className="remote-users-error" role="alert">{nodeCertificatesError}</div>}
+            {expiredCertificateCount > 0 && <div className="node-certificate-alert expired" role="alert">{expiredCertificateCount} گواهی منقضی شده است؛ برای جایگزینی، گواهی تازه را ثبت و پس از تأیید اتصال، گواهی قبلی را باطل کنید.</div>}
+            {expiringCertificateCount > 0 && <div className="node-certificate-alert expiring" role="status">{expiringCertificateCount} گواهی در ۳۰ روز آینده منقضی می‌شود؛ چرخش گواهی را پیش از پایان اعتبار برنامه‌ریزی کنید.</div>}
+            {notYetValidCertificateCount > 0 && <div className="node-certificate-alert not-yet-valid" role="alert">{notYetValidCertificateCount} گواهی هنوز وارد بازهٔ اعتبار نشده است؛ ساعت سیستم و زمان صدور گواهی را بررسی کنید.</div>}
             <div className="node-certificate-list">
               {nodeCertificates.map(certificate => {
-                const expired = new Date(certificate.not_after).getTime() <= Date.now()
-                const state = certificate.revoked_at ? 'revoked' : expired ? 'expired' : 'active'
+                const lifecycle = getNodeCertificateState(certificate)
+                const notBefore = Date.parse(certificate.not_before)
+                const notAfter = Date.parse(certificate.not_after)
+                const validityLabel = lifecycle.status === 'unknown'
+                  ? 'بازهٔ اعتبار نامعتبر است'
+                  : lifecycle.status === 'not_yet_valid'
+                    ? `شروع اعتبار ${Number.isFinite(notBefore) ? new Date(notBefore).toLocaleString('fa-IR') : 'نامشخص'}`
+                    : `اعتبار تا ${Number.isFinite(notAfter) ? new Date(notAfter).toLocaleString('fa-IR') : 'نامشخص'}`
+                const remainingLabel = lifecycle.daysRemaining == null ? '' : ` · ${lifecycle.daysRemaining} روز باقی‌مانده`
                 return <article className="node-certificate-card" key={certificate.id}>
-                  <div><b>SHA-256</b><code dir="ltr">{certificate.fingerprint_sha256}</code><small>اعتبار تا {new Date(certificate.not_after).toLocaleString('fa-IR')}</small></div>
-                  <Status value={state}/>
+                  <div><b>SHA-256</b><code dir="ltr">{certificate.fingerprint_sha256}</code><small>{validityLabel}{remainingLabel}</small></div>
+                  <Status value={lifecycle.status}/>
                   {canManageRemoteUsers && !certificate.revoked_at && <button className="mini-action danger" onClick={() => revokeSelectedNodeCertificate(certificate)} disabled={nodeCertificateMutationID === certificate.id}>{nodeCertificateMutationID === certificate.id ? '...' : 'ابطال'}</button>}
                 </article>
               })}
@@ -1068,7 +1096,7 @@ export default function App() {
 
       {page === 'activity' && <section className="panel glass full-panel"><div className="panel-heading"><div><h2>گزارش رویدادها</h2><p>رخدادهای نمونه؛ لاگ واقعی هنوز به پنل متصل نیست</p></div><span className="live-indicator"><i/> DEMO LOG</span></div><div className="devices-empty">گزارش ممیزی هنوز endpoint خواندنی در Control Plane ندارد؛ رویداد نمونه یا ساختگی نمایش داده نمی‌شود.</div></section>}
 
-      {page === 'settings' && <section className="panel glass full-panel settings-panel"><div className="panel-heading"><div><h2>تنظیمات پنل</h2><p>ترجیحات رابط کاربری و رفتار نمایشی</p></div></div><div className="setting-row"><span><b>بروزرسانی خودکار رابط</b><small>در صورت فعال بودن، نودها و کاربران هر ۳۰ ثانیه از API تازه می‌شوند؛ دستگاه بازشده نیز همراه آن بروزرسانی می‌شود.</small></span><button className={autoRefresh?'switch on':'switch'} onClick={()=>setAutoRefresh(v=>!v)} aria-label="تغییر بروزرسانی خودکار"><i/></button></div><div className="setting-row"><span><b>وضعیت Control Plane</b><small>{apiMessage} — این بررسی فقط GET /healthz را می‌خواند و به معنی اتصال داده‌های مدیریتی نیست.</small></span><button className="button secondary" onClick={checkControlPlane}>بررسی دوباره</button></div><div className="setting-row"><span><b>حالت فشرده</b><small>کاهش فاصله‌ها برای نمایش اطلاعات بیشتر.</small></span><button className={compact?'switch on':'switch'} onClick={()=>setCompact(v=>!v)} aria-label="تغییر حالت فشرده"><i/></button></div><div className="setting-row"><span><b>پوسته فعلی</b><small>{themes.find(t=>t.id===theme).name}</small></span><button className="button secondary" onClick={()=>setTheme(themes[(themes.findIndex(t=>t.id===theme)+1)%themes.length].id)}>تغییر پوسته</button></div><div className="notice-box">امنیت: این نسخه به API واقعی، احراز هویت یا داده تولیدی متصل نیست. پیش از اتصال عمومی باید ورود امن، نقش‌ها، CSRF/CORS، اعتبارسنجی ورودی و ثبت ممیزی پیاده‌سازی شوند.</div></section>}
+      {page === 'settings' && <section className="panel glass full-panel settings-panel"><div className="panel-heading"><div><h2>تنظیمات پنل</h2><p>ترجیحات رابط کاربری و رفتار نمایشی</p></div></div><div className="setting-row"><span><b>بروزرسانی خودکار رابط</b><small>در صورت فعال بودن، نودها و کاربران هر ۳۰ ثانیه از API تازه می‌شوند؛ فهرست دستگاه یا گواهیِ بازشده نیز بروزرسانی می‌شود.</small></span><button className={autoRefresh?'switch on':'switch'} onClick={()=>setAutoRefresh(v=>!v)} aria-label="تغییر بروزرسانی خودکار"><i/></button></div><div className="setting-row"><span><b>وضعیت Control Plane</b><small>{apiMessage} — این بررسی فقط GET /healthz را می‌خواند و به معنی اتصال داده‌های مدیریتی نیست.</small></span><button className="button secondary" onClick={checkControlPlane}>بررسی دوباره</button></div><div className="setting-row"><span><b>حالت فشرده</b><small>کاهش فاصله‌ها برای نمایش اطلاعات بیشتر.</small></span><button className={compact?'switch on':'switch'} onClick={()=>setCompact(v=>!v)} aria-label="تغییر حالت فشرده"><i/></button></div><div className="setting-row"><span><b>پوسته فعلی</b><small>{themes.find(t=>t.id===theme).name}</small></span><button className="button secondary" onClick={()=>setTheme(themes[(themes.findIndex(t=>t.id===theme)+1)%themes.length].id)}>تغییر پوسته</button></div><div className="notice-box">امنیت: این نسخه به API واقعی، احراز هویت یا داده تولیدی متصل نیست. پیش از اتصال عمومی باید ورود امن، نقش‌ها، CSRF/CORS، اعتبارسنجی ورودی و ثبت ممیزی پیاده‌سازی شوند.</div></section>}
 
       {isControlPlaneConfigured && remoteUsersState === 'error' && <div className="remote-users-error" role="alert">{remoteUsersError}</div>}
       <footer className="footer"><span>© ۲۰۲۶ ZEUS VPN PLATFORM</span><span>ساخته‌شده برای کنترل دقیق‌تر <i>✦</i></span><span className="footer-version">FRONTEND PREVIEW 0.1.0</span></footer>

@@ -29,6 +29,8 @@ jobs:
           node-version: '24'
       - name: Install pinned dependencies
         run: npm install --ignore-scripts --no-audit --no-fund
+      - name: Test certificate lifecycle rules
+        run: npm test
       - name: Build SPA
         run: npm run build
 

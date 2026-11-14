@@ -211,7 +211,7 @@ fun ZeusDashboard() {
                         if (VpnService.prepare(context) != null) {
                             wireGuardMessage = "برای اتصال مجدد، مجوز VPN اندروید را دوباره تأیید کنید."
                             settings.setTunnelDesired(false)
-                            return@LaunchedEffect
+                            return@collectLatest
                         }
                         try {
                             wireGuardMessage = "شبکه در دسترس است؛ در حال برقراری مجدد تونل..."

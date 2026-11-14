@@ -171,3 +171,42 @@ func (s *PostgresStore) RevokeNodeAgentCertificate(ctx context.Context, actorID,
 	}
 	return certificate, replayed, nil
 }
+
+func (s *PostgresStore) ListVPNNodes(ctx context.Context) ([]VPNNode, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT n.id::text, n.name, n.region, n.endpoint_host, n.endpoint_port,
+		       n.public_key, n.interface_name, n.status, n.last_seen_at,
+		       n.client_ipv4_pool::text, n.client_ipv6_pool::text,
+		       n.interface_ipv4::text, n.interface_ipv6::text,
+		       (
+		           SELECT count(*)::int
+		           FROM vpn_node_agent_certificates ac
+		           WHERE ac.node_id = n.id
+		             AND ac.revoked_at IS NULL
+		             AND ac.not_before <= now()
+		             AND ac.not_after > now()
+		       ) AS active_certificate_count,
+		       n.created_at
+		FROM vpn_nodes n
+		ORDER BY n.created_at DESC, n.id DESC
+		LIMIT 500
+	`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	nodes := make([]VPNNode, 0)
+	for rows.Next() {
+		var node VPNNode
+		if err := rows.Scan(
+			&node.ID, &node.Name, &node.Region, &node.EndpointHost, &node.EndpointPort,
+			&node.PublicKey, &node.InterfaceName, &node.Status, &node.LastSeenAt,
+			&node.ClientIPv4Pool, &node.ClientIPv6Pool, &node.InterfaceIPv4, &node.InterfaceIPv6,
+			&node.ActiveCertificateCount, &node.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		nodes = append(nodes, node)
+	}
+	return nodes, rows.Err()
+}

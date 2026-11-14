@@ -25,6 +25,31 @@ func (a *API) SetNodeClientCAs(roots *x509.CertPool) {
 	a.nodeClientCAs = roots.Clone()
 }
 
+func (a *API) handleListNodes(w http.ResponseWriter, r *http.Request) {
+	operator, _, ok := a.authenticate(w, r)
+	if !ok {
+		return
+	}
+	switch operator.Role {
+	case "owner", "admin", "support", "read_only":
+	default:
+		writeError(w, http.StatusForbidden, "forbidden", "دسترسی کافی نیست", requestIDFrom(r))
+		return
+	}
+	store, ok := a.store.(NodeInventoryStore)
+	if !ok {
+		writeError(w, http.StatusServiceUnavailable, "not_ready", "فهرست سرورها آماده نیست", requestIDFrom(r))
+		return
+	}
+	nodes, err := store.ListVPNNodes(r.Context())
+	if err != nil {
+		a.logger.Error("node inventory list failed", "request_id", requestIDFrom(r), "error", err)
+		writeError(w, http.StatusInternalServerError, "internal_error", "فهرست سرورها دریافت نشد", requestIDFrom(r))
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"items": nodes})
+}
+
 func (a *API) handleListNodeCertificates(w http.ResponseWriter, r *http.Request) {
 	operator, _, ok := a.authenticate(w, r)
 	if !ok {

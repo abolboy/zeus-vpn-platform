@@ -166,3 +166,25 @@ type NodeCertificateStore interface {
 	RegisterNodeAgentCertificate(context.Context, string, string, []byte, time.Time, time.Time, string, *string) (NodeAgentCertificate, bool, error)
 	RevokeNodeAgentCertificate(context.Context, string, string, string, string, *string) (NodeAgentCertificate, bool, error)
 }
+
+type VPNNode struct {
+	ID                      string     `json:"id"`
+	Name                    string     `json:"name"`
+	Region                  string     `json:"region"`
+	EndpointHost            string     `json:"endpoint_host"`
+	EndpointPort            int        `json:"endpoint_port"`
+	PublicKey               string     `json:"public_key"`
+	InterfaceName           string     `json:"interface_name"`
+	Status                  string     `json:"status"`
+	LastSeenAt              *time.Time `json:"last_seen_at,omitempty"`
+	ClientIPv4Pool          *string    `json:"client_ipv4_pool,omitempty"`
+	ClientIPv6Pool          *string    `json:"client_ipv6_pool,omitempty"`
+	InterfaceIPv4           *string    `json:"interface_ipv4,omitempty"`
+	InterfaceIPv6           *string    `json:"interface_ipv6,omitempty"`
+	ActiveCertificateCount  int        `json:"active_certificate_count"`
+	CreatedAt               time.Time  `json:"created_at"`
+}
+
+type NodeInventoryStore interface {
+	ListVPNNodes(context.Context) ([]VPNNode, error)
+}

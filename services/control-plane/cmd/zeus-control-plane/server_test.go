@@ -403,6 +403,14 @@ func TestPostgresStoreIntegration(t *testing.T) {
 		t.Fatalf("node certificate binding failed: node=%+v err=%v", node, err)
 	}
 
+	nodeListRequest := httptest.NewRequest(http.MethodGet, "/v1/nodes", nil)
+	nodeListRequest.Header.Set("Authorization", "Bearer "+token)
+	nodeListResponse := httptest.NewRecorder()
+	handler.ServeHTTP(nodeListResponse, nodeListRequest)
+	if nodeListResponse.Code != http.StatusOK || !bytes.Contains(nodeListResponse.Body.Bytes(), []byte(nodeID)) {
+		t.Fatalf("node inventory API status=%d body=%s", nodeListResponse.Code, nodeListResponse.Body.String())
+	}
+
 	// Certificate management accepts only a trusted ClientAuth leaf bound to this exact node ID.
 	nodeCA, nodeCertificate := makeBoundNodeClientCertificate(t, nodeID)
 	nodeRoots := x509.NewCertPool()

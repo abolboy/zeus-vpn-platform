@@ -25,10 +25,10 @@ type fakeRunner struct {
 
 func newFakeRunner() *fakeRunner {
 	return &fakeRunner{routes: map[string]string{
-		"10.77.77.0/24":    "wg0",
-		"fd77:77:77::/64":  "wg0",
-		"0.0.0.0/0":        "eth0",
-		"::/0":             "eth0",
+		"10.77.77.0/24":   "wg0",
+		"fd77:77:77::/64": "wg0",
+		"0.0.0.0/0":       "eth0",
+		"::/0":            "eth0",
 	}}
 }
 

@@ -67,6 +67,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.ByteArrayOutputStream
@@ -191,8 +192,13 @@ fun ZeusDashboard() {
         if (!autoReconnect || !tunnelDesired || !profileSaved) return@LaunchedEffect
 
         var failedAttempts = 0
-        while (true) {
-            if (network == NetworkCondition.ONLINE || network == NetworkCondition.LIMITED) {
+        // Observe live network changes; do not capture the initial Compose value.
+        snapshotFlow { network }.collectLatest { currentNetwork ->
+            if (currentNetwork != NetworkCondition.ONLINE && currentNetwork != NetworkCondition.LIMITED) {
+                return@collectLatest
+            }
+
+            while (true) {
                 val actualState = runCatching { wireGuard.refreshState() }
                     .getOrDefault(wireGuard.state.value)
                 when (actualState) {
@@ -221,8 +227,6 @@ fun ZeusDashboard() {
                         }
                     }
                 }
-            } else {
-                delay(5_000L)
             }
         }
     }

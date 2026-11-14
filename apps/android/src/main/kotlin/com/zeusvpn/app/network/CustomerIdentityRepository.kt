@@ -83,7 +83,7 @@ class CustomerIdentityRepository(context: Context) {
                         authState.update(token, null)
                         continuation.resume(token)
                     } else {
-                        authState.update(null, tokenError)
+                        authState.update(null as net.openid.appauth.TokenResponse?, tokenError)
                         continuation.resumeWithException(
                             IOException("Customer token exchange failed: ${tokenError?.error ?: "token_exchange_error"}")
                         )

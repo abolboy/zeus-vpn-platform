@@ -18,6 +18,7 @@ type Config struct {
 	Interface      string
 	ConfigPath     string
 	WGBinary       string
+	IPBinary       string
 	IPv4Pool       netip.Prefix
 	IPv6Pool       netip.Prefix
 	AllowMutations bool
@@ -30,19 +31,29 @@ type PeerSpec struct {
 }
 
 type Result struct {
-	Changed bool
-	DryRun  bool
-	Command []string
+	Changed  bool
+	DryRun   bool
+	Command  []string
+	Commands [][]string
 }
 
 type CommandRunner interface {
 	Run(context.Context, string, ...string) error
 }
 
+type CommandOutputRunner interface {
+	Output(context.Context, string, ...string) ([]byte, error)
+}
+
 type Manager struct {
 	config Config
 	runner CommandRunner
 	mu     sync.Mutex
+}
+
+type routeSpec struct {
+	family string
+	prefix netip.Prefix
 }
 
 var interfacePattern = regexp.MustCompile("^[A-Za-z0-9_.=-]{1,15}$")
@@ -56,6 +67,12 @@ func NewManager(config Config, runner CommandRunner) (*Manager, error) {
 	}
 	if !filepath.IsAbs(config.WGBinary) || filepath.Clean(config.WGBinary) != config.WGBinary {
 		return nil, errors.New("WireGuard binary path must be absolute and clean")
+	}
+	if config.IPBinary == "" {
+		config.IPBinary = "/usr/sbin/ip"
+	}
+	if !filepath.IsAbs(config.IPBinary) || filepath.Clean(config.IPBinary) != config.IPBinary {
+		return nil, errors.New("iproute2 binary path must be absolute and clean")
 	}
 	if !config.IPv4Pool.IsValid() || !config.IPv4Pool.Addr().Is4() || config.IPv4Pool != config.IPv4Pool.Masked() {
 		return nil, errors.New("invalid IPv4 client pool")
@@ -71,6 +88,11 @@ func NewManager(config Config, runner CommandRunner) (*Manager, error) {
 	}
 	if runner == nil {
 		return nil, errors.New("command runner is required")
+	}
+	if config.AllowMutations {
+		if _, ok := runner.(CommandOutputRunner); !ok {
+			return nil, errors.New("route inspection support is required when WireGuard mutations are enabled")
+		}
 	}
 	return &Manager{config: config, runner: runner}, nil
 }
@@ -89,13 +111,15 @@ func (m *Manager) EnsurePeer(ctx context.Context, peer PeerSpec) (Result, error)
 			return Result{}, err
 		}
 		args := []string{"set", m.config.Interface, "peer", peer.PublicKey, "allowed-ips", allowedIPs(peer)}
+		wgCommand := append([]string{m.config.WGBinary}, args...)
+		commands := append([][]string{wgCommand}, m.routeCommandPreviews(peer)...)
 		if !m.config.AllowMutations {
-			return Result{Changed: changed, DryRun: true, Command: append([]string{m.config.WGBinary}, args...)}, nil
+			return Result{Changed: changed, DryRun: true, Command: wgCommand, Commands: commands}, nil
 		}
-		if err := m.apply(ctx, original, next, changed, peer.PublicKey, prior, true, args); err != nil {
+		if err := m.applyEnsurePeer(ctx, original, next, changed, peer, prior, args); err != nil {
 			return Result{}, err
 		}
-		return Result{Changed: changed, Command: append([]string{m.config.WGBinary}, args...)}, nil
+		return Result{Changed: changed, Command: wgCommand, Commands: commands}, nil
 	})
 }
 
@@ -113,35 +137,160 @@ func (m *Manager) RemovePeer(ctx context.Context, publicKey string) (Result, err
 			return Result{}, err
 		}
 		args := []string{"set", m.config.Interface, "peer", publicKey, "remove"}
+		command := append([]string{m.config.WGBinary}, args...)
 		if !m.config.AllowMutations {
-			return Result{Changed: changed, DryRun: true, Command: append([]string{m.config.WGBinary}, args...)}, nil
+			return Result{Changed: changed, DryRun: true, Command: command, Commands: [][]string{command}}, nil
 		}
-		if err := m.apply(ctx, original, next, changed, publicKey, prior, false, args); err != nil {
+		if err := m.applyRemovePeer(ctx, original, next, changed, publicKey, prior, args); err != nil {
 			return Result{}, err
 		}
-		return Result{Changed: changed, Command: append([]string{m.config.WGBinary}, args...)}, nil
+		return Result{Changed: changed, Command: command, Commands: [][]string{command}}, nil
 	})
 }
 
-func (m *Manager) apply(ctx context.Context, original, next []byte, changed bool, publicKey string, prior *peerBlock, ensure bool, args []string) error {
+func (m *Manager) applyEnsurePeer(ctx context.Context, original, next []byte, changed bool, peer PeerSpec, prior *peerBlock, wgArgs []string) error {
 	if changed {
 		if err := atomicWriteConfig(m.config.ConfigPath, next); err != nil {
 			rollbackErr := atomicWriteConfig(m.config.ConfigPath, original)
 			return errors.Join(fmt.Errorf("persist WireGuard peer config: %w", err), wrapRollback(rollbackErr))
 		}
 	}
-	if err := m.runner.Run(ctx, m.config.WGBinary, args...); err != nil {
+
+	addedRoutes, routeErr := m.ensurePeerRoutes(ctx, peer)
+	if routeErr != nil {
 		var rollbackErr error
 		if changed {
 			rollbackErr = atomicWriteConfig(m.config.ConfigPath, original)
 		}
-		var compensationErr error
-		if ensure {
-			compensationErr = m.restoreAllowedIPs(publicKey, prior)
+		routeRollbackErr := m.rollbackRoutes(ctx, addedRoutes)
+		return errors.Join(
+			fmt.Errorf("ensure WireGuard client routes: %w", routeErr),
+			wrapRollback(rollbackErr),
+			wrapRouteRollback(routeRollbackErr),
+		)
+	}
+
+	if err := m.runner.Run(ctx, m.config.WGBinary, wgArgs...); err != nil {
+		var rollbackErr error
+		if changed {
+			rollbackErr = atomicWriteConfig(m.config.ConfigPath, original)
 		}
-		return errors.Join(fmt.Errorf("apply WireGuard peer operation: %w", err), wrapRollback(rollbackErr), wrapCompensation(compensationErr))
+		routeRollbackErr := m.rollbackRoutes(ctx, addedRoutes)
+		compensationErr := m.restoreAllowedIPs(peer.PublicKey, prior)
+		return errors.Join(
+			fmt.Errorf("apply WireGuard peer operation: %w", err),
+			wrapRollback(rollbackErr),
+			wrapRouteRollback(routeRollbackErr),
+			wrapCompensation(compensationErr),
+		)
 	}
 	return nil
+}
+
+func (m *Manager) applyRemovePeer(ctx context.Context, original, next []byte, changed bool, publicKey string, prior *peerBlock, wgArgs []string) error {
+	if changed {
+		if err := atomicWriteConfig(m.config.ConfigPath, next); err != nil {
+			rollbackErr := atomicWriteConfig(m.config.ConfigPath, original)
+			return errors.Join(fmt.Errorf("persist WireGuard peer removal: %w", err), wrapRollback(rollbackErr))
+		}
+	}
+	if err := m.runner.Run(ctx, m.config.WGBinary, wgArgs...); err != nil {
+		var rollbackErr error
+		if changed {
+			rollbackErr = atomicWriteConfig(m.config.ConfigPath, original)
+		}
+		compensationErr := m.restoreAllowedIPs(publicKey, prior)
+		return errors.Join(fmt.Errorf("remove WireGuard peer: %w", err), wrapRollback(rollbackErr), wrapCompensation(compensationErr))
+	}
+	// Keep the narrow host routes. They carry no traffic after peer removal and
+	// remain correct if the control plane later reuses the same client address.
+	return nil
+}
+
+func (m *Manager) peerRouteSpecs(peer PeerSpec) []routeSpec {
+	return []routeSpec{
+		{family: "-4", prefix: netip.PrefixFrom(peer.IPv4, 32)},
+		{family: "-6", prefix: netip.PrefixFrom(peer.IPv6, 128)},
+	}
+}
+
+func (m *Manager) routeCommandPreviews(peer PeerSpec) [][]string {
+	var commands [][]string
+	for _, spec := range m.peerRouteSpecs(peer) {
+		commands = append(commands, []string{
+			m.config.IPBinary, spec.family, "route", "add",
+			spec.prefix.String(), "dev", m.config.Interface,
+		})
+	}
+	return commands
+}
+
+func (m *Manager) ensurePeerRoutes(ctx context.Context, peer PeerSpec) ([]routeSpec, error) {
+	outputRunner, ok := m.runner.(CommandOutputRunner)
+	if !ok {
+		return nil, errors.New("route inspection is unavailable")
+	}
+	added := make([]routeSpec, 0, 2)
+	for _, spec := range m.peerRouteSpecs(peer) {
+		exact, err := outputRunner.Output(ctx, m.config.IPBinary, spec.family, "route", "show", "exact", spec.prefix.String())
+		if err != nil {
+			return added, fmt.Errorf("inspect exact route %s: %w", spec.prefix, err)
+		}
+		if strings.TrimSpace(string(exact)) != "" {
+			if routeDevice(exact) != m.config.Interface {
+				return added, fmt.Errorf("client address %s already has an exact route outside %s", spec.prefix, m.config.Interface)
+			}
+			continue
+		}
+
+		current, routeErr := outputRunner.Output(ctx, m.config.IPBinary, spec.family, "route", "get", spec.prefix.Addr().String())
+		if routeErr == nil {
+			device := routeDevice(current)
+			if device == m.config.Interface {
+				continue
+			}
+			if device != "" && !strings.Contains(" "+strings.TrimSpace(string(current))+" ", " via ") {
+				return added, fmt.Errorf("client address %s resolves through local interface %s; refusing to override a connected route", spec.prefix, device)
+			}
+		}
+
+		addArgs := []string{spec.family, "route", "add", spec.prefix.String(), "dev", m.config.Interface}
+		if err := m.runner.Run(ctx, m.config.IPBinary, addArgs...); err != nil {
+			after, inspectErr := outputRunner.Output(ctx, m.config.IPBinary, spec.family, "route", "get", spec.prefix.Addr().String())
+			if inspectErr == nil && routeDevice(after) == m.config.Interface {
+				continue
+			}
+			return added, fmt.Errorf("add route %s via %s: %w", spec.prefix, m.config.Interface, err)
+		}
+		after, inspectErr := outputRunner.Output(ctx, m.config.IPBinary, spec.family, "route", "get", spec.prefix.Addr().String())
+		if inspectErr != nil || routeDevice(after) != m.config.Interface {
+			return append(added, spec), fmt.Errorf("route %s did not resolve through %s after installation", spec.prefix, m.config.Interface)
+		}
+		added = append(added, spec)
+	}
+	return added, nil
+}
+
+func (m *Manager) rollbackRoutes(ctx context.Context, routes []routeSpec) error {
+	var failures []error
+	for index := len(routes) - 1; index >= 0; index-- {
+		spec := routes[index]
+		err := m.runner.Run(ctx, m.config.IPBinary, spec.family, "route", "del", spec.prefix.String(), "dev", m.config.Interface)
+		if err != nil {
+			failures = append(failures, fmt.Errorf("remove route %s: %w", spec.prefix, err))
+		}
+	}
+	return errors.Join(failures...)
+}
+
+func routeDevice(output []byte) string {
+	fields := strings.Fields(string(output))
+	for index := 0; index+1 < len(fields); index++ {
+		if fields[index] == "dev" {
+			return fields[index+1]
+		}
+	}
+	return ""
 }
 
 func (m *Manager) restoreAllowedIPs(publicKey string, prior *peerBlock) error {
@@ -167,6 +316,13 @@ func wrapRollback(err error) error {
 		return nil
 	}
 	return fmt.Errorf("restore previous WireGuard config: %w", err)
+}
+
+func wrapRouteRollback(err error) error {
+	if err == nil {
+		return nil
+	}
+	return fmt.Errorf("restore previous network routes: %w", err)
 }
 
 func wrapCompensation(err error) error {

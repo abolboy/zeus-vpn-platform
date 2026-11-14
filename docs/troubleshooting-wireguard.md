@@ -15,7 +15,7 @@ The diagnostic compares NAT/SNAT rules against both the actual client IPv4 pool 
 ## Interpret the result
 
 - **No recent handshake:** verify that the client endpoint host/port is correct, the server UDP listen port is allowed by the cloud Security Group and host firewall, the network ACL permits return traffic, and the client/server public keys match. Also check the peer exists on the actual `wg0` interface.
-- **Recent handshake, but no received bytes:** the client may reach the server while replies or routed traffic are not returning. Inspect peer AllowedIPs, the FORWARD chain, upstream route, and the cloud network controls.
+- **Recent handshake, but no received bytes:** the client may reach the server while replies or routed traffic are not returning. Inspect peer AllowedIPs and run `ip -4 route get <client-ip>` plus `ip -6 route get <client-ip>`; each assigned address must resolve through `wg0`, not the public uplink. The node agent now verifies per-peer host routes when it applies a peer. Also inspect the FORWARD chain, upstream route, and cloud network controls.
 - **Handshake and bidirectional bytes, but HTTPS tests fail:** inspect DNS reachability, IPv4 forwarding, NAT/SNAT for the WireGuard client subnet, and MTU. A NAT rule must use the actual uplink interface and the correct client source subnet; merely having any MASQUERADE rule is not enough.
 - **IPv4 works but IPv6 does not:** the Android full-tunnel profile currently includes `::/0`. The node must have a valid IPv6 forwarding and routed egress design for that route. Do not silently remove IPv6 routing without also deciding how IPv6 leak prevention will work.
 

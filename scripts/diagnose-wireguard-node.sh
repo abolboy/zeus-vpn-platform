@@ -99,6 +99,40 @@ else
   warn "Client IPv4 subnet is unknown; exact source-subnet NAT validation cannot be completed. Set WG_CLIENT_IPV4_CIDR."
 fi
 
+printf '\\nClient return routes to WireGuard:\\n'
+if command -v ip >/dev/null 2>&1 && command -v wg >/dev/null 2>&1; then
+  CLIENT_TEST_IPV4="${WG_CLIENT_TEST_IPV4:-}"
+  CLIENT_TEST_IPV6="${WG_CLIENT_TEST_IPV6:-}"
+  if [[ -z "$CLIENT_TEST_IPV4" ]]; then
+    CLIENT_TEST_IPV4="$(wg show "$WG_IFACE" allowed-ips 2>/dev/null | awk '{for (i=2; i<=NF; i++) {n=split($i, a, ","); for (j=1; j<=n; j++) if (a[j] ~ /^[0-9]+\\.[0-9.]+\\/32$/) {sub(/\\/32$/, "", a[j]); print a[j]; exit}}}')"
+  fi
+  if [[ -z "$CLIENT_TEST_IPV6" ]]; then
+    CLIENT_TEST_IPV6="$(wg show "$WG_IFACE" allowed-ips 2>/dev/null | awk '{for (i=2; i<=NF; i++) {n=split($i, a, ","); for (j=1; j<=n; j++) if (a[j] ~ /^[0-9a-fA-F:]+\\/128$/) {sub(/\\/128$/, "", a[j]); print a[j]; exit}}}')"
+  fi
+  if [[ -n "$CLIENT_TEST_IPV4" ]]; then
+    CLIENT_ROUTE4="$(ip -4 route get "$CLIENT_TEST_IPV4" 2>/dev/null || true)"
+    CLIENT_ROUTE4_DEV="$(awk '{for (i=1; i<=NF; i++) if ($i == "dev") {print $(i+1); exit}}' <<<"$CLIENT_ROUTE4")"
+    if [[ "$CLIENT_ROUTE4_DEV" == "$WG_IFACE" ]]; then
+      ok "IPv4 client $CLIENT_TEST_IPV4 routes through $WG_IFACE."
+    else
+      warn "IPv4 client $CLIENT_TEST_IPV4 does not route through $WG_IFACE (device: ${CLIENT_ROUTE4_DEV:-no route})."
+    fi
+  else
+    info "No active IPv4 /32 peer route found; set WG_CLIENT_TEST_IPV4 to test one explicitly."
+  fi
+  if [[ -n "$CLIENT_TEST_IPV6" ]]; then
+    CLIENT_ROUTE6="$(ip -6 route get "$CLIENT_TEST_IPV6" 2>/dev/null || true)"
+    CLIENT_ROUTE6_DEV="$(awk '{for (i=1; i<=NF; i++) if ($i == "dev") {print $(i+1); exit}}' <<<"$CLIENT_ROUTE6")"
+    if [[ "$CLIENT_ROUTE6_DEV" == "$WG_IFACE" ]]; then
+      ok "IPv6 client $CLIENT_TEST_IPV6 routes through $WG_IFACE."
+    else
+      warn "IPv6 client $CLIENT_TEST_IPV6 does not route through $WG_IFACE (device: ${CLIENT_ROUTE6_DEV:-no route})."
+    fi
+  else
+    info "No active IPv6 /128 peer route found; set WG_CLIENT_TEST_IPV6 to test one explicitly."
+  fi
+fi
+
 printf '\nNAT and forwarding rules:\n'
 IPTABLES_NAT_MATCH=""
 IPTABLES_FORWARD_OUT=""

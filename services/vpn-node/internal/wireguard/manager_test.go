@@ -294,7 +294,8 @@ func TestRemovePeerPreservesOtherSections(t *testing.T) {
 
 func TestRuntimeFailureRestoresPreviousFile(t *testing.T) {
 	config, original := testConfig(t, true)
-	runner := &fakeRunner{fail: true}
+	runner := newFakeRunner()
+	runner.fail = true
 	manager, err := NewManager(config, runner)
 	if err != nil {
 		t.Fatal(err)

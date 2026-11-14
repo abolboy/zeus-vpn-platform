@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/signal"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 )
@@ -169,6 +170,17 @@ func main() {
 		logger.Info("node-agent mTLS listener configured", "address", nodeAddress)
 	}
 
+	maintenanceCtx, stopMaintenance := context.WithCancel(context.Background())
+	defer stopMaintenance()
+	var maintenanceWG sync.WaitGroup
+	if postgres != nil {
+		maintenanceWG.Add(1)
+		go func() {
+			defer maintenanceWG.Done()
+			runSessionCleanup(maintenanceCtx, postgres, logger)
+		}()
+	}
+
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, os.Interrupt, syscall.SIGTERM)
 	errorsCh := make(chan error, 2)
@@ -191,6 +203,9 @@ func main() {
 	case err := <-errorsCh:
 		logger.Error("HTTP server stopped unexpectedly", "error", err)
 	}
+
+	stopMaintenance()
+	maintenanceWG.Wait()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()

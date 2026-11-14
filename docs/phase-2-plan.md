@@ -68,6 +68,7 @@ Deliver authenticated multi-user management while keeping the already-working pr
 - [x] Web admin refreshes authenticated node/user inventory every 30 seconds when auto-refresh is enabled; an open device list is refreshed too.
 - [x] Node inventory now reports a previously online node as offline after 90 seconds without an mTLS heartbeat and exposes last-seen time.
 - [x] mTLS certificate inventory distinguishes revoked, not-yet-valid, expiring-within-30-days, expired, and malformed validity windows; an open certificate list refreshes with the 30-second auto-refresh cycle.
+- [x] Control Plane removes operator sessions in bounded batches after 30 days of expiry/revocation retention, on startup and every 15 minutes, with clean shutdown and PostgreSQL integration coverage.
 - [x] Removed misleading sample traffic, subscription-plan, and activity numbers from the connected admin dashboard; unsupported telemetry/entitlements are shown as unavailable.
 - [ ] Node RX/TX telemetry ingestion, server load/latency metrics, subscriptions, billing, and production audit-log API/screens.
 - [x] Previously provisioned encrypted local profile remains available for reconnect without Control Plane access.
@@ -83,7 +84,7 @@ Deliver authenticated multi-user management while keeping the already-working pr
 ## Current status
 - Working branch: `ui/neon-motion-redesign-2026-11-14` (PR #1 remains Draft and unmerged).
 - Verified code scope: authenticated user/device management, OIDC customer self-service path, one-time activation fallback, mTLS node command transport, dry-run-first WireGuard executor with route checks/rollback, and Android local key generation, encrypted profile storage, connectivity diagnostics, bounded reconnect, and live WireGuard throughput chart.
-- CI validates Android build/unit tests, Go Control Plane tests, VPN node-agent tests, web-admin certificate-lifecycle tests/build, repository/deployment-kit checks, and database migrations. CI does not prove a real tunnel. Node inventory uses mTLS last-seen heartbeats and a 90-second offline threshold.
+- CI validates Android build/unit tests, Go Control Plane tests and PostgreSQL session-cleanup integration, VPN node-agent tests, web-admin certificate-lifecycle tests/build, repository/deployment-kit checks, and database migrations. CI does not prove a real tunnel. Node inventory uses mTLS last-seen heartbeats and a 90-second offline threshold.
 - The default Android build has no Control Plane URL/OIDC values. Automatic customer registration requires a deployed HTTPS Control Plane and matching Cognito provider outputs.
 - Staging systemd units and environment examples are templates only; they have not been installed on any host. Node mutations remain disabled by default.
 - Not yet verified: staging AWS Cognito deployment, PostgreSQL deployment/migration on staging, public TLS/mTLS end-to-end node registration, real peer add/remove, actual VPN egress/DNS/IPv6, Android process-death/reboot behavior, subscription/billing enforcement, per-node traffic/load telemetry, and production audit API.

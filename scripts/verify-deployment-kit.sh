@@ -21,7 +21,7 @@ grep -q '^ZEUS_NODE_ALLOW_MUTATIONS=false$' deploy/examples/vpn-node.env.example
 grep -q '^CapabilityBoundingSet=CAP_NET_ADMIN$' deploy/systemd/zeus-vpn-node.service
 grep -q '^ReadWritePaths=/etc/wireguard$' deploy/systemd/zeus-vpn-node.service
 
-if grep -R -E '-----BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY-----|AKIA[0-9A-Z]{16}' deploy; then
+if grep -R -E -- '-----BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY-----|AKIA[0-9A-Z]{16}' deploy; then
   echo "FAIL: private key material or AWS access key-like value found in deployment kit"
   exit 1
 fi

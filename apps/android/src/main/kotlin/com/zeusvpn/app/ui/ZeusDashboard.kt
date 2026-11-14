@@ -465,7 +465,14 @@ fun ZeusDashboard() {
                     1 -> {
                         SmartRoutingCard()
                         NetworkSummaryCard(network)
-                        TrafficStatsCard(trafficStats)
+                        if (wireGuardState == WireGuardState.ENGINE_UP) {
+                            TrafficStatsCard(trafficStats)
+                        } else {
+                            PanelCard {
+                                Text("آمار زنده پس از فعال‌شدن تونل نمایش داده می‌شود.", color = SecondaryText,
+                                    style = MaterialTheme.typography.bodyMedium, lineHeight = 20.sp)
+                            }
+                        }
                     }
                     else -> {
                         CustomerAccountCard(

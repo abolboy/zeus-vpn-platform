@@ -91,9 +91,10 @@ curl --fail --silent http://127.0.0.1:8080/readyz
 2. Create a node record in the ZEUS admin dashboard using those exact values.
 3. Generate the node-agent CA and per-node ClientAuth certificate on an encrypted/offline administrator workstation with `zeus-node-cert`. Never copy the CA private key to either server.
 4. Register the public node certificate through the authenticated node-certificate endpoint for the exact node record. The Control Plane checks its chain, ClientAuth EKU, expiry, and node URI identity.
-5. Transfer only the node client certificate, its matching private key, and the Control Plane server CA trust bundle to the staging node. Keep the client private key root-owned mode `0600`.
-6. Create `/etc/zeus-node` as root-owned mode `0700`, then install the node client certificate, client private key, and Control Plane CA bundle there. Keep the private key root-owned mode `0600`. Copy `deploy/examples/vpn-node.env.example` to `/etc/zeus/vpn-node.env`; replace the Control Plane URL, trust paths, and client pools with values confirmed on the staging host. Keep it root-owned mode `0600`.
-7. Install `deploy/systemd/zeus-vpn-node.service` as `/etc/systemd/system/zeus-vpn-node.service`.
+5. On the staging node, create `/etc/zeus-node` as root-owned mode `0700`.
+6. Transfer only the node client certificate, its matching private key, and the Control Plane server CA trust bundle to that directory. Keep the client private key root-owned mode `0600`.
+7. Copy `deploy/examples/vpn-node.env.example` to `/etc/zeus/vpn-node.env`; replace the Control Plane URL, trust paths, and client pools with values confirmed on the staging host. Keep it root-owned mode `0600`.
+8. Install `deploy/systemd/zeus-vpn-node.service` as `/etc/systemd/system/zeus-vpn-node.service`.
 
 The server TLS certificate chain and the node client certificate are not interchangeable. The client certificate is used by the node to authenticate to the Control Plane; the Control Plane's server certificate is validated by the node against `ZEUS_NODE_SERVER_CA_FILE`.
 

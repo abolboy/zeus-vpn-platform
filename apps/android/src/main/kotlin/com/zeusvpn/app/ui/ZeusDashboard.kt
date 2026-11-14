@@ -290,7 +290,7 @@ fun ZeusDashboard() {
             canForgetProfile = wireGuardState == WireGuardState.DISCONNECTED,
             onActivationCodeChange = { value ->
                 if (value.length <= 43 && value.all {
-                    it.isLetterOrDigit() || it == '-' || it == '_'
+                    it in 'A'..'Z' || it in 'a'..'z' || it in '0'..'9' || it == '-' || it == '_'
                 }) {
                     activationCodeDraft = value
                 }
@@ -689,7 +689,7 @@ private fun ProfileSetupCard(
 
             OutlinedButton(
                 onClick = onChooseFile,
-                enabled = !importBusy,
+                enabled = canForgetProfile && !importBusy,
                 modifier = Modifier.fillMaxWidth().height(46.dp),
                 shape = RoundedCornerShape(12.dp),
                 border = androidx.compose.foundation.BorderStroke(1.dp, DividerColor),
@@ -728,7 +728,7 @@ private fun ProfileSetupCard(
                 )
                 Button(
                     onClick = onSaveProfile,
-                    enabled = profileDraft.isNotBlank() && !importBusy,
+                    enabled = profileDraft.isNotBlank() && canForgetProfile && !importBusy,
                     modifier = Modifier.fillMaxWidth(),
                     shape = RoundedCornerShape(12.dp),
                     colors = ButtonDefaults.buttonColors(containerColor = PanelRaised, contentColor = MainText),

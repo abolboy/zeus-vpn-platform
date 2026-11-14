@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/coreos/go-oidc/v3/oidc"
 )
@@ -62,8 +63,9 @@ func (a *API) verifyCustomerIdentity(ctx context.Context, authorizationHeader st
 	if claims.Name = strings.TrimSpace(claims.Name); claims.Name == "" {
 		claims.Name = claims.Email
 	}
-	if len(claims.Name) > 120 {
-		claims.Name = claims.Name[:120]
+	if utf8.RuneCountInString(claims.Name) > 120 {
+		nameRunes := []rune(claims.Name)
+		claims.Name = string(nameRunes[:120])
 	}
 	return claims, idToken.Issuer + "|" + idToken.Subject, nil
 }

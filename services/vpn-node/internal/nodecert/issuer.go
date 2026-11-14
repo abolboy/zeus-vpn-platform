@@ -57,9 +57,9 @@ func NewCA(validity time.Duration) ([]byte, []byte, error) {
 		NotAfter:              now.Add(validity),
 		IsCA:                  true,
 		BasicConstraintsValid: true,
-		MaxPathLen:             0,
-		MaxPathLenZero:         true,
-		KeyUsage:               x509.KeyUsageCertSign | x509.KeyUsageCRLSign | x509.KeyUsageDigitalSignature,
+		MaxPathLen:            0,
+		MaxPathLenZero:        true,
+		KeyUsage:              x509.KeyUsageCertSign | x509.KeyUsageCRLSign | x509.KeyUsageDigitalSignature,
 	}
 	certDER, err := x509.CreateCertificate(rand.Reader, template, template, &key.PublicKey, key)
 	if err != nil {

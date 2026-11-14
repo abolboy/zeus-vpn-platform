@@ -383,6 +383,13 @@ func TestPostgresStoreIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if _, err := store.pool.Exec(ctx, `
+		INSERT INTO vpn_node_agent_certificates
+			(node_id, fingerprint_sha256, not_before, not_after)
+		VALUES ($1::uuid, $2, now() - interval '5 minutes', now() + interval '1 day')
+	`, nodeID, fingerprint[:]); err != nil {
+		t.Fatalf("register node certificate fixture: %v", err)
+	}
 	node, err := store.FindNodeByCertFingerprint(ctx, fingerprint[:])
 	if err != nil || node.ID != nodeID {
 		t.Fatalf("node certificate binding failed: node=%+v err=%v", node, err)

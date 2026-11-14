@@ -240,6 +240,10 @@ func (m *Manager) ensurePeerRoutes(ctx context.Context, peer PeerSpec) ([]routeS
 			if routeDevice(exact) != m.config.Interface {
 				return added, fmt.Errorf("client address %s already has an exact route outside %s", spec.prefix, m.config.Interface)
 			}
+			effective, inspectErr := outputRunner.Output(ctx, m.config.IPBinary, spec.family, "route", "get", spec.prefix.Addr().String())
+			if inspectErr != nil || routeDevice(effective) != m.config.Interface {
+				return added, fmt.Errorf("effective route for %s does not resolve through %s", spec.prefix, m.config.Interface)
+			}
 			continue
 		}
 

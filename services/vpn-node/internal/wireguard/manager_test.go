@@ -75,7 +75,6 @@ func (f *fakeRunner) Output(_ context.Context, _ string, args ...string) ([]byte
 		}
 		bestBits := -1
 		bestDevice := ""
-		bestPrefix := ""
 		for rawPrefix, device := range f.routes {
 			prefix, err := netip.ParsePrefix(rawPrefix)
 			if err != nil || prefix.Addr().Is4() != address.Is4() || !prefix.Contains(address) {
@@ -84,7 +83,6 @@ func (f *fakeRunner) Output(_ context.Context, _ string, args ...string) ([]byte
 			if prefix.Bits() > bestBits {
 				bestBits = prefix.Bits()
 				bestDevice = device
-				bestPrefix = rawPrefix
 			}
 		}
 		if bestBits < 0 {

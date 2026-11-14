@@ -109,3 +109,27 @@ export function createDeviceEnrollmentCode(token, userID) {
     { method: 'POST', token },
   )
 }
+
+export function listVPNNodes(token) {
+  return requestJSON('/v1/nodes', { token })
+}
+
+export function listNodeCertificates(token, nodeID) {
+  return requestJSON('/v1/nodes/' + encodeURIComponent(nodeID) + '/certificates', { token })
+}
+
+export function registerNodeCertificate(token, nodeID, certificatePEM) {
+  return requestJSON('/v1/nodes/' + encodeURIComponent(nodeID) + '/certificates', {
+    method: 'POST',
+    token,
+    body: { certificate_pem: certificatePEM },
+    timeoutMs: 12000,
+  })
+}
+
+export function revokeNodeCertificate(token, nodeID, certificateID) {
+  return requestJSON(
+    '/v1/nodes/' + encodeURIComponent(nodeID) + '/certificates/' + encodeURIComponent(certificateID) + '/revoke',
+    { method: 'POST', token },
+  )
+}

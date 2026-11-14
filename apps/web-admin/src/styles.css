@@ -476,3 +476,22 @@ tbody tr:hover { background: rgba(var(--accent-rgb),.045); }
   .enrollment-code-value { font-size:11px; letter-spacing:.4px; }
   .enrollment-code-footer { align-items:flex-start; flex-direction:column; }
 }
+
+.node-certificate-form { display:grid; gap:9px; margin:0 0 14px; padding:14px; border:1px solid rgba(var(--accent-rgb),.18); border-radius:12px; background:rgba(5,10,20,.38); }
+.node-certificate-form label { display:grid; gap:7px; color:#aebbd1; font-size:10px; }
+.node-certificate-form textarea { width:100%; min-height:120px; resize:vertical; border:1px solid rgba(255,255,255,.13); border-radius:8px; padding:10px; color:#b9f2e4; background:rgba(2,7,15,.82); font:10px/1.6 ui-monospace,SFMono-Regular,Menlo,monospace; outline:none; }
+.node-certificate-form textarea:focus { border-color:rgba(var(--accent-rgb),.65); box-shadow:0 0 0 2px rgba(var(--accent-rgb),.08); }
+.node-certificate-help { color:#8191aa; font-size:9px; line-height:1.8; }
+.node-certificate-list { display:grid; gap:8px; }
+.node-certificate-card { display:grid; grid-template-columns:minmax(0,1fr) auto auto; align-items:center; gap:12px; padding:12px; border:1px solid rgba(255,255,255,.075); border-radius:10px; background:rgba(8,14,27,.55); }
+.node-certificate-card b,.node-certificate-card small,.node-certificate-card code { display:block; }
+.node-certificate-card b { color:#8393ad; font-size:8px; }
+.node-certificate-card code { margin-top:4px; color:#c2f1e5; font-size:9px; overflow-wrap:anywhere; }
+.node-certificate-card small { margin-top:5px; color:#8090a9; font-size:8px; }
+.status.revoked i,.status.offline i,.status.expired i { background:#ff718d; }
+.status.degraded i { background:#ffbd75; }
+@media(max-width:760px) {
+  .node-certificate-card { grid-template-columns:1fr auto; }
+  .node-certificate-card .mini-action { grid-column:1 / -1; justify-self:start; }
+  .node-certificate-form { padding:11px; }
+}

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { getControlPlaneHealth, isControlPlaneConfigured, loginOperator, logoutOperator, listVPNUsers, createVPNUser, updateVPNUser, createIdempotencyKey, listVPNDevices, revokeVPNDevice, createDeviceEnrollmentCode } from './api.js'
+import { getControlPlaneHealth, isControlPlaneConfigured, loginOperator, logoutOperator, listVPNUsers, createVPNUser, updateVPNUser, createIdempotencyKey, listVPNDevices, revokeVPNDevice, createDeviceEnrollmentCode, listVPNNodes, listNodeCertificates, registerNodeCertificate, revokeNodeCertificate } from './api.js'
 
 const initialServers = [
   { id: 1, name: 'ZEUS • Frankfurt', region: 'آلمان', ip: '185.220.101.14', protocol: 'WireGuard', load: 38, latency: 82, status: 'online', users: 128 },
@@ -25,7 +25,7 @@ function Metric({ icon, label, value, note, tone = '' }) {
   return <article className="metric glass"><div className="metric-top"><span className="metric-icon">{icon}</span><span className="metric-note">{note}</span></div><div className="metric-value">{value}</div><div className="metric-label">{label}</div><div className={`metric-line ${tone}`} /></article>
 }
 function Status({ value }) {
-  const label = value === 'online' || value === 'active' ? 'فعال' : value === 'pending' ? 'در انتظار' : value === 'suspended' ? 'معلق' : value === 'disabled' ? 'غیرفعال' : 'منقضی'
+  const label = value === 'online' || value === 'active' ? 'فعال' : value === 'pending' || value === 'provisioning' ? 'در انتظار' : value === 'degraded' ? 'ناپایدار' : value === 'offline' ? 'آفلاین' : value === 'revoked' ? 'ابطال‌شده' : value === 'suspended' ? 'معلق' : value === 'disabled' ? 'غیرفعال' : 'منقضی'
   return <span className={`status ${value}`}><i />{label}</span>
 }
 
@@ -85,6 +85,17 @@ export default function App() {
   const [revokeDeviceKey, setRevokeDeviceKey] = useState('')
   const [revokeDeviceKeyFor, setRevokeDeviceKeyFor] = useState('')
   const deviceFetchSequence = useRef(0)
+  const [remoteNodes, setRemoteNodes] = useState([])
+  const [remoteNodesState, setRemoteNodesState] = useState('idle')
+  const [remoteNodesError, setRemoteNodesError] = useState('')
+  const [selectedNodeID, setSelectedNodeID] = useState('')
+  const [nodeCertificates, setNodeCertificates] = useState([])
+  const [nodeCertificatesState, setNodeCertificatesState] = useState('idle')
+  const [nodeCertificatesError, setNodeCertificatesError] = useState('')
+  const [nodeCertificatePEM, setNodeCertificatePEM] = useState('')
+  const [nodeCertificateBusy, setNodeCertificateBusy] = useState(false)
+  const [nodeCertificateMutationID, setNodeCertificateMutationID] = useState('')
+  const nodeCertificateFetchSequence = useRef(0)
 
   async function checkControlPlane() {
     setApiStatus('checking')
@@ -104,6 +115,36 @@ export default function App() {
     })
     return () => { active = false }
   }, [])
+  useEffect(() => {
+    if (!accessToken || !isControlPlaneConfigured) {
+      setRemoteNodes([])
+      setRemoteNodesState('idle')
+      setRemoteNodesError('')
+      setSelectedNodeID('')
+      setNodeCertificates([])
+      return
+    }
+    let active = true
+    setRemoteNodesState('loading')
+    listVPNNodes(accessToken).then(result => {
+      if (!active) return
+      setRemoteNodes(Array.isArray(result?.items) ? result.items : [])
+      setRemoteNodesState('loaded')
+      setRemoteNodesError('')
+    }).catch(error => {
+      if (!active) return
+      setRemoteNodesState('error')
+      setRemoteNodesError(error.message || 'دریافت فهرست سرورها انجام نشد.')
+      if (error.status === 401) {
+        setAccessToken('')
+        setOperator(null)
+        setRemoteUsers([])
+        setLoginError('نشست منقضی شده است؛ دوباره وارد شوید.')
+      }
+    })
+    return () => { active = false }
+  }, [accessToken])
+
   const todayLabel = useMemo(() => new Intl.DateTimeFormat('fa-IR', { dateStyle: 'full' }).format(new Date()), [])
   const sourceUsers = useMemo(() => isControlPlaneConfigured && accessToken
     ? remoteUsers.map(user => ({
@@ -118,6 +159,7 @@ export default function App() {
     : users, [accessToken, remoteUsers, users])
   const filteredUsers = useMemo(() => sourceUsers.filter(u => (u.name + u.id).toLowerCase().includes(query.toLowerCase())), [sourceUsers, query])
   const canManageRemoteUsers = operator?.role === 'owner' || operator?.role === 'admin'
+  const selectedNode = remoteNodes.find(node => node.id === selectedNodeID) || null
 
   useEffect(() => {
     try { window.localStorage.setItem('zeus.theme', theme) } catch { /* Browser storage is optional. */ }
@@ -165,6 +207,15 @@ export default function App() {
     setDeviceMutationError('')
     setRevokeDeviceKey('')
     setRevokeDeviceKeyFor('')
+    setRemoteNodes([])
+    setRemoteNodesState('idle')
+    setRemoteNodesError('')
+    setSelectedNodeID('')
+    setNodeCertificates([])
+    setNodeCertificatesState('idle')
+    setNodeCertificatesError('')
+    setNodeCertificatePEM('')
+    setNodeCertificateMutationID('')
     setRemoteUsersState('idle')
     try {
       await logoutOperator(token)
@@ -436,6 +487,119 @@ export default function App() {
     }
   }
 
+  async function refreshRemoteNodes() {
+    if (!accessToken) return
+    setRemoteNodesState('loading')
+    setRemoteNodesError('')
+    try {
+      const result = await listVPNNodes(accessToken)
+      setRemoteNodes(Array.isArray(result?.items) ? result.items : [])
+      setRemoteNodesState('loaded')
+    } catch (error) {
+      setRemoteNodesError(error.message || 'دریافت فهرست سرورها انجام نشد.')
+      setRemoteNodesState('error')
+      if (error.status === 401) {
+        setAccessToken('')
+        setOperator(null)
+        setLoginError('نشست منقضی شده است؛ دوباره وارد شوید.')
+      }
+    }
+  }
+
+  async function refreshNodeCertificates(nodeID = selectedNodeID) {
+    if (!accessToken || !nodeID) return
+    const requestSequence = ++nodeCertificateFetchSequence.current
+    setNodeCertificatesState('loading')
+    setNodeCertificatesError('')
+    try {
+      const result = await listNodeCertificates(accessToken, nodeID)
+      if (requestSequence !== nodeCertificateFetchSequence.current) return
+      setNodeCertificates(Array.isArray(result?.items) ? result.items : [])
+      setNodeCertificatesState('loaded')
+    } catch (error) {
+      if (requestSequence !== nodeCertificateFetchSequence.current) return
+      setNodeCertificatesError(error.message || 'دریافت گواهی‌های نود انجام نشد.')
+      setNodeCertificatesState('error')
+      if (error.status === 401) {
+        setAccessToken('')
+        setOperator(null)
+        setLoginError('نشست منقضی شده است؛ دوباره وارد شوید.')
+      }
+    }
+  }
+
+  async function toggleNodeCertificates(node) {
+    if (!node?.id || !accessToken) return
+    if (selectedNodeID === node.id) {
+      nodeCertificateFetchSequence.current += 1
+      setSelectedNodeID('')
+      setNodeCertificates([])
+      setNodeCertificatesState('idle')
+      setNodeCertificatesError('')
+      setNodeCertificatePEM('')
+      return
+    }
+    nodeCertificateFetchSequence.current += 1
+    setSelectedNodeID(node.id)
+    setNodeCertificates([])
+    setNodeCertificatesState('loading')
+    setNodeCertificatesError('')
+    setNodeCertificatePEM('')
+    await refreshNodeCertificates(node.id)
+  }
+
+  async function submitNodeCertificate(event) {
+    event.preventDefault()
+    if (!accessToken || !canManageRemoteUsers || !selectedNodeID || nodeCertificateBusy) return
+    const certificatePEM = nodeCertificatePEM.trim()
+    if (!certificatePEM.startsWith('-----BEGIN CERTIFICATE-----') || certificatePEM.includes('PRIVATE KEY')) {
+      setNodeCertificatesError('فقط گواهی عمومی CERTIFICATE را وارد کن؛ کلید خصوصی نباید ارسال شود.')
+      return
+    }
+    setNodeCertificateBusy(true)
+    setNodeCertificatesError('')
+    try {
+      await registerNodeCertificate(accessToken, selectedNodeID, certificatePEM)
+      setNodeCertificatePEM('')
+      await refreshNodeCertificates(selectedNodeID)
+      await refreshRemoteNodes()
+      toast('گواهی عمومی نود با موفقیت اعتبارسنجی و ثبت شد.')
+    } catch (error) {
+      setNodeCertificatesError(error.message || 'ثبت گواهی نود انجام نشد.')
+      if (error.status === 401) {
+        setAccessToken('')
+        setOperator(null)
+        setLoginError('نشست منقضی شده است؛ دوباره وارد شوید.')
+      }
+    } finally {
+      setNodeCertificateBusy(false)
+    }
+  }
+
+  async function revokeSelectedNodeCertificate(certificate) {
+    if (!accessToken || !canManageRemoteUsers || !selectedNodeID || !certificate?.id || nodeCertificateMutationID) return
+    if (certificate.revoked_at) return
+    const approved = window.confirm('گواهی این نود فوراً باطل شود؟ عامل نود از درخواست بعدی دیگر با این گواهی پذیرفته نمی‌شود.')
+    if (!approved) return
+    setNodeCertificateMutationID(certificate.id)
+    setNodeCertificatesError('')
+    try {
+      await revokeNodeCertificate(accessToken, selectedNodeID, certificate.id)
+      await refreshNodeCertificates(selectedNodeID)
+      await refreshRemoteNodes()
+      toast('گواهی نود با موفقیت ابطال شد.')
+    } catch (error) {
+      setNodeCertificatesError(error.message || 'ابطال گواهی انجام نشد.')
+      if (error.status === 401) {
+        setAccessToken('')
+        setOperator(null)
+        setLoginError('نشست منقضی شده است؛ دوباره وارد شوید.')
+      }
+    } finally {
+      setNodeCertificateMutationID('')
+    }
+  }
+
   function addServer(event) {
     event.preventDefault()
     if (!serverName.trim() || !serverRegion.trim()) return
@@ -510,7 +674,71 @@ export default function App() {
       <article className="panel glass traffic-panel"><div className="panel-heading"><div><h2>ترافیک شبکه</h2><p>نمای نمونه مصرف در ۷ روز اخیر</p></div><span className="select-like">۷ روز اخیر⌄</span></div><div className="traffic-total"><b>۸۴۲.۶ <small>GB</small></b><span>↑ ۱۲.۸٪ <small>نسبت به دوره قبل</small></span></div><div className="chart"><div className="chart-y"><span>۱۰۰GB</span><span>۷۵GB</span><span>۵۰GB</span><span>۲۵GB</span><span>۰</span></div><div className="chart-bars">{[42,68,52,86,61,74,95].map((v,i)=><div className="bar-wrap" key={i}><i style={{height:v+'%'}} /><small>{['ش','ی','د','س','چ','پ','ج'][i]}</small></div>)}</div></div></article></section>
       <section className="panel glass activity-panel"><div className="panel-heading"><div><h2>رویدادهای اخیر</h2><p>آخرین فعالیت‌های ثبت‌شده در داده آزمایشی</p></div><button className="text-link" onClick={() => setPage('activity')}>مشاهده گزارش‌ها ←</button></div><div className="activity-list"><div><i className="activity-icon green">✓</i><span><b>نود Frankfurt در دسترس است</b><small>بررسی نمونه سلامت · ۲ دقیقه پیش</small></span><Status value="online" /></div><div><i className="activity-icon purple">♙</i><span><b>کاربر نمونه به فهرست اضافه شد</b><small>رویداد آزمایشی · ۱۸ دقیقه پیش</small></span><Status value="active" /></div><div><i className="activity-icon orange">!</i><span><b>راه‌اندازی نود Warsaw تکمیل نشده</b><small>نیازمند نصب Agent و تنظیم کلیدها</small></span><Status value="pending" /></div></div></section></>}
 
-      {page === 'servers' && <section className="panel glass full-panel"><div className="panel-heading"><div><h2>مدیریت سرورها</h2><p>فهرست نودها؛ اطلاعات فعلی صرفاً داده نمایشی است</p></div>{!isControlPlaneConfigured && <button className="button primary" onClick={() => setShowServerForm(v => !v)}>＋ سرور جدید</button>}</div>{showServerForm && <form className="inline-form" onSubmit={addServer}><label>نام سرور<input value={serverName} onChange={e=>setServerName(e.target.value)} placeholder="مثلاً ZEUS • Istanbul" required /></label><label>منطقه<input value={serverRegion} onChange={e=>setServerRegion(e.target.value)} placeholder="مثلاً ترکیه" required /></label><button className="button primary">افزودن به فهرست</button></form>}<div className="table-wrap"><table><thead><tr><th>نام نود</th><th>منطقه / IP</th><th>پروتکل</th><th>بار</th><th>کاربران</th><th>وضعیت</th></tr></thead><tbody>{servers.map(s=><tr key={s.id}><td><b>{s.name}</b></td><td>{s.region}<small className="cell-sub">{s.ip}</small></td><td>{s.protocol}</td><td>{s.status==='pending'?'—':s.load+'%'}</td><td>{s.users}</td><td><Status value={s.status}/></td></tr>)}</tbody></table></div></section>}
+      {page === 'servers' && <section className="panel glass full-panel">
+        <div className="panel-heading">
+          <div><h2>مدیریت سرورها</h2><p>{isControlPlaneConfigured ? 'موجودی واقعی نودها از Control Plane دریافت می‌شود.' : 'فهرست زیر داده نمایشی است و به نود واقعی متصل نیست.'}</p></div>
+          {isControlPlaneConfigured
+            ? <button className="button secondary" onClick={refreshRemoteNodes} disabled={remoteNodesState === 'loading'}>↻ بروزرسانی نودها</button>
+            : <button className="button primary" onClick={() => setShowServerForm(v => !v)}>＋ سرور نمایشی</button>}
+        </div>
+        {isControlPlaneConfigured ? <>
+          <div className="remote-users-toolbar">
+            <span>{remoteNodesState === 'loading' ? 'در حال دریافت نودها...' : remoteNodesState === 'error' ? remoteNodesError : remoteNodes.length + ' نود ثبت‌شده'}</span>
+            <span>اطلاعات از پایگاه داده؛ بدون بارگذاری کلید خصوصی</span>
+          </div>
+          {remoteNodesError && <div className="remote-users-error" role="alert">{remoteNodesError}</div>}
+          <div className="table-wrap">
+            <table>
+              <thead><tr><th>نام نود</th><th>منطقه</th><th>Endpoint</th><th>اینترفیس / Pool</th><th>گواهی فعال</th><th>وضعیت</th><th>عملیات</th></tr></thead>
+              <tbody>{remoteNodes.map(node => <tr key={node.id}>
+                <td><b>{node.name}</b><small className="cell-sub" dir="ltr">{node.id}</small></td>
+                <td>{node.region}</td>
+                <td dir="ltr">{node.endpoint_host}:{node.endpoint_port}</td>
+                <td><span dir="ltr">{node.interface_name}</span><small className="cell-sub" dir="ltr">{node.client_ipv4_pool || '—'} / {node.client_ipv6_pool || '—'}</small></td>
+                <td>{node.active_certificate_count} فعال</td>
+                <td><Status value={node.status}/></td>
+                <td><button className={selectedNodeID === node.id ? 'mini-action selected' : 'mini-action'} onClick={() => toggleNodeCertificates(node)}>{selectedNodeID === node.id ? 'بستن گواهی‌ها' : 'مدیریت گواهی'}</button></td>
+              </tr>)}</tbody>
+            </table>
+            {remoteNodes.length === 0 && remoteNodesState === 'loaded' && <div className="empty">هنوز نودی در Control Plane ثبت نشده است.</div>}
+          </div>
+          {selectedNode && <section className="devices-panel glass">
+            <div className="devices-panel-heading">
+              <div><h3>گواهی‌های mTLS · {selectedNode.name}</h3><p>فقط فایل عمومی PEM را وارد کن. کلید خصوصی CA یا نود را در این پنل بارگذاری نکن.</p></div>
+              <div className="devices-panel-actions">
+                <button className="button secondary" onClick={() => refreshNodeCertificates()} disabled={nodeCertificatesState === 'loading'}>↻ بروزرسانی</button>
+                <button className="mini-action subtle" onClick={() => toggleNodeCertificates(selectedNode)}>بستن</button>
+              </div>
+            </div>
+            {canManageRemoteUsers && <form className="node-certificate-form" onSubmit={submitNodeCertificate}>
+              <label>گواهی عمومی نود (PEM)
+                <textarea value={nodeCertificatePEM} onChange={event => setNodeCertificatePEM(event.target.value)} rows="6" spellCheck="false" autoCapitalize="off" autoCorrect="off" placeholder="-----BEGIN CERTIFICATE-----" dir="ltr" required />
+              </label>
+              <div className="node-certificate-help">Control Plane گواهی را با CA مورداعتماد، ClientAuth و شناسهٔ اختصاصی همین نود اعتبارسنجی می‌کند.</div>
+              <div className="remote-user-form-actions">
+                <button className="button primary" type="submit" disabled={nodeCertificateBusy || !nodeCertificatePEM.trim()}>{nodeCertificateBusy ? 'در حال اعتبارسنجی...' : 'اعتبارسنجی و ثبت گواهی'}</button>
+              </div>
+            </form>}
+            {nodeCertificatesError && <div className="remote-users-error" role="alert">{nodeCertificatesError}</div>}
+            <div className="node-certificate-list">
+              {nodeCertificates.map(certificate => {
+                const expired = new Date(certificate.not_after).getTime() <= Date.now()
+                const state = certificate.revoked_at ? 'revoked' : expired ? 'expired' : 'active'
+                return <article className="node-certificate-card" key={certificate.id}>
+                  <div><b>SHA-256</b><code dir="ltr">{certificate.fingerprint_sha256}</code><small>اعتبار تا {new Date(certificate.not_after).toLocaleString('fa-IR')}</small></div>
+                  <Status value={state}/>
+                  {canManageRemoteUsers && !certificate.revoked_at && <button className="mini-action danger" onClick={() => revokeSelectedNodeCertificate(certificate)} disabled={nodeCertificateMutationID === certificate.id}>{nodeCertificateMutationID === certificate.id ? '...' : 'ابطال'}</button>}
+                </article>
+              })}
+              {nodeCertificates.length === 0 && nodeCertificatesState === 'loaded' && <div className="devices-empty">برای این نود گواهی ثبت‌شده‌ای وجود ندارد.</div>}
+              {nodeCertificatesState === 'loading' && <div className="devices-empty">در حال دریافت گواهی‌ها...</div>}
+            </div>
+          </section>}
+        </> : <>
+          {showServerForm && <form className="inline-form" onSubmit={addServer}><label>نام سرور<input value={serverName} onChange={e=>setServerName(e.target.value)} placeholder="مثلاً ZEUS • Istanbul" required /></label><label>منطقه<input value={serverRegion} onChange={e=>setServerRegion(e.target.value)} placeholder="مثلاً ترکیه" required /></label><button className="button primary">افزودن به فهرست</button></form>}
+          <div className="table-wrap"><table><thead><tr><th>نام نود</th><th>منطقه / IP</th><th>پروتکل</th><th>بار</th><th>کاربران</th><th>وضعیت</th></tr></thead><tbody>{servers.map(s=><tr key={s.id}><td><b>{s.name}</b></td><td>{s.region}<small className="cell-sub">{s.ip}</small></td><td>{s.protocol}</td><td>{s.status==='pending'?'—':s.load+'%'}</td><td>{s.users}</td><td><Status value={s.status}/></td></tr>)}</tbody></table></div>
+        </>}
+      </section>}
 
       {page === 'users' && <section className="panel glass full-panel">
         <div className="panel-heading">

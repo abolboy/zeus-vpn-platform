@@ -86,7 +86,7 @@ func (a *API) handleCustomerDeviceStatus(w http.ResponseWriter, r *http.Request)
 		writeError(w, http.StatusTooManyRequests, "rate_limited", "درخواست‌های بررسی وضعیت بیش از حد مجاز است", requestID)
 		return
 	}
-	_, externalRef, err := a.verifyCustomerIdentity(r.Context(), r.Header.Get("Authorization"))
+	claims, externalRef, err := a.verifyCustomerIdentity(r.Context(), r.Header.Get("Authorization"))
 	if err != nil {
 		writeError(w, http.StatusUnauthorized, "customer_identity_invalid", "نشست مشتری معتبر یا تأییدشده نیست", requestID)
 		return
@@ -101,7 +101,7 @@ func (a *API) handleCustomerDeviceStatus(w http.ResponseWriter, r *http.Request)
 		writeError(w, http.StatusServiceUnavailable, "not_ready", "بررسی وضعیت دستگاه آماده نیست", requestID)
 		return
 	}
-	user, err := store.EnsureExternalVPNUser(r.Context(), externalRef, "")
+	user, err := store.EnsureExternalVPNUser(r.Context(), externalRef, claims.Name)
 	if err != nil {
 		a.logger.Error("customer account lookup failed", "request_id", requestID)
 		writeError(w, http.StatusInternalServerError, "customer_account_unavailable", "دریافت حساب مشتری انجام نشد", requestID)

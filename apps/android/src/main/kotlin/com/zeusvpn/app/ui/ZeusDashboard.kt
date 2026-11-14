@@ -74,6 +74,7 @@ fun ZeusDashboard() {
     var hasPendingEnrollment by remember { mutableStateOf(false) }
     var profileDraft by remember { mutableStateOf("") }
     var wireGuardMessage by remember { mutableStateOf("") }
+    var profileSetupMessage by remember { mutableStateOf("") }
     var profileImportBusy by remember { mutableStateOf(false) }
     var showAdvancedImport by remember { mutableStateOf(false) }
 
@@ -166,7 +167,7 @@ fun ZeusDashboard() {
                 profileSaved = true
                 profileDraft = ""
                 showAdvancedImport = false
-                wireGuardMessage = profileSavedMessage
+                profileSetupMessage = profileSavedMessage
             } catch (_: InvalidWireGuardProfileException) {
                 wireGuardMessage = invalidProfileMessage
             } catch (_: Exception) {
@@ -181,7 +182,7 @@ fun ZeusDashboard() {
                 wireGuard.forgetProfile()
                 profileSaved = false
                 profileDraft = ""
-                wireGuardMessage = profileDeletedMessage
+                profileSetupMessage = profileDeletedMessage
             } catch (_: Exception) {
                 wireGuardMessage = connectionFailedMessage
             }
@@ -239,7 +240,7 @@ fun ZeusDashboard() {
                     profileSaved = true
                     profileDraft = ""
                     showAdvancedImport = false
-                    wireGuardMessage = profileSavedMessage
+                    profileSetupMessage = profileSavedMessage
                 } catch (_: InvalidWireGuardProfileException) {
                     wireGuardMessage = invalidProfileMessage
                 } catch (_: Exception) {
@@ -284,7 +285,7 @@ fun ZeusDashboard() {
             enrollmentBusy = enrollmentBusy,
             importBusy = profileImportBusy,
             enrollmentMessage = enrollmentMessage,
-            profileMessage = wireGuardMessage,
+            profileMessage = profileSetupMessage,
             profileDraft = profileDraft,
             showAdvancedImport = showAdvancedImport,
             canForgetProfile = wireGuardState == WireGuardState.DISCONNECTED,

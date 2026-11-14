@@ -48,9 +48,12 @@ Deliver authenticated multi-user management while keeping the already-working pr
 - [x] Outbound mTLS client with CA verification, redirects/proxy disabled, bounded response sizes, and strict JSON decoding.
 - [x] Worker for `peer.ensure` / `peer.remove`, expiry checks, acknowledgements, and bounded backoff.
 - [x] Local WireGuard executor with dry-run by default, fixed argv, pool validation, no-follow config reads, atomic writes, and rollback tests.
-- [ ] Node certificate enrollment, rotation, and automated revocation tooling.
-- [ ] Real isolated-interface and staging-VPS peer add/remove tests, crash recovery, and reboot persistence.
-- [ ] Review and minimize the service's OS privileges before enabling mutations.
+- [x] Offline per-node ClientAuth certificate issuance, node-bound certificate registration, and owner/admin revocation endpoints.
+- [x] Manual certificate rotation sequence documented; overlapping valid fingerprints are supported during replacement.
+- [ ] Automated certificate expiry monitoring, rotation orchestration, and revocation alerts.
+- [x] Hardened systemd templates added for the Control Plane and VPN node; the node unit is limited to CAP_NET_ADMIN and writes only to /etc/wireguard.
+- [x] Staging environment examples and a deployment/rollback runbook added under deploy/ and docs/staging-deployment.md.
+- [ ] Verify service ownership, permissions, mTLS reachability, and peer lifecycle on an isolated staging VPS.
 - Production node mutations remain disabled until staging gates pass.
 
 ## 2E — Dashboard and Android integration
@@ -61,7 +64,8 @@ Deliver authenticated multi-user management while keeping the already-working pr
 - [x] Android-generated WireGuard keypair, public-key enrollment over HTTPS, local profile construction, and Android Keystore AES-GCM persistence.
 - [x] Encrypted pending-enrollment recovery with a stable device identity and idempotency key after a lost response.
 - [ ] End-to-end enrollment and tunnel handshake against a deployed Control Plane and isolated staging WireGuard node.
-- [ ] Real server inventory, live telemetry, subscriptions, billing, and audit log screens.
+- [x] Live Android download/upload throughput chart calculated from actual WireGuard byte-counter deltas.
+- [ ] Live web-admin server telemetry, subscriptions, billing, and production audit-log screens.
 - [x] Previously provisioned encrypted local profile remains available for reconnect without Control Plane access.
 - [ ] Verify reconnect and sustained traffic after process death, network changes, and device reboot on a physical Android device.
 
@@ -73,7 +77,10 @@ Deliver authenticated multi-user management while keeping the already-working pr
 - Android reconnect works without a reachable Control Plane using a previously provisioned profile.
 
 ## Current status
-- Branch: `phase2-multiplayer-control-plane`.
-- Current verified scope: authenticated user management, one-time client activation, device lifecycle, node command queue, mTLS node transport, authenticated web device management, and Android debug build/unit tests with local key generation/profile persistence.
-- The Android default build has no Control Plane URL configured; a deployed HTTPS URL is required to enable client enrollment.
-- No AWS server, security group, production WireGuard peer, or `main` branch was changed.
+- Working branch: `ui/neon-motion-redesign-2026-11-14` (PR #1 remains Draft and unmerged).
+- Verified code scope: authenticated user/device management, OIDC customer self-service path, one-time activation fallback, mTLS node command transport, dry-run-first WireGuard executor with route checks/rollback, and Android local key generation, encrypted profile storage, connectivity diagnostics, bounded reconnect, and live WireGuard throughput chart.
+- CI validates Android build/unit tests, Go Control Plane tests, VPN node-agent tests, web-admin build, repository/deployment-kit checks, and database migrations. CI does not prove a real tunnel.
+- The default Android build has no Control Plane URL/OIDC values. Automatic customer registration requires a deployed HTTPS Control Plane and matching Cognito provider outputs.
+- Staging systemd units and environment examples are templates only; they have not been installed on any host. Node mutations remain disabled by default.
+- Not yet verified: staging AWS Cognito deployment, PostgreSQL deployment/migration on staging, public TLS/mTLS end-to-end node registration, real peer add/remove, actual VPN egress/DNS/IPv6, Android process-death/reboot behavior, subscription/billing enforcement, and production audit/telemetry.
+- No AWS resource, firewall/security group, production WireGuard peer, production database, or `main` branch was changed.

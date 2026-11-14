@@ -7,6 +7,7 @@ import com.zeusvpn.app.BuildConfig
 import com.zeusvpn.app.data.EncryptedWireGuardConfigStore
 import com.zeusvpn.app.vpn.WireGuardProfileBuilder
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
 import java.io.ByteArrayOutputStream

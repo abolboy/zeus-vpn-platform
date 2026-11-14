@@ -45,6 +45,7 @@ import com.zeusvpn.app.vpn.InvalidWireGuardProfileException
 import com.zeusvpn.app.vpn.MissingWireGuardProfileException
 import com.zeusvpn.app.vpn.WireGuardEngine
 import com.zeusvpn.app.vpn.WireGuardState
+import com.zeusvpn.app.vpn.WireGuardTrafficStats
 import android.app.Activity
 import android.net.VpnService
 import android.os.Build

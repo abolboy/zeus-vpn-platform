@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-for path in apps/android/src/main/kotlin/com/zeusvpn/app services/control-plane/cmd/zeus-control-plane services/vpn-node/internal/wireguard services/vpn-node/internal/controlplaneclient services/vpn-node/internal/worker services/vpn-node/cmd/zeus-vpn-node docs/decisions scripts .github/workflows gradle/wrapper; do
+for path in apps/android/src/main/kotlin/com/zeusvpn/app services/control-plane/cmd/zeus-control-plane services/vpn-node/internal/wireguard services/vpn-node/internal/controlplaneclient services/vpn-node/internal/worker services/vpn-node/cmd/zeus-vpn-node docs/decisions scripts .github/workflows gradle/wrapper deploy/systemd deploy/examples; do
   [[ -d "$path" ]] || { echo "FAIL: missing directory: $path"; exit 1; }
 done
 for file in README.md settings.gradle.kts build.gradle.kts gradle/wrapper/gradle-wrapper.properties gradle/wrapper/gradle-wrapper.jar gradlew apps/android/build.gradle.kts apps/android/src/main/AndroidManifest.xml services/control-plane/go.mod services/control-plane/cmd/zeus-control-plane/main.go services/control-plane/cmd/zeus-control-plane/server.go services/control-plane/cmd/zeus-control-plane/server_test.go services/control-plane/cmd/zeus-control-plane/node_api.go services/control-plane/cmd/zeus-control-plane/node_api_test.go services/vpn-node/go.mod services/vpn-node/cmd/zeus-vpn-node/main.go services/vpn-node/internal/wireguard/manager.go services/vpn-node/internal/wireguard/config.go services/vpn-node/internal/wireguard/exec.go services/vpn-node/internal/wireguard/manager_test.go services/vpn-node/internal/controlplaneclient/client.go services/vpn-node/internal/controlplaneclient/client_test.go services/vpn-node/internal/worker/worker.go services/vpn-node/internal/worker/worker_test.go services/control-plane/migrations/0003_node_agent_commands.sql services/control-plane/migrations/0004_device_lifecycle.sql docs/node-agent-protocol.md docs/troubleshooting-wireguard.md scripts/diagnose-wireguard-node.sh docs/offline-and-network-resilience.md docs/phase-1-plan.md; do
@@ -11,6 +11,7 @@ done
 bash -n gradlew
 [[ -x scripts/diagnose-wireguard-node.sh ]] || { echo "FAIL: WireGuard diagnostics script is not executable"; exit 1; }
 bash -n scripts/diagnose-wireguard-node.sh
+bash scripts/verify-deployment-kit.sh
 
 if find . -type f \( -name "*.pem" -o -name "*.key" -o -name "*.p12" -o -name "*.pfx" -o -name "*.keystore" -o -name "*.jks" \) -not -path "./.git/*" | grep -q .; then
   echo "FAIL: possible private key or signing keystore found"

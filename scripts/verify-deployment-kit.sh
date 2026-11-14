@@ -10,7 +10,7 @@ required_files=(
   "docs/staging-deployment.md"
 )
 
-for file in "\${required_files[@]}"; do
+for file in "${required_files[@]}"; do
   [[ -s "$file" ]] || { echo "FAIL: missing or empty deployment file: $file"; exit 1; }
 done
 

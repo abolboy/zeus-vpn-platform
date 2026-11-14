@@ -102,6 +102,24 @@ func main() {
 		logger.Error("API initialization failed", "error", err)
 		os.Exit(1)
 	}
+	oidcIssuer := strings.TrimSpace(os.Getenv("ZEUS_OIDC_ISSUER"))
+	oidcClientID := strings.TrimSpace(os.Getenv("ZEUS_OIDC_CLIENT_ID"))
+	if oidcIssuer != "" || oidcClientID != "" {
+		if oidcIssuer == "" || oidcClientID == "" {
+			logger.Error("ZEUS_OIDC_ISSUER and ZEUS_OIDC_CLIENT_ID must be configured together")
+			os.Exit(1)
+		}
+		oidcCtx, oidcCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		err = api.ConfigureCustomerOIDC(oidcCtx, oidcIssuer, oidcClientID)
+		oidcCancel()
+		if err != nil {
+			logger.Error("customer OIDC initialization failed", "error", err)
+			os.Exit(1)
+		}
+		logger.Info("customer OIDC self-service enrollment enabled", "issuer", oidcIssuer)
+	} else {
+		logger.Warn("customer OIDC not configured; client self-registration remains disabled")
+	}
 	server := &http.Server{
 		Addr: address, Handler: api.Handler(),
 		ReadHeaderTimeout: 5 * time.Second,

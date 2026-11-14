@@ -96,6 +96,19 @@ func newTestAPI(t *testing.T, store ControlStore, origins ...string) http.Handle
 	return api.Handler()
 }
 
+func TestCustomerEnrollmentRequiresConfiguredOIDC(t *testing.T) {
+	handler := newTestAPI(t, nil)
+	body := []byte(`{"device_ref":"customer-device-ref-0001","device_name":"Android","platform":"android","public_key":"BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc="}`)
+	request := httptest.NewRequest(http.MethodPost, "/v1/client/enroll", bytes.NewReader(body))
+	request.Header.Set("Authorization", "Bearer not-a-real-token")
+	request.Header.Set("Idempotency-Key", "customer-request-key-0001")
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusServiceUnavailable || !bytes.Contains(response.Body.Bytes(), []byte("customer_identity_not_configured")) {
+		t.Fatalf("unconfigured customer enrollment status=%d body=%s", response.Code, response.Body.String())
+	}
+}
+
 func TestHealthReadinessAndSecurityHeaders(t *testing.T) {
 	handler := newTestAPI(t, nil)
 	health := httptest.NewRecorder()
@@ -843,6 +856,15 @@ func TestPostgresStoreIntegration(t *testing.T) {
 	if enrolledDevice.UserID != enrollmentUserID || enrolledDevice.Status != "provisioning" ||
 		enrolledDevice.Peer.Status != "pending" || enrolledDevice.Peer.PublicKey != enrollmentInput.PublicKey {
 		t.Fatalf("unexpected client enrollment result: %+v", enrolledDevice)
+	}
+
+	// Customers can poll only their own device's asynchronous node provisioning state.
+	statusDevice, statusErr := store.GetCustomerVPNDevice(ctx, enrollmentUserID, enrolledDevice.ID)
+	if statusErr != nil || statusDevice.Status != "provisioning" || statusDevice.Peer.Status != "pending" {
+		t.Fatalf("customer device status lookup failed: device=%+v err=%v", statusDevice, statusErr)
+	}
+	if _, statusErr := store.GetCustomerVPNDevice(ctx, deviceUserID, enrolledDevice.ID); !errors.Is(statusErr, ErrDeviceNotFound) {
+		t.Fatalf("customer device lookup leaked another user's device: err=%v", statusErr)
 	}
 
 	// Lost-response retry with the same key is idempotent.

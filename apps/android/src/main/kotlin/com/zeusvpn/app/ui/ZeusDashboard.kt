@@ -1,18 +1,47 @@
 package com.zeusvpn.app.ui
 
-import androidx.compose.foundation.BorderStroke
+import android.app.Activity
+import android.content.ContentResolver
+import android.content.Intent
+import android.net.Uri
+import android.net.VpnService
+import android.os.Build
+import android.os.SystemClock
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.Dns
+import androidx.compose.material.icons.outlined.Home
+import androidx.compose.material.icons.outlined.Person
+import androidx.compose.material.icons.outlined.PowerSettingsNew
+import androidx.compose.material.icons.outlined.Shield
+import androidx.compose.material.icons.outlined.Tune
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
@@ -23,26 +52,43 @@ import com.zeusvpn.app.R
 import com.zeusvpn.app.data.SettingsRepository
 import com.zeusvpn.app.network.ClientEnrollmentException
 import com.zeusvpn.app.network.ClientEnrollmentRepository
+import com.zeusvpn.app.network.CustomerIdentityRepository
 import com.zeusvpn.app.network.NetworkCondition
 import com.zeusvpn.app.network.NetworkMonitor
+import com.zeusvpn.app.network.TunnelConnectivityChecker
+import com.zeusvpn.app.network.TunnelConnectivityResult
+import com.zeusvpn.app.network.TunnelProbeFailure
+import com.zeusvpn.app.network.TunnelProbeStatus
+import com.zeusvpn.app.network.TunnelReconnectPolicy
+import com.zeusvpn.app.network.TrafficRateSampler
+import com.zeusvpn.app.network.TrafficRateSample
 import com.zeusvpn.app.vpn.InvalidWireGuardProfileException
 import com.zeusvpn.app.vpn.MissingWireGuardProfileException
 import com.zeusvpn.app.vpn.WireGuardEngine
 import com.zeusvpn.app.vpn.WireGuardState
-import android.app.Activity
-import android.net.VpnService
-import android.os.Build
-import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.activity.result.contract.ActivityResultContracts
+import com.zeusvpn.app.vpn.WireGuardTrafficStats
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import java.io.ByteArrayOutputStream
+import java.io.IOException
+import java.util.Locale
 
-private val Ink = Color(0xFF070D19)
-private val Panel = Color(0xFF111D31)
-private val Mint = Color(0xFF62E6C2)
-private val Violet = Color(0xFF9D85FF)
-private val SoftText = Color(0xFF91A4B9)
-private val Line = Color(0xFF263650)
+private val AppBackground = Color(0xFF080F1C)
+private val Panel = Color(0xFF111C2D)
+private val PanelRaised = Color(0xFF1A2A42)
+private val Primary = Color(0xFF638DFF)
+private val Positive = Color(0xFF47D8B0)
+private val Warning = Color(0xFFE6B566)
+private val Danger = Color(0xFFE17E88)
+private val MainText = Color(0xFFF2F5F9)
+private val SecondaryText = Color(0xFFA7B5C8)
+private val MutedText = Color(0xFF74849B)
+private val DividerColor = Color(0xFF2A394E)
 
 @Composable
 fun ZeusDashboard() {
@@ -51,7 +97,11 @@ fun ZeusDashboard() {
     val settings = remember(context) { SettingsRepository(context) }
     val wireGuard = remember(context) { WireGuardEngine.getInstance(context) }
     val enrollment = remember(context) { ClientEnrollmentRepository(context) }
+    val identity = remember(context) { CustomerIdentityRepository(context) }
+    val tunnelChecker = remember { TunnelConnectivityChecker() }
     val wireGuardState by wireGuard.state.collectAsState()
+    val scope = rememberCoroutineScope()
+
     var profileSaved by remember { mutableStateOf(false) }
     var activationCodeDraft by remember { mutableStateOf("") }
     var enrollmentBusy by remember { mutableStateOf(false) }
@@ -59,12 +109,50 @@ fun ZeusDashboard() {
     var hasPendingEnrollment by remember { mutableStateOf(false) }
     var profileDraft by remember { mutableStateOf("") }
     var wireGuardMessage by remember { mutableStateOf("") }
-    val scope = rememberCoroutineScope()
+    var profileSetupMessage by remember { mutableStateOf("") }
+    var profileImportBusy by remember { mutableStateOf(false) }
+    var showAdvancedImport by remember { mutableStateOf(false) }
+    var showInviteFallback by remember { mutableStateOf(false) }
+    var customerSignedIn by remember { mutableStateOf(identity.hasStoredSession()) }
+    var authBusy by remember { mutableStateOf(false) }
+    var authMessage by remember { mutableStateOf("") }
+    var selectedTab by remember { mutableIntStateOf(0) }
+    var manualProbeRequest by remember { mutableIntStateOf(0) }
+
     val network by produceState(NetworkCondition.UNKNOWN, monitor) {
         monitor.observe().collect { value = it }
     }
     val autoReconnect by produceState(true, settings) {
         settings.autoReconnectEnabled.collect { value = it }
+    }
+    val tunnelDesired by produceState(false, settings) {
+        settings.tunnelDesired.collect { value = it }
+    }
+    val trafficStats by produceState(WireGuardTrafficStats.EMPTY, wireGuard, wireGuardState) {
+        if (wireGuardState != WireGuardState.ENGINE_UP) {
+            value = WireGuardTrafficStats.EMPTY
+        } else {
+            while (true) {
+                runCatching { wireGuard.trafficStats() }.onSuccess { value = it }
+                delay(3_000L)
+            }
+        }
+    }
+    val tunnelReachability by produceState(
+        TunnelConnectivityResult.IDLE,
+        tunnelChecker,
+        wireGuardState,
+        manualProbeRequest,
+    ) {
+        if (wireGuardState != WireGuardState.ENGINE_UP) {
+            value = TunnelConnectivityResult.IDLE
+        } else {
+            while (true) {
+                value = TunnelConnectivityResult.CHECKING
+                value = tunnelChecker.check()
+                delay(30_000L)
+            }
+        }
     }
 
     val connectingMessage = stringResource(R.string.wg_connecting)
@@ -77,11 +165,11 @@ fun ZeusDashboard() {
     val disconnectedMessage = stringResource(R.string.wg_disconnected_message)
     val profileDeletedMessage = stringResource(R.string.wg_profile_deleted)
 
-    LaunchedEffect(wireGuard, enrollment) {
+    LaunchedEffect(wireGuard, enrollment, identity) {
+        runCatching { wireGuard.refreshState() }
         profileSaved = runCatching { wireGuard.hasProfile() }.getOrDefault(false)
         hasPendingEnrollment = runCatching { enrollment.hasPendingEnrollment() }.getOrDefault(false)
-        // A crash may occur after the encrypted profile is committed but before the pending
-        // enrollment marker is deleted. In that case the profile is already the successful result.
+        customerSignedIn = identity.hasStoredSession()
         if (profileSaved && hasPendingEnrollment) {
             runCatching { enrollment.completeEnrollment() }
             hasPendingEnrollment = runCatching { enrollment.hasPendingEnrollment() }.getOrDefault(false)
@@ -93,6 +181,7 @@ fun ZeusDashboard() {
             wireGuardMessage = connectingMessage
             try {
                 wireGuard.connect()
+                settings.setTunnelDesired(true)
                 wireGuardMessage = connectedMessage
             } catch (_: MissingWireGuardProfileException) {
                 profileSaved = false
@@ -103,42 +192,68 @@ fun ZeusDashboard() {
         }
     }
 
+    LaunchedEffect(autoReconnect, tunnelDesired, profileSaved) {
+        if (!autoReconnect || !tunnelDesired || !profileSaved) return@LaunchedEffect
+
+        var failedAttempts = 0
+        // Observe live network changes; do not capture the initial Compose value.
+        snapshotFlow { network }.collectLatest { currentNetwork ->
+            if (currentNetwork != NetworkCondition.ONLINE && currentNetwork != NetworkCondition.LIMITED) {
+                return@collectLatest
+            }
+
+            while (true) {
+                val actualState = runCatching { wireGuard.refreshState() }
+                    .getOrDefault(wireGuard.state.value)
+                when (actualState) {
+                    WireGuardState.ENGINE_UP -> {
+                        failedAttempts = 0
+                        delay(8_000L)
+                    }
+                    WireGuardState.CONNECTING, WireGuardState.DISCONNECTING -> delay(1_000L)
+                    WireGuardState.DISCONNECTED -> {
+                        if (VpnService.prepare(context) != null) {
+                            wireGuardMessage = "برای اتصال مجدد، مجوز VPN اندروید را دوباره تأیید کنید."
+                            settings.setTunnelDesired(false)
+                            return@collectLatest
+                        }
+                        try {
+                            wireGuardMessage = "شبکه در دسترس است؛ در حال برقراری مجدد تونل..."
+                            wireGuard.connect()
+                            wireGuardMessage = "اتصال پس از بازگشت شبکه برقرار شد."
+                            failedAttempts = 0
+                        } catch (cancelled: CancellationException) {
+                            throw cancelled
+                        } catch (_: Exception) {
+                            failedAttempts += 1
+                            wireGuardMessage = "اتصال مجدد انجام نشد؛ تلاش بعدی با فاصلهٔ کنترل‌شده انجام می‌شود."
+                            delay(TunnelReconnectPolicy.delayAfterFailure(failedAttempts - 1))
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     val vpnPermissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.StartActivityForResult(),
     ) { result ->
-        if (result.resultCode == Activity.RESULT_OK) {
-            connectWireGuard()
-        } else {
+        if (result.resultCode == Activity.RESULT_OK) connectWireGuard()
+        else {
+            scope.launch { settings.setTunnelDesired(false) }
             wireGuardMessage = permissionDeniedMessage
         }
     }
 
     val requestWireGuardConnection: () -> Unit = {
         val permissionIntent = VpnService.prepare(context)
-        if (permissionIntent == null) {
-            connectWireGuard()
-        } else {
-            vpnPermissionLauncher.launch(permissionIntent)
-        }
-    }
-
-    val saveWireGuardProfile: () -> Unit = {
-        scope.launch {
-            try {
-                wireGuard.saveProfile(profileDraft)
-                profileSaved = true
-                profileDraft = ""
-                wireGuardMessage = profileSavedMessage
-            } catch (_: InvalidWireGuardProfileException) {
-                wireGuardMessage = invalidProfileMessage
-            } catch (_: Exception) {
-                wireGuardMessage = invalidProfileMessage
-            }
-        }
+        if (permissionIntent == null) connectWireGuard()
+        else vpnPermissionLauncher.launch(permissionIntent)
     }
 
     val disconnectWireGuard: () -> Unit = {
         scope.launch {
+            settings.setTunnelDesired(false)
             try {
                 wireGuard.disconnect()
                 wireGuardMessage = disconnectedMessage
@@ -148,465 +263,1100 @@ fun ZeusDashboard() {
         }
     }
 
+    val saveWireGuardProfile: () -> Unit = {
+        scope.launch {
+            try {
+                wireGuard.saveProfile(profileDraft)
+                profileSaved = true
+                profileDraft = ""
+                showAdvancedImport = false
+                profileSetupMessage = profileSavedMessage
+            } catch (_: InvalidWireGuardProfileException) {
+                wireGuardMessage = invalidProfileMessage
+            } catch (_: Exception) {
+                wireGuardMessage = invalidProfileMessage
+            }
+        }
+    }
+
     val forgetWireGuardProfile: () -> Unit = {
         scope.launch {
+            settings.setTunnelDesired(false)
             try {
                 wireGuard.forgetProfile()
                 profileSaved = false
                 profileDraft = ""
-                wireGuardMessage = profileDeletedMessage
+                profileSetupMessage = profileDeletedMessage
             } catch (_: Exception) {
                 wireGuardMessage = connectionFailedMessage
             }
         }
     }
 
-    val enrollDevice: () -> Unit = {
+    val performEnrollment: suspend (String?, String) -> Unit = { idToken, activationCode ->
         if (!enrollment.isConfigured) {
-            enrollmentMessage = "نشانی HTTPS کنترل‌پلین در تنظیمات ساخت اندروید تعیین نشده است."
+            enrollmentMessage = "نشانی HTTPS کنترل‌پلین در این نسخه تنظیم نشده است."
         } else if (profileSaved) {
-            enrollmentMessage = "ابتدا پروفایل فعلی را از این گوشی حذف کنید."
-        } else if (!hasPendingEnrollment && activationCodeDraft.isBlank()) {
-            enrollmentMessage = "کد فعال‌سازی را وارد کنید."
-        } else if (!enrollmentBusy) {
-            scope.launch {
-                enrollmentBusy = true
-                enrollmentMessage = if (hasPendingEnrollment) {
-                    "در حال ادامهٔ ثبت قبلی با همان کلید امن..."
-                } else {
-                    "در حال ساخت کلید روی گوشی و ثبت کلید عمومی..."
-                }
+            enrollmentMessage = "پروفایل فعلی روی این گوشی وجود دارد."
+        } else if (enrollmentBusy) {
+            enrollmentMessage = "درخواست ثبت دستگاه در حال اجراست."
+        } else {
+            enrollmentBusy = true
+            enrollmentMessage = "در حال ساخت کلید روی گوشی و دریافت خودکار پروفایل..."
+            try {
+                val result = enrollment.enroll(
+                    activationCode = activationCode,
+                    deviceName = Build.MODEL.orEmpty(),
+                    idToken = idToken,
+                )
+                wireGuard.saveProfile(result.profileText)
+                enrollment.completeEnrollment()
+                profileSaved = true
+                hasPendingEnrollment = false
+                activationCodeDraft = ""
+                enrollmentMessage = "دستگاه ثبت شد؛ پروفایل اتصال به‌صورت رمزگذاری‌شده ذخیره شد."
+            } catch (error: ClientEnrollmentException) {
+                enrollmentMessage = error.message ?: "ثبت دستگاه انجام نشد."
+            } catch (error: Exception) {
+                enrollmentMessage = error.message ?: "ثبت انجام نشد؛ تلاش امن برای ادامه روی همین گوشی نگهداری شده است."
+            } finally {
+                hasPendingEnrollment = runCatching { enrollment.hasPendingEnrollment() }.getOrDefault(false)
+                enrollmentBusy = false
+            }
+        }
+    }
+
+    val customerSignInLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.StartActivityForResult(),
+    ) { result ->
+        scope.launch {
+            authBusy = false
+            if (result.resultCode != Activity.RESULT_OK) {
+                authMessage = "ورود لغو شد؛ هر زمان آماده بودید دوباره تلاش کنید."
+            } else {
                 try {
-                    val result = enrollment.enroll(
-                        activationCode = activationCodeDraft,
-                        deviceName = Build.MODEL.orEmpty(),
-                    )
-                    wireGuard.saveProfile(result.profileText)
-                    enrollment.completeEnrollment()
-                    profileSaved = true
-                    hasPendingEnrollment = false
-                    activationCodeDraft = ""
-                    enrollmentMessage = "دستگاه ثبت شد و پروفایل با رمزگذاری محلی ذخیره شد. وضعیت تونل را جداگانه بررسی کنید."
-                } catch (error: ClientEnrollmentException) {
-                    enrollmentMessage = error.message ?: "فعال‌سازی دستگاه انجام نشد."
+                    val idToken = identity.completeAuthorization(result.data)
+                    customerSignedIn = true
+                    authMessage = "حساب شما با موفقیت تأیید شد."
+                    if (!profileSaved && enrollment.isConfigured) {
+                        performEnrollment(idToken, "")
+                    }
                 } catch (error: Exception) {
-                    enrollmentMessage = error.message ?: "فعال‌سازی انجام نشد؛ تلاش امن برای ادامه روی همین گوشی نگهداری شده است."
-                } finally {
-                    hasPendingEnrollment = runCatching { enrollment.hasPendingEnrollment() }.getOrDefault(false)
-                    enrollmentBusy = false
+                    authMessage = error.message ?: "ورود امن انجام نشد."
                 }
             }
         }
     }
 
-    Box(
-        Modifier.fillMaxSize()
-            .background(Brush.verticalGradient(listOf(Ink, Color(0xFF0A1729), Ink)))
-    ) {
-        Box(
-            Modifier.align(Alignment.TopEnd).offset(x = 72.dp, y = (-70).dp)
-                .size(250.dp)
-                .background(
-                    Brush.radialGradient(listOf(Mint.copy(alpha = 0.17f), Color.Transparent)),
-                    CircleShape,
-                )
-        )
-        Box(
-            Modifier.align(Alignment.BottomStart).offset(x = (-110).dp, y = 90.dp)
-                .size(260.dp)
-                .background(
-                    Brush.radialGradient(listOf(Violet.copy(alpha = 0.13f), Color.Transparent)),
-                    CircleShape,
-                )
-        )
+    val startCustomerSignIn: () -> Unit = {
+        if (!identity.isConfigured) {
+            authMessage = "تنظیمات ارائه‌دهندهٔ هویت OIDC هنوز برای این نسخه وارد نشده است."
+        } else if (!authBusy) {
+            scope.launch {
+                authBusy = true
+                authMessage = "در حال آماده‌سازی ورود امن..."
+                try {
+                    customerSignInLauncher.launch(identity.createAuthorizationIntent())
+                } catch (error: Exception) {
+                    authBusy = false
+                    authMessage = error.message ?: "صفحهٔ ورود در دسترس نیست."
+                }
+            }
+        }
+    }
 
-        Column(
-            Modifier.fillMaxSize().verticalScroll(rememberScrollState())
-                .padding(horizontal = 20.dp, vertical = 22.dp),
-            verticalArrangement = Arrangement.spacedBy(16.dp),
+    val signOutCustomer: () -> Unit = {
+        identity.signOutLocally()
+        customerSignedIn = false
+        authMessage = "از حساب خارج شدید؛ پروفایل ذخیره‌شده روی این گوشی حذف نشد."
+    }
+
+    val enrollDevice: () -> Unit = {
+        if (!enrollment.isConfigured) {
+            enrollmentMessage = "دریافت خودکار تا زمان تنظیم نشانی HTTPS کنترل‌پلین فعال نمی‌شود."
+        } else if (profileSaved) {
+            enrollmentMessage = "پروفایل فعلی روی این گوشی وجود دارد."
+        } else if (customerSignedIn) {
+            scope.launch {
+                try {
+                    val idToken = identity.freshIdToken()
+                    performEnrollment(idToken, "")
+                } catch (error: Exception) {
+                    customerSignedIn = identity.hasStoredSession()
+                    authMessage = error.message ?: "نشست حساب منقضی شده است؛ دوباره وارد شوید."
+                }
+            }
+        } else if (activationCodeDraft.isBlank()) {
+            showInviteFallback = true
+            enrollmentMessage = "برای دریافت خودکار، وارد حساب شوید؛ یا کد دعوت یک‌بارمصرف را وارد کنید."
+        } else {
+            scope.launch { performEnrollment(null, activationCodeDraft) }
+        }
+    }
+
+    val profilePicker = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocument(),
+    ) { uri: Uri? ->
+        if (uri != null) {
+            scope.launch {
+                profileImportBusy = true
+                wireGuardMessage = "در حال خواندن و اعتبارسنجی فایل..."
+                try {
+                    val profileText = readProfileDocument(context.contentResolver, uri)
+                    wireGuard.saveProfile(profileText)
+                    profileSaved = true
+                    profileDraft = ""
+                    showAdvancedImport = false
+                    profileSetupMessage = profileSavedMessage
+                } catch (_: InvalidWireGuardProfileException) {
+                    wireGuardMessage = invalidProfileMessage
+                } catch (_: Exception) {
+                    wireGuardMessage = "فایل انتخاب‌شده قابل خواندن یا معتبر نیست."
+                } finally {
+                    profileImportBusy = false
+                }
+            }
+        }
+    }
+
+    Scaffold(
+        containerColor = AppBackground,
+        bottomBar = {
+            NavigationBar(
+                containerColor = Color(0xFF0D1727),
+                contentColor = SecondaryText,
+                tonalElevation = 0.dp,
+            ) {
+                NavigationBarItem(
+                    selected = selectedTab == 0,
+                    onClick = { selectedTab = 0 },
+                    icon = { Icon(Icons.Outlined.Home, contentDescription = "خانه") },
+                    label = { Text("خانه") },
+                    colors = NavigationBarItemDefaults.colors(
+                        selectedIconColor = Primary,
+                        selectedTextColor = MainText,
+                        indicatorColor = Primary.copy(alpha = 0.13f),
+                        unselectedIconColor = MutedText,
+                        unselectedTextColor = MutedText,
+                    ),
+                )
+                NavigationBarItem(
+                    selected = selectedTab == 1,
+                    onClick = { selectedTab = 1 },
+                    icon = { Icon(Icons.Outlined.Dns, contentDescription = "مسیر سرور") },
+                    label = { Text("سرورها") },
+                    colors = NavigationBarItemDefaults.colors(
+                        selectedIconColor = Primary,
+                        selectedTextColor = MainText,
+                        indicatorColor = Primary.copy(alpha = 0.13f),
+                        unselectedIconColor = MutedText,
+                        unselectedTextColor = MutedText,
+                    ),
+                )
+                NavigationBarItem(
+                    selected = selectedTab == 2,
+                    onClick = { selectedTab = 2 },
+                    icon = { Icon(Icons.Outlined.Person, contentDescription = "حساب") },
+                    label = { Text("حساب") },
+                    colors = NavigationBarItemDefaults.colors(
+                        selectedIconColor = Primary,
+                        selectedTextColor = MainText,
+                        indicatorColor = Primary.copy(alpha = 0.13f),
+                        unselectedIconColor = MutedText,
+                        unselectedTextColor = MutedText,
+                    ),
+                )
+            }
+        },
+    ) { insets ->
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(
+                    Brush.verticalGradient(
+                        listOf(Color(0xFF101C30), AppBackground, Color(0xFF080D17)),
+                    ),
+                )
+                .padding(insets),
         ) {
-            BrandHeader()
-            HeroCard()
-            NetworkCard(network)
-            EngineCard()
-            WireGuardCard(
-                state = wireGuardState,
-                profileSaved = profileSaved,
-                pendingEnrollment = hasPendingEnrollment,
-                profileDraft = profileDraft,
-                message = if (hasPendingEnrollment) "ثبت دستگاه در انتظار تکمیل است؛ قبل از جایگزینی پروفایل، همان ثبت قبلی را ادامه دهید." else wireGuardMessage,
-                onProfileDraftChange = { profileDraft = it },
-                onSaveProfile = saveWireGuardProfile,
-                onConnect = requestWireGuardConnection,
-                onDisconnect = disconnectWireGuard,
-                onForgetProfile = forgetWireGuardProfile,
-            )
-            EnrollmentCard(
-                configured = enrollment.isConfigured,
-                profileSaved = profileSaved,
-                hasPendingEnrollment = hasPendingEnrollment,
-                activationCode = activationCodeDraft,
-                busy = enrollmentBusy,
-                message = enrollmentMessage,
-                onActivationCodeChange = { activationCodeDraft = it },
-                onEnroll = enrollDevice,
-            )
-            OfflineCard()
-            SettingsCard(
-                enabled = autoReconnect,
-                onEnabledChange = { enabled ->
-                    scope.launch { settings.setAutoReconnectEnabled(enabled) }
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .verticalScroll(rememberScrollState())
+                    .imePadding()
+                    .padding(horizontal = 18.dp, vertical = 16.dp),
+                verticalArrangement = Arrangement.spacedBy(16.dp),
+            ) {
+                BrandHeader(customerSignedIn)
+
+                when (selectedTab) {
+                    0 -> {
+                        ConnectionCard(
+                            state = wireGuardState,
+                            profileSaved = profileSaved,
+                            message = wireGuardMessage,
+                            stats = trafficStats,
+                            reachability = tunnelReachability,
+                            onConnect = requestWireGuardConnection,
+                            onDisconnect = disconnectWireGuard,
+                        )
+                        if (wireGuardState == WireGuardState.ENGINE_UP) {
+                            TrafficStatsCard(trafficStats, tunnelReachability) { manualProbeRequest += 1 }
+                        }
+                        NetworkSummaryCard(network)
+                        ProfileSetupCard(
+                            configured = enrollment.isConfigured,
+                            identityConfigured = identity.isConfigured,
+                            customerSignedIn = customerSignedIn,
+                            authBusy = authBusy,
+                            authMessage = authMessage,
+                            onSignIn = startCustomerSignIn,
+                            onSignOut = signOutCustomer,
+                            profileSaved = profileSaved,
+                            hasPendingEnrollment = hasPendingEnrollment,
+                            activationCode = activationCodeDraft,
+                            showInviteFallback = showInviteFallback,
+                            enrollmentBusy = enrollmentBusy,
+                            importBusy = profileImportBusy,
+                            enrollmentMessage = enrollmentMessage,
+                            profileMessage = profileSetupMessage,
+                            profileDraft = profileDraft,
+                            showAdvancedImport = showAdvancedImport,
+                            canForgetProfile = wireGuardState == WireGuardState.DISCONNECTED,
+                            onActivationCodeChange = { value ->
+                                if (value.length <= 43 && value.all {
+                                    it in 'A'..'Z' || it in 'a'..'z' || it in '0'..'9' || it == '-' || it == '_'
+                                }) activationCodeDraft = value
+                            },
+                            onToggleInviteFallback = { showInviteFallback = !showInviteFallback },
+                            onEnroll = enrollDevice,
+                            onChooseFile = {
+                                if (!profileImportBusy && wireGuardState == WireGuardState.DISCONNECTED) {
+                                    profilePicker.launch(arrayOf("*/*"))
+                                }
+                            },
+                            onToggleAdvanced = { showAdvancedImport = !showAdvancedImport },
+                            onProfileDraftChange = { profileDraft = it },
+                            onSaveProfile = saveWireGuardProfile,
+                            onForgetProfile = forgetWireGuardProfile,
+                        )
+                        Text(
+                            stringResource(R.string.disclaimer),
+                            modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp),
+                            color = MutedText,
+                            style = MaterialTheme.typography.bodySmall,
+                            lineHeight = 18.sp,
+                        )
+                    }
+                    1 -> {
+                        SmartRoutingCard()
+                        NetworkSummaryCard(network)
+                        if (wireGuardState == WireGuardState.ENGINE_UP) {
+                            TrafficStatsCard(trafficStats, tunnelReachability) { manualProbeRequest += 1 }
+                        } else {
+                            PanelCard {
+                                Text("آمار زنده پس از فعال‌شدن تونل نمایش داده می‌شود.", color = SecondaryText,
+                                    style = MaterialTheme.typography.bodyMedium, lineHeight = 20.sp)
+                            }
+                        }
+                    }
+                    else -> {
+                        CustomerAccountCard(
+                            identityConfigured = identity.isConfigured,
+                            signedIn = customerSignedIn,
+                            authBusy = authBusy,
+                            authMessage = authMessage,
+                            onSignIn = startCustomerSignIn,
+                            onSignOut = signOutCustomer,
+                            profileSaved = profileSaved,
+                            onGoHome = { selectedTab = 0 },
+                        )
+                        SettingsCard(
+                            enabled = autoReconnect,
+                            onEnabledChange = { enabled ->
+                                scope.launch { settings.setAutoReconnectEnabled(enabled) }
+                            },
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun BrandHeader(customerSignedIn: Boolean) {
+    Row(
+        modifier = Modifier.fillMaxWidth().padding(top = 4.dp, bottom = 2.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Surface(
+            modifier = Modifier.size(48.dp),
+            shape = RoundedCornerShape(15.dp),
+            color = Primary.copy(alpha = 0.17f),
+            border = androidx.compose.foundation.BorderStroke(1.dp, Primary.copy(alpha = 0.42f)),
+        ) {
+            Box(contentAlignment = Alignment.Center) {
+                Icon(Icons.Outlined.Shield, contentDescription = null, tint = Primary, modifier = Modifier.size(28.dp))
+            }
+        }
+        Spacer(Modifier.width(12.dp))
+        Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            Text("ZEUS VPN", color = MainText, fontSize = 21.sp, fontWeight = FontWeight.ExtraBold, letterSpacing = 1.1.sp)
+            Text("SECURE PRIVATE NETWORK", color = MutedText, style = MaterialTheme.typography.labelSmall, letterSpacing = 1.25.sp)
+        }
+        Column(horizontalAlignment = Alignment.End, verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            StatusPill(if (customerSignedIn) Positive else Primary, if (customerSignedIn) "ACCOUNT" else "GUEST")
+            Text("ANDROID", color = MutedText, style = MaterialTheme.typography.labelSmall, letterSpacing = 1.sp)
+        }
+    }
+}
+
+@Composable
+private fun ConnectionCard(
+    state: WireGuardState,
+    profileSaved: Boolean,
+    message: String,
+    stats: WireGuardTrafficStats,
+    reachability: TunnelConnectivityResult,
+    onConnect: () -> Unit,
+    onDisconnect: () -> Unit,
+) {
+    val connected = state == WireGuardState.ENGINE_UP
+    val busy = state == WireGuardState.CONNECTING || state == WireGuardState.DISCONNECTING
+    val handshakeFresh = stats.latestHandshakeEpochMillis > 0L &&
+        System.currentTimeMillis() - stats.latestHandshakeEpochMillis <= 180_000L
+    val internetVerified = connected && reachability.status == TunnelProbeStatus.REACHABLE
+    val statusColor = when (state) {
+        WireGuardState.ENGINE_UP -> if (internetVerified) Positive else Warning
+        WireGuardState.CONNECTING, WireGuardState.DISCONNECTING -> Warning
+        WireGuardState.DISCONNECTED -> MutedText
+    }
+    val title = when (state) {
+        WireGuardState.ENGINE_UP -> when {
+            internetVerified -> "اینترنت از مسیر VPN پاسخ می‌دهد"
+            handshakeFresh -> "تونل فعال است؛ اینترنت تأیید نشده"
+            else -> "موتور فعال است؛ Handshake تأیید نشده"
+        }
+        WireGuardState.CONNECTING -> "در حال اتصال"
+        WireGuardState.DISCONNECTING -> "در حال قطع اتصال"
+        WireGuardState.DISCONNECTED -> "آمادهٔ اتصال"
+    }
+    val detail = when (state) {
+        WireGuardState.ENGINE_UP -> when {
+            internetVerified -> "آزمون HTTPS از داخل برنامه پاسخ معتبر دریافت کرد؛ دسترسی همهٔ سایت‌ها و برنامه‌ها جداگانه تضمین نمی‌شود."
+            reachability.status == TunnelProbeStatus.CHECKING -> "موتور تونل روشن است؛ اکنون مسیر اینترنت از داخل برنامه بررسی می‌شود."
+            handshakeFresh -> "Handshake تازه ثبت شده، اما آزمون HTTPS موفق نبود. " + probeFailureMessage(reachability.failure)
+            else -> "فقط موتور محلی فعال است؛ هنوز Handshake معتبر و دسترسی اینترنت تأیید نشده است."
+        }
+        WireGuardState.CONNECTING -> "در حال ایجاد تونل رمزگذاری‌شده..."
+        WireGuardState.DISCONNECTING -> "در حال بستن تونل امن..."
+        WireGuardState.DISCONNECTED -> if (profileSaved) "پروفایل این دستگاه آمادهٔ استفاده است." else "برای شروع، حساب بسازید یا اتصال را با کد دعوت دریافت کنید."
+    }
+
+    PanelCard {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(5.dp)) {
+                Text("CONTROL CENTER", color = MutedText, style = MaterialTheme.typography.labelSmall, letterSpacing = 1.4.sp)
+                Text(title, color = MainText, style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
+            }
+            StatusPill(statusColor, when (state) {
+                WireGuardState.ENGINE_UP -> if (internetVerified) "ONLINE" else "VERIFY"
+                WireGuardState.CONNECTING, WireGuardState.DISCONNECTING -> "BUSY"
+                WireGuardState.DISCONNECTED -> "READY"
+            })
+        }
+        Box(modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp), contentAlignment = Alignment.Center) {
+            ConnectionOrb(statusColor, connected, busy)
+        }
+        Text(detail, modifier = Modifier.fillMaxWidth(), color = SecondaryText, style = MaterialTheme.typography.bodyMedium, lineHeight = 21.sp)
+        Button(
+            onClick = if (connected) onDisconnect else onConnect,
+            enabled = !busy && (connected || profileSaved),
+            modifier = Modifier.fillMaxWidth().height(54.dp),
+            shape = RoundedCornerShape(16.dp),
+            colors = ButtonDefaults.buttonColors(
+                containerColor = if (connected) Danger else Primary,
+                contentColor = Color.White,
+                disabledContainerColor = PanelRaised,
+                disabledContentColor = MutedText,
+            ),
+        ) {
+            Icon(if (connected) Icons.Outlined.PowerSettingsNew else Icons.Outlined.Shield, contentDescription = null)
+            Spacer(Modifier.width(9.dp))
+            Text(
+                when {
+                    busy -> "لطفاً صبر کنید..."
+                    connected -> "قطع اتصال امن"
+                    profileSaved -> "اتصال به ZEUS"
+                    else -> "ابتدا دریافت اتصال"
                 },
+                fontWeight = FontWeight.Bold,
+                fontSize = 15.sp,
             )
-            Text(
-                stringResource(R.string.phase_footer),
-                Modifier.align(Alignment.CenterHorizontally).padding(top = 3.dp),
-                color = Mint,
-                style = MaterialTheme.typography.labelMedium,
-                letterSpacing = 1.1.sp,
-            )
-            Text(
-                stringResource(R.string.disclaimer),
-                Modifier.align(Alignment.CenterHorizontally),
-                color = SoftText,
-                style = MaterialTheme.typography.bodySmall,
+        }
+        if (message.isNotBlank()) {
+            InlineNotice(
+                text = message,
+                color = if (internetVerified || message.contains("ذخیره شد") || message.contains("معتبر")) Positive else Warning,
             )
         }
     }
 }
 
+@Composable
+private fun probeFailureMessage(failure: TunnelProbeFailure?): String = when (failure) {
+    TunnelProbeFailure.DNS -> "نام دامنه resolve نشد؛ DNS پروفایل و دسترسی DNS از مسیر VPN را بررسی کنید."
+    TunnelProbeFailure.TIMEOUT -> "پاسخ در مهلت مقرر نرسید؛ مسیر خروجی، فایروال، NAT و MTU نود را بررسی کنید."
+    TunnelProbeFailure.ROUTE -> "مسیر شبکه برقرار نشد؛ IP forwarding، NAT و مسیر پیش‌فرض سرور را بررسی کنید."
+    TunnelProbeFailure.TLS -> "ارتباط HTTPS در مرحله TLS شکست خورد؛ ساعت دستگاه و فیلتر یا بازرسی TLS را بررسی کنید."
+    TunnelProbeFailure.HTTP_STATUS -> "مقصد آزمون پاسخ ۲۰۴ مورد انتظار را نداد؛ ممکن است مقصد فیلتر یا پاسخ آن تغییر کرده باشد."
+    TunnelProbeFailure.UNKNOWN, null -> "DNS، IP forwarding، NAT، مسیر خروجی و فایروال VPS را بررسی کنید."
+}
 
 @Composable
-private fun EnrollmentCard(
+private fun ConnectionOrb(statusColor: Color, connected: Boolean, busy: Boolean) {
+    val pulse = rememberInfiniteTransition(label = "zeus-connection-pulse")
+    val scale by pulse.animateFloat(
+        initialValue = 0.97f,
+        targetValue = 1.035f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(durationMillis = 2_200, easing = FastOutSlowInEasing),
+            repeatMode = RepeatMode.Reverse,
+        ),
+        label = "zeus-pulse-scale",
+    )
+    Box(modifier = Modifier.size(186.dp), contentAlignment = Alignment.Center) {
+        Canvas(Modifier.fillMaxSize()) {
+            val radius = size.minDimension * 0.47f
+            drawCircle(statusColor.copy(alpha = 0.055f), radius = radius, center = Offset(size.width / 2f, size.height / 2f))
+            drawCircle(statusColor.copy(alpha = 0.16f), radius = radius * 0.87f, center = Offset(size.width / 2f, size.height / 2f), style = Stroke(1.dp.toPx()))
+            drawArc(
+                brush = Brush.sweepGradient(
+                    listOf(statusColor.copy(alpha = 0.12f), statusColor, Primary.copy(alpha = 0.2f), statusColor.copy(alpha = 0.12f)),
+                ),
+                startAngle = -90f,
+                sweepAngle = if (connected) 292f else 236f,
+                useCenter = false,
+                topLeft = Offset((size.width - radius * 1.62f) / 2f, (size.height - radius * 1.62f) / 2f),
+                size = Size(radius * 1.62f, radius * 1.62f),
+                style = Stroke(width = 5.dp.toPx(), cap = StrokeCap.Round),
+            )
+        }
+        Surface(
+            modifier = Modifier.size(128.dp).graphicsLayer {
+                scaleX = if (busy) 1f else scale
+                scaleY = if (busy) 1f else scale
+            },
+            shape = CircleShape,
+            color = PanelRaised,
+            border = androidx.compose.foundation.BorderStroke(1.dp, statusColor.copy(alpha = 0.35f)),
+            shadowElevation = 12.dp,
+        ) {
+            Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
+                Icon(
+                    imageVector = if (connected) Icons.Outlined.Shield else Icons.Outlined.PowerSettingsNew,
+                    contentDescription = null,
+                    tint = statusColor,
+                    modifier = Modifier.size(39.dp),
+                )
+                Spacer(Modifier.height(7.dp))
+                Text(if (connected) "ACTIVE" else if (busy) "WORKING" else "ZEUS", color = MainText, fontWeight = FontWeight.ExtraBold, letterSpacing = 1.3.sp)
+                Text(if (connected) "ENGINE ON" else "TUNNEL OFF", color = MutedText, style = MaterialTheme.typography.labelSmall, letterSpacing = 0.7.sp)
+            }
+        }
+    }
+}
+
+@Composable
+private fun NetworkSummaryCard(network: NetworkCondition) {
+    val (label, detail, color) = when (network) {
+        NetworkCondition.ONLINE -> Triple("اینترنت در دسترس است", "اتصال اینترنت دستگاه توسط اندروید تأیید شده است.", Positive)
+        NetworkCondition.LIMITED -> Triple("اینترنت محدود است", "شبکه وجود دارد اما دسترسی اینترنت تأیید نشده است.", Warning)
+        NetworkCondition.OFFLINE -> Triple("دستگاه آفلاین است", "اتصال شبکه‌ای با دسترسی اینترنت پیدا نشد.", Danger)
+        NetworkCondition.UNKNOWN -> Triple("در حال بررسی شبکه", "وضعیت شبکه دستگاه هنوز مشخص نیست.", MutedText)
+    }
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(Panel, RoundedCornerShape(14.dp))
+            .border(1.dp, DividerColor, RoundedCornerShape(14.dp))
+            .padding(horizontal = 15.dp, vertical = 13.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Box(
+            Modifier.size(9.dp).background(color, CircleShape)
+        )
+        Spacer(Modifier.width(11.dp))
+        Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+            Text(label, color = MainText, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
+            Text(detail, color = SecondaryText, style = MaterialTheme.typography.bodySmall, lineHeight = 17.sp)
+        }
+    }
+}
+
+@Composable
+private fun TrafficStatsCard(
+    stats: WireGuardTrafficStats,
+    reachability: TunnelConnectivityResult,
+    onRefresh: () -> Unit,
+) {
+    val rateSampler = remember { TrafficRateSampler(maxSamples = 24) }
+    var rateHistory by remember { mutableStateOf(emptyList<TrafficRateSample>()) }
+    LaunchedEffect(stats.receivedBytes, stats.sentBytes) {
+        rateHistory = rateSampler.addSnapshot(
+            receivedBytes = stats.receivedBytes,
+            sentBytes = stats.sentBytes,
+            timestampMillis = SystemClock.elapsedRealtime(),
+        )
+    }
+    val latestRate = rateHistory.lastOrNull()
+
+    PanelCard {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                Text("ترافیک تونل", color = MainText, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                Text("به‌روزرسانی خودکار هر ۳ ثانیه", color = MutedText, style = MaterialTheme.typography.labelSmall)
+            }
+            TextButton(onClick = onRefresh, enabled = reachability.status != TunnelProbeStatus.CHECKING) {
+                Text("آزمون مجدد")
+            }
+            StatusPill(
+                when (reachability.status) {
+                    TunnelProbeStatus.REACHABLE -> Positive
+                    TunnelProbeStatus.UNREACHABLE -> Danger
+                    TunnelProbeStatus.CHECKING -> Warning
+                    TunnelProbeStatus.IDLE -> MutedText
+                },
+                when (reachability.status) {
+                    TunnelProbeStatus.REACHABLE -> "ONLINE"
+                    TunnelProbeStatus.UNREACHABLE -> "NO NET"
+                    TunnelProbeStatus.CHECKING -> "CHECK"
+                    TunnelProbeStatus.IDLE -> "IDLE"
+                },
+            )
+        }
+        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            TrafficValue(
+                modifier = Modifier.weight(1f),
+                label = "دریافت",
+                value = formatTrafficBytes(stats.receivedBytes),
+                accent = Primary,
+                symbol = "↓",
+            )
+            TrafficValue(
+                modifier = Modifier.weight(1f),
+                label = "ارسال",
+                value = formatTrafficBytes(stats.sentBytes),
+                accent = Positive,
+                symbol = "↑",
+            )
+        }
+        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            ThroughputMetric(
+                modifier = Modifier.weight(1f),
+                label = "دانلود لحظه‌ای",
+                value = formatThroughputMbps(latestRate?.downloadBytesPerSecond),
+                accent = Primary,
+            )
+            ThroughputMetric(
+                modifier = Modifier.weight(1f),
+                label = "آپلود لحظه‌ای",
+                value = formatThroughputMbps(latestRate?.uploadBytesPerSecond),
+                accent = Positive,
+            )
+        }
+        LiveThroughputChart(rateHistory)
+        HorizontalDivider(color = DividerColor)
+        val handshakeLabel = if (stats.latestHandshakeEpochMillis > 0L) {
+            "آخرین Handshake: " + elapsedSince(stats.latestHandshakeEpochMillis)
+        } else {
+            "هنوز Handshake موفقی ثبت نشده است"
+        }
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Box(Modifier.size(7.dp).background(
+                if (stats.latestHandshakeEpochMillis > 0L) Positive else Warning,
+                CircleShape,
+            ))
+            Spacer(Modifier.width(9.dp))
+            Text(
+                handshakeLabel,
+                color = if (stats.latestHandshakeEpochMillis > 0L) Positive else Warning,
+                style = MaterialTheme.typography.bodySmall,
+            )
+        }
+        val probeMessage = when (reachability.status) {
+            TunnelProbeStatus.REACHABLE ->
+                "آزمون HTTPS از داخل برنامه موفق بود (${reachability.successfulProvider ?: "مقصد تأییدشده"})."
+            TunnelProbeStatus.CHECKING ->
+                "در حال آزمون HTTPS از داخل نشست برنامه..."
+            TunnelProbeStatus.UNREACHABLE ->
+                "آزمون HTTPS از داخل برنامه شکست خورد. " + probeFailureMessage(reachability.failure)
+            TunnelProbeStatus.IDLE ->
+                "آزمون اینترنت پس از فعال‌شدن موتور اجرا می‌شود."
+        }
+        Text(
+            probeMessage,
+            color = when (reachability.status) {
+                TunnelProbeStatus.REACHABLE -> Positive
+                TunnelProbeStatus.UNREACHABLE -> Danger
+                TunnelProbeStatus.CHECKING -> Warning
+                TunnelProbeStatus.IDLE -> MutedText
+            },
+            style = MaterialTheme.typography.bodySmall,
+            lineHeight = 18.sp,
+        )
+        Text(
+            "شمارنده‌ها و Handshake از موتور WireGuard خوانده می‌شوند. آزمون HTTPS فقط دسترسی همان مقصدها را می‌سنجد و سلامت تمام سایت‌ها را تضمین نمی‌کند.",
+            color = MutedText,
+            style = MaterialTheme.typography.labelSmall,
+            lineHeight = 17.sp,
+        )
+    }
+}
+
+@Composable
+private fun TrafficValue(
+    modifier: Modifier,
+    label: String,
+    value: String,
+    accent: Color,
+    symbol: String,
+) {
+    Column(
+        modifier
+            .background(PanelRaised, RoundedCornerShape(12.dp))
+            .border(1.dp, DividerColor, RoundedCornerShape(12.dp))
+            .padding(horizontal = 12.dp, vertical = 12.dp),
+        verticalArrangement = Arrangement.spacedBy(7.dp),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(symbol, color = accent, fontWeight = FontWeight.Bold, fontSize = 16.sp)
+            Spacer(Modifier.width(6.dp))
+            Text(label, color = SecondaryText, style = MaterialTheme.typography.labelMedium)
+        }
+        Text(
+            value,
+            color = MainText,
+            fontSize = 17.sp,
+            fontWeight = FontWeight.Bold,
+            maxLines = 1,
+        )
+    }
+}
+
+@Composable
+private fun ThroughputMetric(
+    modifier: Modifier,
+    label: String,
+    value: String,
+    accent: Color,
+) {
+    Column(
+        modifier
+            .background(PanelRaised, RoundedCornerShape(12.dp))
+            .border(1.dp, DividerColor, RoundedCornerShape(12.dp))
+            .padding(horizontal = 12.dp, vertical = 11.dp),
+        verticalArrangement = Arrangement.spacedBy(7.dp),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Box(Modifier.size(7.dp).background(accent, CircleShape))
+            Spacer(Modifier.width(7.dp))
+            Text(label, color = SecondaryText, style = MaterialTheme.typography.labelSmall)
+        }
+        Text(
+            value,
+            color = MainText,
+            fontSize = 16.sp,
+            fontWeight = FontWeight.Bold,
+            maxLines = 1,
+        )
+    }
+}
+
+@Composable
+private fun LiveThroughputChart(samples: List<TrafficRateSample>) {
+    val glowTransition = rememberInfiniteTransition(label = "zeus-throughput-glow")
+    val glowAlpha by glowTransition.animateFloat(
+        initialValue = 0.45f,
+        targetValue = 1f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(durationMillis = 1_700, easing = FastOutSlowInEasing),
+            repeatMode = RepeatMode.Reverse,
+        ),
+        label = "zeus-throughput-glow-alpha",
+    )
+
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text("نمودار زندهٔ پهنای باند", color = MainText, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Box(Modifier.size(6.dp).background(Positive.copy(alpha = glowAlpha), CircleShape))
+                Spacer(Modifier.width(6.dp))
+                Text("LIVE · 3s", color = Positive, style = MaterialTheme.typography.labelSmall, letterSpacing = 0.6.sp)
+            }
+        }
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(116.dp)
+                .background(Panel.copy(alpha = 0.76f), RoundedCornerShape(13.dp))
+                .border(1.dp, DividerColor, RoundedCornerShape(13.dp))
+                .padding(horizontal = 10.dp, vertical = 9.dp),
+        ) {
+            Canvas(Modifier.fillMaxSize()) {
+                val top = size.height * 0.08f
+                val bottom = size.height * 0.92f
+                for (index in 0..3) {
+                    val y = top + (bottom - top) * index / 3f
+                    drawLine(
+                        color = DividerColor.copy(alpha = 0.7f),
+                        start = Offset(0f, y),
+                        end = Offset(size.width, y),
+                        strokeWidth = 1.dp.toPx(),
+                    )
+                }
+
+                if (samples.size == 1) {
+                    drawCircle(
+                        color = Primary.copy(alpha = glowAlpha),
+                        radius = 4.dp.toPx(),
+                        center = Offset(size.width / 2f, bottom),
+                    )
+                } else if (samples.size >= 2) {
+                    val peakBytesPerSecond = samples.maxOf {
+                        maxOf(it.downloadBytesPerSecond, it.uploadBytesPerSecond)
+                    }.coerceAtLeast(32_000.0)
+
+                    fun point(index: Int, bytesPerSecond: Double): Offset {
+                        val x = size.width * index.toFloat() / (samples.size - 1).toFloat()
+                        val normalized = (bytesPerSecond / peakBytesPerSecond).toFloat().coerceIn(0f, 1f)
+                        val y = bottom - normalized * (bottom - top)
+                        return Offset(x, y)
+                    }
+
+                    val downloadPath = Path()
+                    val uploadPath = Path()
+                    samples.forEachIndexed { index, sample ->
+                        val download = point(index, sample.downloadBytesPerSecond)
+                        val upload = point(index, sample.uploadBytesPerSecond)
+                        if (index == 0) {
+                            downloadPath.moveTo(download.x, download.y)
+                            uploadPath.moveTo(upload.x, upload.y)
+                        } else {
+                            downloadPath.lineTo(download.x, download.y)
+                            uploadPath.lineTo(upload.x, upload.y)
+                        }
+                    }
+
+                    drawPath(
+                        path = downloadPath,
+                        color = Primary.copy(alpha = 0.14f + 0.10f * glowAlpha),
+                        style = Stroke(width = 8.dp.toPx(), cap = StrokeCap.Round),
+                    )
+                    drawPath(
+                        path = uploadPath,
+                        color = Positive.copy(alpha = 0.14f + 0.10f * glowAlpha),
+                        style = Stroke(width = 8.dp.toPx(), cap = StrokeCap.Round),
+                    )
+                    drawPath(
+                        path = downloadPath,
+                        color = Primary,
+                        style = Stroke(width = 2.5.dp.toPx(), cap = StrokeCap.Round),
+                    )
+                    drawPath(
+                        path = uploadPath,
+                        color = Positive,
+                        style = Stroke(width = 2.5.dp.toPx(), cap = StrokeCap.Round),
+                    )
+
+                    val last = samples.last()
+                    val lastIndex = samples.lastIndex
+                    val downloadPoint = point(lastIndex, last.downloadBytesPerSecond)
+                    val uploadPoint = point(lastIndex, last.uploadBytesPerSecond)
+                    drawCircle(Primary, radius = 3.5.dp.toPx(), center = downloadPoint)
+                    drawCircle(Positive, radius = 3.5.dp.toPx(), center = uploadPoint)
+                }
+            }
+            if (samples.size < 2) {
+                Text(
+                    "در حال جمع‌آوری نمونه‌های واقعی تونل...",
+                    modifier = Modifier.align(Alignment.Center),
+                    color = MutedText,
+                    style = MaterialTheme.typography.labelSmall,
+                )
+            }
+        }
+        Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Box(Modifier.size(7.dp).background(Primary, CircleShape))
+                Spacer(Modifier.width(6.dp))
+                Text("دریافت از سرور", color = SecondaryText, style = MaterialTheme.typography.labelSmall)
+            }
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Box(Modifier.size(7.dp).background(Positive, CircleShape))
+                Spacer(Modifier.width(6.dp))
+                Text("ارسال به سرور", color = SecondaryText, style = MaterialTheme.typography.labelSmall)
+            }
+        }
+    }
+}
+
+private fun formatThroughputMbps(bytesPerSecond: Double?): String {
+    if (bytesPerSecond == null) return "در حال سنجش"
+    val megabitsPerSecond = bytesPerSecond * 8.0 / 1_000_000.0
+    return String.format(Locale.US, "%.1f Mbps", megabitsPerSecond)
+}
+
+
+@Composable
+private fun ProfileSetupCard(
     configured: Boolean,
+    identityConfigured: Boolean,
+    customerSignedIn: Boolean,
+    authBusy: Boolean,
+    authMessage: String,
+    onSignIn: () -> Unit,
+    onSignOut: () -> Unit,
     profileSaved: Boolean,
     hasPendingEnrollment: Boolean,
     activationCode: String,
-    busy: Boolean,
-    message: String,
-    onActivationCodeChange: (String) -> Unit,
-    onEnroll: () -> Unit,
-) {
-    PanelCard {
-        Text(
-            "DEVICE ENROLLMENT",
-            color = Mint,
-            style = MaterialTheme.typography.labelMedium,
-            letterSpacing = 1.0.sp,
-        )
-        Text(
-            "فعال‌سازی امن دستگاه",
-            color = Color.White,
-            style = MaterialTheme.typography.titleMedium,
-            fontWeight = FontWeight.Bold,
-        )
-        Text(
-            when {
-                profileSaved -> "یک پروفایل روی این گوشی ذخیره شده است. برای جلوگیری از جایگزینی ناخواسته، ثبت دستگاه جدید غیرفعال است."
-                hasPendingEnrollment -> "یک درخواست ثبت نیمه‌تمام به‌صورت رمزگذاری‌شده روی این گوشی وجود دارد. ادامه، همان کلید و شناسه را دوباره استفاده می‌کند."
-                else -> "کد ۱۵ دقیقه‌ای را از مدیر بگیرید. کلید خصوصی همین‌جا ساخته می‌شود و فقط کلید عمومی به سرور می‌رود."
-            },
-            color = SoftText,
-            style = MaterialTheme.typography.bodySmall,
-            lineHeight = 20.sp,
-        )
-        if (configured && !profileSaved && !hasPendingEnrollment) {
-            OutlinedTextField(
-                value = activationCode,
-                onValueChange = onActivationCodeChange,
-                modifier = Modifier.fillMaxWidth(),
-                label = { Text("کد فعال‌سازی") },
-                placeholder = { Text("کد یک‌بارمصرف ۴۳ نویسه‌ای") },
-                singleLine = true,
-                visualTransformation = PasswordVisualTransformation(),
-                textStyle = MaterialTheme.typography.bodyMedium,
-            )
-        }
-        if (!configured) {
-            Text(
-                "این نسخه هنوز با ZEUS_API_BASE_URL ساخته نشده است. تا زمان انتشار HTTPS کنترل‌پلین، فعال‌سازی آنلاین در دسترس نیست.",
-                color = Color(0xFFFFC879),
-                style = MaterialTheme.typography.bodySmall,
-                lineHeight = 19.sp,
-            )
-        }
-        Button(
-            onClick = onEnroll,
-            enabled = configured && !profileSaved && !busy &&
-                (hasPendingEnrollment || activationCode.isNotBlank()),
-            modifier = Modifier.fillMaxWidth(),
-            colors = ButtonDefaults.buttonColors(containerColor = Mint, contentColor = Ink),
-        ) {
-            Text(
-                when {
-                    busy -> "در حال انجام..."
-                    hasPendingEnrollment -> "ادامهٔ ثبت قبلی"
-                    else -> "ساخت کلید و فعال‌سازی"
-                },
-                fontWeight = FontWeight.SemiBold,
-            )
-        }
-        if (message.isNotBlank()) {
-            Text(
-                message,
-                color = if (message.contains("ثبت شد")) Mint else Color(0xFFFFC879),
-                style = MaterialTheme.typography.bodySmall,
-                lineHeight = 19.sp,
-            )
-        }
-        Text(
-            "کلید خصوصی در فایل رمزگذاری‌شدهٔ Android Keystore باقی می‌ماند؛ هیچ توکن مدیریتی در اپ کاربر استفاده نمی‌شود.",
-            color = SoftText,
-            style = MaterialTheme.typography.bodySmall,
-            lineHeight = 19.sp,
-        )
-    }
-}
-
-@Composable
-private fun BrandHeader() {
-    Row(
-        Modifier.fillMaxWidth().padding(top = 4.dp, bottom = 2.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-            Text("ZEUS", color = Color.White, fontSize = 31.sp,
-                fontWeight = FontWeight.Black, letterSpacing = 3.sp)
-            Text(stringResource(R.string.brand_subtitle), color = SoftText,
-                style = MaterialTheme.typography.labelSmall, letterSpacing = 1.4.sp)
-        }
-        Surface(
-            shape = RoundedCornerShape(17.dp),
-            color = Mint.copy(alpha = 0.10f),
-            border = BorderStroke(1.dp, Mint.copy(alpha = 0.42f)),
-        ) {
-            Box(Modifier.size(52.dp), contentAlignment = Alignment.Center) {
-                Text("Z", color = Mint, fontSize = 26.sp, fontWeight = FontWeight.Black)
-            }
-        }
-    }
-}
-
-@Composable
-private fun HeroCard() {
-    Card(
-        modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(26.dp),
-        colors = CardDefaults.cardColors(containerColor = Panel),
-        elevation = CardDefaults.cardElevation(defaultElevation = 8.dp),
-        border = BorderStroke(1.dp, Mint.copy(alpha = 0.20f)),
-    ) {
-        Box(
-            Modifier.fillMaxWidth()
-                .background(
-                    Brush.linearGradient(
-                        listOf(Color(0xFF172C42), Color(0xFF122039), Color(0xFF1A2140))
-                    )
-                )
-                .padding(21.dp)
-        ) {
-            Column(
-                Modifier.fillMaxWidth(0.83f),
-                verticalArrangement = Arrangement.spacedBy(9.dp),
-            ) {
-                Text(stringResource(R.string.hero_kicker), color = Mint,
-                    style = MaterialTheme.typography.labelSmall, letterSpacing = 1.2.sp)
-                Text(stringResource(R.string.hero_heading), color = Color.White,
-                    style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
-                Text(stringResource(R.string.hero_description), color = SoftText,
-                    style = MaterialTheme.typography.bodySmall, lineHeight = 20.sp)
-                Surface(
-                    shape = RoundedCornerShape(8.dp),
-                    color = Color(0xFFF2C879).copy(alpha = 0.10f),
-                    border = BorderStroke(1.dp, Color(0xFFF2C879).copy(alpha = 0.22f)),
-                ) {
-                    Text(stringResource(R.string.preview_badge),
-                        Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
-                        color = Color(0xFFF2C879), style = MaterialTheme.typography.labelSmall)
-                }
-            }
-            Surface(
-                modifier = Modifier.align(Alignment.CenterEnd).size(54.dp),
-                shape = RoundedCornerShape(18.dp),
-                color = Mint.copy(alpha = 0.11f),
-                border = BorderStroke(1.dp, Mint.copy(alpha = 0.35f)),
-            ) {
-                Box(contentAlignment = Alignment.Center) {
-                    Text("Z", color = Mint, fontSize = 28.sp, fontWeight = FontWeight.Black)
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun NetworkCard(network: NetworkCondition) {
-    val (networkText, networkColor, networkDetail) = when (network) {
-        NetworkCondition.ONLINE -> Triple(stringResource(R.string.online), Mint, stringResource(R.string.online_detail))
-        NetworkCondition.LIMITED -> Triple(stringResource(R.string.limited), Color(0xFFFFC46B), stringResource(R.string.limited_detail))
-        NetworkCondition.OFFLINE -> Triple(stringResource(R.string.offline), Color(0xFFFF7D88), stringResource(R.string.offline_detail))
-        NetworkCondition.UNKNOWN -> Triple(stringResource(R.string.checking), SoftText, stringResource(R.string.checking_detail))
-    }
-    PanelCard {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                Text(stringResource(R.string.network_title), color = SoftText,
-                    style = MaterialTheme.typography.labelMedium)
-                Text(networkText, color = networkColor,
-                    style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
-            }
-            StatusPill(networkColor, networkText)
-        }
-        Text(networkDetail, color = Color.White, style = MaterialTheme.typography.bodyMedium)
-        HorizontalDivider(color = Line.copy(alpha = 0.75f))
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Text("ⓘ", color = Mint, fontSize = 14.sp)
-            Spacer(Modifier.width(8.dp))
-            Text(stringResource(R.string.network_note), color = SoftText,
-                style = MaterialTheme.typography.bodySmall)
-        }
-    }
-}
-
-@Composable
-private fun EngineCard() {
-    PanelCard {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Text(stringResource(R.string.engine_title), color = Mint,
-                style = MaterialTheme.typography.labelMedium, letterSpacing = 1.1.sp)
-            Spacer(Modifier.weight(1f))
-            StatusPill(Color(0xFFFFC46B), stringResource(R.string.foundation_label))
-        }
-        Text(stringResource(R.string.engine_heading), color = Color.White,
-            style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
-        Text(stringResource(R.string.engine_body), color = SoftText,
-            style = MaterialTheme.typography.bodyMedium, lineHeight = 22.sp)
-        StatusPill(Color(0xFFFFC46B), stringResource(R.string.engine_status))
-    }
-}
-
-@Composable
-private fun WireGuardCard(
-    state: WireGuardState,
-    profileSaved: Boolean,
-    pendingEnrollment: Boolean,
+    showInviteFallback: Boolean,
+    enrollmentBusy: Boolean,
+    importBusy: Boolean,
+    enrollmentMessage: String,
+    profileMessage: String,
     profileDraft: String,
-    message: String,
+    showAdvancedImport: Boolean,
+    canForgetProfile: Boolean,
+    onActivationCodeChange: (String) -> Unit,
+    onToggleInviteFallback: () -> Unit,
+    onEnroll: () -> Unit,
+    onChooseFile: () -> Unit,
+    onToggleAdvanced: () -> Unit,
     onProfileDraftChange: (String) -> Unit,
     onSaveProfile: () -> Unit,
-    onConnect: () -> Unit,
-    onDisconnect: () -> Unit,
     onForgetProfile: () -> Unit,
 ) {
-    val (statusLabel, statusColor) = when (state) {
-        WireGuardState.DISCONNECTED -> stringResource(R.string.wg_disconnected) to SoftText
-        WireGuardState.CONNECTING -> stringResource(R.string.wg_connecting) to Color(0xFFFFC46B)
-        WireGuardState.ENGINE_UP -> stringResource(R.string.wg_engine_up) to Mint
-        WireGuardState.DISCONNECTING -> stringResource(R.string.wg_disconnecting) to Color(0xFFFFC46B)
-    }
-
     PanelCard {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                Text(
-                    stringResource(R.string.wg_title),
-                    color = Mint,
-                    style = MaterialTheme.typography.labelMedium,
-                    letterSpacing = 1.0.sp,
-                )
-                Text(
-                    stringResource(R.string.wg_subtitle),
-                    color = Color.White,
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.Bold,
-                )
-            }
-            StatusPill(statusColor, statusLabel)
-        }
-
-        Text(
-            if (profileSaved) stringResource(R.string.wg_profile_is_saved)
-            else stringResource(R.string.wg_profile_required),
-            color = SoftText,
-            style = MaterialTheme.typography.bodySmall,
-            lineHeight = 20.sp,
-        )
-
-        OutlinedTextField(
-            value = profileDraft,
-            onValueChange = onProfileDraftChange,
-            modifier = Modifier.fillMaxWidth(),
-            label = { Text(stringResource(R.string.wg_profile_label)) },
-            placeholder = { Text(stringResource(R.string.wg_profile_placeholder)) },
-            minLines = 6,
-            maxLines = 10,
-            textStyle = MaterialTheme.typography.bodySmall,
-        )
-
-        Text(
-            stringResource(R.string.wg_profile_security_note),
-            color = SoftText,
-            style = MaterialTheme.typography.bodySmall,
-            lineHeight = 19.sp,
-        )
-
-        Row(
-            Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(9.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Button(
-                onClick = onSaveProfile,
-                enabled = profileDraft.isNotBlank() && state != WireGuardState.ENGINE_UP && !pendingEnrollment,
-                modifier = Modifier.weight(1f),
-                colors = ButtonDefaults.buttonColors(containerColor = Mint, contentColor = Ink),
-            ) {
-                Text(
-                    if (profileSaved) stringResource(R.string.wg_replace_profile)
-                    else stringResource(R.string.wg_save_profile),
-                    fontWeight = FontWeight.SemiBold,
-                )
-            }
-            OutlinedButton(
-                onClick = if (state == WireGuardState.ENGINE_UP) onDisconnect else onConnect,
-                enabled = when (state) {
-                    WireGuardState.ENGINE_UP -> true
-                    WireGuardState.CONNECTING, WireGuardState.DISCONNECTING -> false
-                    WireGuardState.DISCONNECTED -> profileSaved
-                },
-                modifier = Modifier.weight(1f),
-                border = BorderStroke(1.dp, statusColor.copy(alpha = 0.55f)),
-            ) {
-                Text(
-                    if (state == WireGuardState.ENGINE_UP) stringResource(R.string.wg_disconnect)
-                    else stringResource(R.string.wg_connect),
-                    color = Color.White,
-                )
-            }
+        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Text("راه‌اندازی اتصال", color = MainText, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+            Text(
+                "ثبت دستگاه و دریافت پروفایل به‌صورت خودکار؛ بدون فایل کانفیگ و بدون نمایش کلید خصوصی.",
+                color = SecondaryText,
+                style = MaterialTheme.typography.bodySmall,
+                lineHeight = 19.sp,
+            )
         }
 
         if (profileSaved) {
-            TextButton(
-                onClick = onForgetProfile,
-                enabled = state == WireGuardState.DISCONNECTED,
-                modifier = Modifier.align(Alignment.End),
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                StatusPill(Positive, "READY")
+                Spacer(Modifier.width(9.dp))
+                Text("پروفایل رمزگذاری‌شده روی این گوشی ذخیره است.", color = SecondaryText, style = MaterialTheme.typography.bodySmall)
+            }
+            Text(
+                "کلید خصوصی در دستگاه ساخته و با Android Keystore محافظت شده است؛ برای ثبت دستگاه فقط کلید عمومی ارسال می‌شود.",
+                color = SecondaryText,
+                style = MaterialTheme.typography.bodySmall,
+                lineHeight = 18.sp,
+            )
+            OutlinedButton(
+                onClick = onChooseFile,
+                enabled = canForgetProfile && !importBusy,
+                modifier = Modifier.fillMaxWidth().height(46.dp),
+                shape = RoundedCornerShape(13.dp),
+                border = androidx.compose.foundation.BorderStroke(1.dp, DividerColor),
             ) {
-                Text(stringResource(R.string.wg_delete_profile), color = Color(0xFFFF9BA8))
+                Text(if (importBusy) "در حال خواندن فایل..." else "جایگزینی با فایل کانفیگ")
+            }
+            TextButton(onClick = onForgetProfile, enabled = canForgetProfile, modifier = Modifier.align(Alignment.End)) {
+                Text("حذف پروفایل از این گوشی", color = Danger)
+            }
+        } else {
+            if (hasPendingEnrollment) {
+                InlineNotice(
+                    text = "ثبت قبلی به‌صورت امن ذخیره شده است. ادامهٔ فرآیند از همان کلید دستگاه استفاده می‌کند.",
+                    color = Warning,
+                )
+            }
+
+            if (identityConfigured) {
+                if (customerSignedIn) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        StatusPill(Positive, "ACCOUNT VERIFIED")
+                        Spacer(Modifier.width(8.dp))
+                        Text("حساب برای ثبت دستگاه آماده است.", color = SecondaryText, style = MaterialTheme.typography.bodySmall)
+                    }
+                    Button(
+                        onClick = onEnroll,
+                        enabled = configured && !enrollmentBusy && !profileSaved,
+                        modifier = Modifier.fillMaxWidth().height(52.dp),
+                        shape = RoundedCornerShape(15.dp),
+                        colors = ButtonDefaults.buttonColors(containerColor = Primary, contentColor = Color.White),
+                    ) {
+                        Text(if (enrollmentBusy) "در حال دریافت کلید..." else "ثبت دستگاه و دریافت خودکار کلید", fontWeight = FontWeight.Bold)
+                    }
+                    TextButton(onClick = onSignOut, modifier = Modifier.align(Alignment.End)) {
+                        Text("خروج از حساب", color = SecondaryText)
+                    }
+                } else {
+                    Text(
+                        "برای ساخت حساب جدید یا ورود، تأیید هویت در صفحهٔ رسمی سرویس انجام می‌شود.",
+                        color = SecondaryText,
+                        style = MaterialTheme.typography.bodySmall,
+                        lineHeight = 19.sp,
+                    )
+                    Button(
+                        onClick = onSignIn,
+                        enabled = configured && !authBusy,
+                        modifier = Modifier.fillMaxWidth().height(52.dp),
+                        shape = RoundedCornerShape(15.dp),
+                        colors = ButtonDefaults.buttonColors(containerColor = Primary, contentColor = Color.White),
+                    ) {
+                        Icon(Icons.Outlined.Person, contentDescription = null)
+                        Spacer(Modifier.width(8.dp))
+                        Text(if (authBusy) "در حال بازکردن ورود امن..." else "ورود / ساخت حساب ZEUS", fontWeight = FontWeight.Bold)
+                    }
+                }
+            } else {
+                InlineNotice(
+                    text = "ورود و ثبت‌نام خودکار پس از تنظیم OIDC فعال می‌شود. تا آن زمان می‌توانید از کد دعوت مدیر استفاده کنید.",
+                    color = Warning,
+                )
+            }
+
+            if (!configured) {
+                InlineNotice(
+                    text = "آدرس HTTPS کنترل‌پلین در این نسخه تنظیم نشده است؛ هیچ درخواست ثبت‌نامی به سرویس ارسال نمی‌شود.",
+                    color = Warning,
+                )
+            }
+
+            if (!customerSignedIn && !showInviteFallback) {
+                TextButton(onClick = onToggleInviteFallback, modifier = Modifier.align(Alignment.Start)) {
+                    Text("کد دعوت یک‌بارمصرف دارم", color = SecondaryText)
+                }
+            }
+
+            if (showInviteFallback && !customerSignedIn) {
+                OutlinedTextField(
+                    value = activationCode,
+                    onValueChange = onActivationCodeChange,
+                    modifier = Modifier.fillMaxWidth(),
+                    label = { Text("کد دعوت") },
+                    placeholder = { Text("کد یک‌بارمصرف ۴۳ نویسه‌ای") },
+                    singleLine = true,
+                    visualTransformation = PasswordVisualTransformation(),
+                    textStyle = MaterialTheme.typography.bodyMedium,
+                    shape = RoundedCornerShape(13.dp),
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedBorderColor = Primary,
+                        unfocusedBorderColor = DividerColor,
+                        focusedLabelColor = Primary,
+                        unfocusedLabelColor = MutedText,
+                        cursorColor = Primary,
+                    ),
+                )
+                Button(
+                    onClick = onEnroll,
+                    enabled = configured && activationCode.isNotBlank() && !enrollmentBusy,
+                    modifier = Modifier.fillMaxWidth().height(48.dp),
+                    shape = RoundedCornerShape(13.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = PanelRaised, contentColor = MainText),
+                ) {
+                    Text(if (enrollmentBusy) "در حال ثبت..." else "ثبت دستگاه با کد دعوت")
+                }
+            }
+
+            if (authMessage.isNotBlank()) {
+                InlineNotice(
+                    text = authMessage,
+                    color = if (customerSignedIn) Positive else Warning,
+                )
+            }
+
+            OutlinedButton(
+                onClick = onChooseFile,
+                enabled = canForgetProfile && !importBusy,
+                modifier = Modifier.fillMaxWidth().height(46.dp),
+                shape = RoundedCornerShape(13.dp),
+                border = androidx.compose.foundation.BorderStroke(1.dp, DividerColor),
+            ) {
+                Text(if (importBusy) "در حال خواندن فایل..." else "واردکردن فایل کانفیگ (.conf)")
+            }
+
+            TextButton(onClick = onToggleAdvanced, modifier = Modifier.align(Alignment.Start)) {
+                Text(if (showAdvancedImport) "بستن ورود دستی پیشرفته" else "ورود دستی متن کانفیگ (پیشرفته)", color = MutedText)
+            }
+
+            if (showAdvancedImport) {
+                OutlinedTextField(
+                    value = profileDraft,
+                    onValueChange = onProfileDraftChange,
+                    modifier = Modifier.fillMaxWidth(),
+                    label = { Text("متن کامل WireGuard") },
+                    placeholder = { Text("[Interface] ... [Peer] ...") },
+                    minLines = 4,
+                    maxLines = 8,
+                    textStyle = MaterialTheme.typography.bodySmall,
+                    shape = RoundedCornerShape(13.dp),
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedBorderColor = Primary,
+                        unfocusedBorderColor = DividerColor,
+                        focusedLabelColor = Primary,
+                        unfocusedLabelColor = MutedText,
+                        cursorColor = Primary,
+                    ),
+                )
+                Button(
+                    onClick = onSaveProfile,
+                    enabled = profileDraft.isNotBlank() && canForgetProfile && !importBusy,
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(13.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = PanelRaised, contentColor = MainText),
+                ) { Text("اعتبارسنجی و ذخیرهٔ امن") }
             }
         }
 
-        if (message.isNotBlank()) {
-            Text(
-                message,
-                color = if (state == WireGuardState.ENGINE_UP) Mint else Color(0xFFFFC879),
-                style = MaterialTheme.typography.bodySmall,
-                lineHeight = 19.sp,
+        if (enrollmentMessage.isNotBlank()) {
+            InlineNotice(
+                text = enrollmentMessage,
+                color = if (enrollmentMessage.contains("ثبت شد") || enrollmentMessage.contains("ذخیره")) Positive else Warning,
             )
         }
+        if (profileMessage.isNotBlank()) {
+            InlineNotice(
+                text = profileMessage,
+                color = if (profileMessage.contains("ذخیره") || profileMessage.contains("معتبر")) Positive else Warning,
+            )
+        }
+    }
+}
 
+@Composable
+private fun SmartRoutingCard() {
+    PanelCard {
+        Text("مسیر هوشمند سرور", color = MainText, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
         Text(
-            stringResource(R.string.wg_handshake_note),
-            color = SoftText,
+            "برای هر دستگاه، کنترل‌پلین یک نود سالم و آنلاین را بر اساس ظرفیت آزاد انتخاب می‌کند. این نسخه هنوز فهرست عمومی منطقه‌ها و انتخاب دستی سرور را منتشر نمی‌کند؛ بنابراین موقعیت ساختگی نمایش داده نمی‌شود.",
+            color = SecondaryText,
+            style = MaterialTheme.typography.bodyMedium,
+            lineHeight = 21.sp,
+        )
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            StatusPill(Positive, "AUTO ROUTE")
+            Text("انتخاب بر مبنای سلامت و ظرفیت نود", color = SecondaryText, style = MaterialTheme.typography.bodySmall)
+        }
+        HorizontalDivider(color = DividerColor)
+        Text("پروفایل این دستگاه", color = MainText, fontWeight = FontWeight.SemiBold)
+        Text(
+            "آدرس، کلید عمومی سرور و محدوده‌های IPv4/IPv6 پس از ثبت دستگاه از سرویس دریافت می‌شوند؛ نیازی به واردکردن فایل کانفیگ نیست.",
+            color = SecondaryText,
             style = MaterialTheme.typography.bodySmall,
             lineHeight = 19.sp,
         )
@@ -614,60 +1364,99 @@ private fun WireGuardCard(
 }
 
 @Composable
-private fun OfflineCard() {
+private fun CustomerAccountCard(
+    identityConfigured: Boolean,
+    signedIn: Boolean,
+    authBusy: Boolean,
+    authMessage: String,
+    onSignIn: () -> Unit,
+    onSignOut: () -> Unit,
+    profileSaved: Boolean,
+    onGoHome: () -> Unit,
+) {
     PanelCard {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            Surface(shape = RoundedCornerShape(11.dp), color = Violet.copy(alpha = 0.13f)) {
-                Text("⌁", Modifier.padding(horizontal = 11.dp, vertical = 7.dp),
-                    color = Violet, fontSize = 19.sp)
+            Surface(shape = RoundedCornerShape(14.dp), color = Primary.copy(alpha = 0.15f)) {
+                Icon(Icons.Outlined.Person, contentDescription = null, tint = Primary, modifier = Modifier.padding(13.dp).size(25.dp))
             }
-            Spacer(Modifier.width(10.dp))
-            Text(stringResource(R.string.offline_title), color = Color.White,
-                style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+            Spacer(Modifier.width(12.dp))
+            Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                Text("حساب ZEUS", color = MainText, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+                Text(if (signedIn) "نشست تأییدشده روی این دستگاه" else "برای دریافت و مدیریت اتصال وارد شوید", color = SecondaryText, style = MaterialTheme.typography.bodySmall)
+            }
+            StatusPill(if (signedIn) Positive else MutedText, if (signedIn) "ACTIVE" else "GUEST")
         }
-        Text(stringResource(R.string.offline_body), color = SoftText,
-            style = MaterialTheme.typography.bodyMedium, lineHeight = 22.sp)
+        if (signedIn) {
+            Text(
+                "حساب با ارائه‌دهندهٔ هویت تأیید شده است. نشست روی دستگاه به‌صورت رمزگذاری‌شده نگهداری می‌شود.",
+                color = SecondaryText,
+                style = MaterialTheme.typography.bodySmall,
+                lineHeight = 19.sp,
+            )
+            Button(onClick = onSignOut, modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(13.dp),
+                colors = ButtonDefaults.buttonColors(containerColor = PanelRaised, contentColor = MainText)) {
+                Text("خروج امن از حساب")
+            }
+        } else {
+            Text(
+                if (identityConfigured) "ورود و ساخت حساب در مرورگر امن ارائه‌دهندهٔ هویت انجام می‌شود." else "برای فعال‌کردن ثبت‌نام عمومی، OIDC باید در نسخهٔ ساخت و کنترل‌پلین تنظیم شود.",
+                color = SecondaryText,
+                style = MaterialTheme.typography.bodySmall,
+                lineHeight = 19.sp,
+            )
+            Button(
+                onClick = onSignIn,
+                enabled = identityConfigured && !authBusy,
+                modifier = Modifier.fillMaxWidth().height(50.dp),
+                shape = RoundedCornerShape(13.dp),
+                colors = ButtonDefaults.buttonColors(containerColor = Primary, contentColor = Color.White),
+            ) {
+                Text(if (authBusy) "در حال آماده‌سازی..." else "ورود / ساخت حساب", fontWeight = FontWeight.Bold)
+            }
+        }
+        if (authMessage.isNotBlank()) InlineNotice(authMessage, if (signedIn) Positive else Warning)
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            StatusPill(if (profileSaved) Positive else Warning, if (profileSaved) "PROFILE READY" else "NO PROFILE")
+            Spacer(Modifier.width(9.dp))
+            Text(if (profileSaved) "پروفایل روی گوشی ذخیره شده است." else "پس از ورود، به خانه بروید و دستگاه را ثبت کنید.", color = SecondaryText, style = MaterialTheme.typography.bodySmall)
+        }
+        if (!profileSaved) {
+            TextButton(onClick = onGoHome, modifier = Modifier.align(Alignment.End)) {
+                Text("رفتن به راه‌اندازی اتصال", color = Primary)
+            }
+        }
     }
 }
 
 @Composable
-private fun SettingsCard(enabled: Boolean, onEnabledChange: (Boolean) -> Unit) {
+private fun SettingsCard(
+    enabled: Boolean,
+    onEnabledChange: (Boolean) -> Unit,
+) {
     PanelCard {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(5.dp)) {
-                Text(stringResource(R.string.settings_title), color = Color.White,
-                    fontWeight = FontWeight.SemiBold, style = MaterialTheme.typography.titleMedium)
-                Text(stringResource(R.string.autoreconnect), color = SoftText,
-                    style = MaterialTheme.typography.bodyMedium)
-                Text(stringResource(R.string.autoreconnect_note), color = SoftText,
-                    style = MaterialTheme.typography.bodySmall, lineHeight = 19.sp)
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Text("اتصال مجدد خودکار", color = MainText, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+                Text(
+                    "اگر تونل قبلاً فعال بوده و شبکه قطع شود، هنگام بازگشت اینترنت و فعال‌بودن برنامه اتصال دوباره برقرار می‌شود.",
+                    color = SecondaryText,
+                    style = MaterialTheme.typography.bodySmall,
+                    lineHeight = 18.sp,
+                )
             }
             Switch(
                 checked = enabled,
                 onCheckedChange = onEnabledChange,
                 colors = SwitchDefaults.colors(
-                    checkedThumbColor = Ink, checkedTrackColor = Mint,
-                    uncheckedThumbColor = SoftText,
+                    checkedThumbColor = Color.White,
+                    checkedTrackColor = Positive,
+                    uncheckedThumbColor = SecondaryText,
+                    uncheckedTrackColor = PanelRaised,
                 ),
             )
-        }
-    }
-}
-
-@Composable
-private fun StatusPill(color: Color, label: String) {
-    Surface(
-        shape = RoundedCornerShape(50),
-        color = color.copy(alpha = 0.10f),
-        border = BorderStroke(1.dp, color.copy(alpha = 0.24f)),
-    ) {
-        Row(
-            Modifier.padding(horizontal = 10.dp, vertical = 7.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(6.dp),
-        ) {
-            Box(Modifier.size(6.dp).background(color, CircleShape))
-            Text(label, color = color, style = MaterialTheme.typography.labelSmall)
         }
     }
 }
@@ -676,15 +1465,107 @@ private fun StatusPill(color: Color, label: String) {
 private fun PanelCard(content: @Composable ColumnScope.() -> Unit) {
     Card(
         modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(22.dp),
-        colors = CardDefaults.cardColors(containerColor = Panel.copy(alpha = 0.96f)),
-        elevation = CardDefaults.cardElevation(defaultElevation = 5.dp),
-        border = BorderStroke(1.dp, Color.White.copy(alpha = 0.075f)),
+        shape = RoundedCornerShape(18.dp),
+        colors = CardDefaults.cardColors(containerColor = Panel),
+        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
+        border = androidx.compose.foundation.BorderStroke(1.dp, DividerColor.copy(alpha = 0.75f)),
     ) {
         Column(
-            Modifier.padding(19.dp),
+            modifier = Modifier.padding(17.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
             content = content,
         )
+    }
+}
+
+@Composable
+private fun StatusPill(color: Color, label: String) {
+    Surface(
+        shape = RoundedCornerShape(50),
+        color = color.copy(alpha = 0.12f),
+        border = androidx.compose.foundation.BorderStroke(1.dp, color.copy(alpha = 0.28f)),
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            Box(Modifier.size(6.dp).background(color, CircleShape))
+            Text(label, color = color, style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.SemiBold)
+        }
+    }
+}
+
+@Composable
+private fun InlineNotice(text: String, color: Color) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(color.copy(alpha = 0.08f), RoundedCornerShape(11.dp))
+            .border(1.dp, color.copy(alpha = 0.22f), RoundedCornerShape(11.dp))
+            .padding(horizontal = 12.dp, vertical = 10.dp),
+        verticalAlignment = Alignment.Top,
+    ) {
+        Box(
+            Modifier.padding(top = 5.dp).size(6.dp).background(color, CircleShape)
+        )
+        Spacer(Modifier.width(9.dp))
+        Text(text, color = SecondaryText, style = MaterialTheme.typography.bodySmall, lineHeight = 18.sp)
+    }
+}
+
+private suspend fun readProfileDocument(
+    resolver: ContentResolver,
+    uri: Uri,
+): String = withContext(Dispatchers.IO) {
+    val input = resolver.openInputStream(uri) ?: throw IOException("Selected file cannot be opened.")
+    input.use { stream ->
+        val output = ByteArrayOutputStream()
+        val buffer = ByteArray(4_096)
+        var total = 0
+        try {
+            while (true) {
+                val count = stream.read(buffer)
+                if (count < 0) break
+                total += count
+                if (total > 64 * 1024) throw IOException("Selected profile exceeds 64 KiB.")
+                output.write(buffer, 0, count)
+            }
+            val bytes = output.toByteArray()
+            try {
+                String(bytes, Charsets.UTF_8)
+            } finally {
+                bytes.fill(0)
+            }
+        } finally {
+            buffer.fill(0)
+        }
+    }
+}
+
+private fun formatTrafficBytes(bytes: Long): String {
+    val safeBytes = bytes.coerceAtLeast(0L).toDouble()
+    val units = arrayOf("B", "KB", "MB", "GB", "TB")
+    var value = safeBytes
+    var unitIndex = 0
+    while (value >= 1024.0 && unitIndex < units.lastIndex) {
+        value /= 1024.0
+        unitIndex++
+    }
+    return if (unitIndex == 0) {
+        value.toLong().toString() + " " + units[unitIndex]
+    } else {
+        String.format(Locale.US, "%.1f %s", value, units[unitIndex])
+    }
+}
+
+private fun elapsedSince(epochMillis: Long): String {
+    if (epochMillis <= 0L) return "نامشخص"
+    val seconds = ((System.currentTimeMillis() - epochMillis).coerceAtLeast(0L)) / 1_000L
+    return when {
+        seconds < 60L -> seconds.toString() + " ثانیه قبل"
+        seconds < 3_600L -> (seconds / 60L).toString() + " دقیقه قبل"
+        seconds < 86_400L -> (seconds / 3_600L).toString() + " ساعت قبل"
+        else -> (seconds / 86_400L).toString() + " روز قبل"
     }
 }

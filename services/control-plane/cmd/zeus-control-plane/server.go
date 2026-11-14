@@ -21,6 +21,7 @@ import (
 
 	"crypto/x509"
 
+	"github.com/coreos/go-oidc/v3/oidc"
 	"github.com/jackc/pgx/v5"
 )
 
@@ -30,10 +31,13 @@ type API struct {
 	logger       *slog.Logger
 	limiter      *loginLimiter
 	enrollmentLimiter *loginLimiter
+	customerStatusLimiter *loginLimiter
 	hashSlots    chan struct{}
 	dummyHash    string
 	allowedOrigin map[string]struct{}
 	nodeClientCAs *x509.CertPool
+	customerVerifier *oidc.IDTokenVerifier
+	customerIssuer string
 }
 
 type contextKey string
@@ -104,7 +108,8 @@ func NewAPI(version string, store ControlStore, logger *slog.Logger, allowedOrig
 	}
 	return &API{
 		version: version, store: store, logger: logger,
-		limiter: newLoginLimiter(), enrollmentLimiter: newLoginLimiter(), hashSlots: make(chan struct{}, 2),
+		limiter: newLoginLimiter(), enrollmentLimiter: newLoginLimiter(),
+		customerStatusLimiter: newLoginLimiter(), hashSlots: make(chan struct{}, 2),
 		dummyHash: dummyHash, allowedOrigin: origins,
 	}, nil
 }
@@ -125,6 +130,7 @@ func (a *API) Handler() http.Handler {
 	mux.HandleFunc("POST /v1/users/{userID}/devices", a.handleCreateDevice)
 	mux.HandleFunc("POST /v1/users/{userID}/enrollment-code", a.handleCreateEnrollmentCode)
 	mux.HandleFunc("POST /v1/client/enroll", a.handleClientEnrollment)
+	mux.HandleFunc("GET /v1/client/devices/{deviceID}", a.handleCustomerDeviceStatus)
 	mux.HandleFunc("POST /v1/users/{userID}/devices/{deviceID}/revoke", a.handleRevokeDevice)
 	mux.HandleFunc("GET /v1/nodes", a.handleListNodes)
 	mux.HandleFunc("POST /v1/nodes", a.handleCreateNode)
@@ -728,6 +734,10 @@ func (a *API) handleCreateEnrollmentCode(w http.ResponseWriter, r *http.Request)
 }
 
 func (a *API) handleClientEnrollment(w http.ResponseWriter, r *http.Request) {
+	if strings.TrimSpace(r.Header.Get("Authorization")) != "" {
+		a.handleCustomerClientEnrollment(w, r)
+		return
+	}
 	ip := remoteIP(r.RemoteAddr)
 	limiterKey := "unknown"
 	if ip != nil {

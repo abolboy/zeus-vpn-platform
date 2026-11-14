@@ -59,7 +59,7 @@ Arbitrary shell text, executable paths, interface names, firewall scripts, arbit
 
 - The worker checks expiry, strictly decodes payloads, and dispatches only peer.ensure / peer.remove.
 - The local executor's mutation flag defaults to false. In dry-run mode it validates and previews operations, then reports mutation_disabled; it does not claim a successful mutation.
-- Real execution uses a fixed wg set argument list with no shell, validates public keys/pool membership/address collisions, reads config without following symlinks, and writes atomically with rollback handling.
+- Real execution uses fixed argv calls to wg and iproute2 with no shell, validates public keys/pool membership/address collisions, reads config without following symlinks, writes atomically with rollback handling, and ensures each assigned client /32 and /128 resolves through the WireGuard interface. Exact routes owned by another interface are rejected. If route or peer application fails, newly added routes and the config/runtime peer state are rolled back.
 - Explicitly enabling mutations requires a staging node, a backup, failure-injection tests, and least-privilege OS review.
 
 ## Remaining rollout gates
@@ -67,7 +67,7 @@ Arbitrary shell text, executable paths, interface names, firewall scripts, arbit
 1. Complete operator-managed node inventory and web UI; run live staging rotation/revocation drills for the certificate registration and revocation APIs.
 2. Import/represent existing unmanaged WireGuard peers and addresses before enabling allocation on a real node.
 3. Verify node pools/interface addresses against the actual WireGuard configuration.
-4. Test add/remove on an isolated interface, then a staging VPS.
+4. Test add/remove and route creation/rollback on an isolated interface, then a staging VPS.
 5. Test duplicate delivery, lease expiry, failed wg set, process termination, and reboot persistence.
 6. Confirm encrypted client profile delivery and offline reconnect.
 7. Obtain explicit approval before connecting or mutating any production node.

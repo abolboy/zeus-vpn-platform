@@ -1,0 +1,40 @@
+[Unit]
+Description=ZEUS VPN Node Agent
+Wants=network-online.target
+After=network-online.target
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User=root
+Group=root
+EnvironmentFile=/etc/zeus/vpn-node.env
+ExecStart=/opt/zeus/bin/zeus-vpn-node
+Restart=on-failure
+RestartSec=5s
+TimeoutStopSec=15s
+KillSignal=SIGTERM
+UMask=0077
+LimitNOFILE=4096
+
+# The executor needs NET_ADMIN for WireGuard and host-route operations.
+# Keep filesystem writes limited to the WireGuard configuration directory.
+CapabilityBoundingSet=CAP_NET_ADMIN
+AmbientCapabilities=CAP_NET_ADMIN
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+RestrictRealtime=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
+SystemCallArchitectures=native
+ReadWritePaths=/etc/wireguard
+
+[Install]
+WantedBy=multi-user.target

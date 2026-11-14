@@ -1,6 +1,6 @@
 # ZEUS Control Plane — Phase 2 Alpha
 
-The Go service supports PostgreSQL-backed operator authentication, VPN user and device lifecycle APIs, one-time client activation codes, a durable peer command queue, and a separate optional mTLS node-agent listener. This is still an alpha: staging deployment, full node inventory bootstrap, production rollout, subscriptions, billing, and live telemetry remain incomplete.
+The Go service supports PostgreSQL-backed operator authentication, verified OIDC customer identity, self-service VPN device enrollment, one-time invite-code fallback, a durable peer command queue, and a separate optional mTLS node-agent listener. This remains an alpha: staging deployment, full node inventory bootstrap, production rollout, subscriptions, billing, and live telemetry remain incomplete.
 
 ## Requirements
 - Go 1.27 or newer.
@@ -30,6 +30,32 @@ Optional settings:
 - ZEUS_VERSION: reported build version.
 - ZEUS_ENV=production: requires a database URL using sslmode=verify-full.
 - ZEUS_ALLOWED_ORIGINS: comma-separated exact browser origins; no wildcard is accepted.
+- ZEUS_OIDC_ISSUER and ZEUS_OIDC_CLIENT_ID: configure together to enable self-service customer enrollment through a verified OIDC identity provider. The app client is a public native client; no client secret belongs in the Android app.
+
+## Customer self-service identity
+
+For a staging account, deploy the Cognito stack from the repository root:
+
+    aws cloudformation deploy \
+      --template-file infra/aws-cognito/zeus-customer-user-pool.yaml \
+      --stack-name zeus-vpn-customer-identity \
+      --capabilities CAPABILITY_IAM
+
+Read the stack outputs OidcIssuer, OidcClientId, and HostedUiDomain. Configure the Control Plane process with:
+
+    ZEUS_OIDC_ISSUER=<OidcIssuer>
+    ZEUS_OIDC_CLIENT_ID=<OidcClientId>
+
+Build the Android client with the matching public settings and the deployed HTTPS API URL:
+
+    ./gradlew --no-daemon :apps:android:assembleDebug \
+      -PZEUS_API_BASE_URL=https://<your-api-host> \
+      -PZEUS_OIDC_ISSUER=<OidcIssuer> \
+      -PZEUS_OIDC_CLIENT_ID=<OidcClientId>
+
+The Cognito stack enables public self-registration, email verification, browser sign-in, a public native app client with no client secret, and the Authorization Code grant. AppAuth supplies PKCE and uses the exact callback URI com.zeusvpn.app:/oauth2redirect. Do not add a client secret to the Android package.
+
+This setting makes registration publicly available to anyone who can reach the hosted login page. The current ZEUS alpha applies a per-IP enrollment throttle and a default device cap, but does not yet include billing, subscription enforcement, CAPTCHA, or a customer support workflow. Do not expose public self-registration on a production service until capacity limits, abuse controls, monitoring, and the intended free/trial/paid policy are decided. The template uses Cognito's default email sender for initial setup; configure and verify an Amazon SES identity for production-scale email delivery.
 
 ## Node-agent certificates
 
@@ -49,7 +75,8 @@ Do not register a node for client provisioning until its endpoint, server public
 - GET /v1/meta: service metadata.
 - POST /v1/auth/login, GET /v1/auth/me, POST /v1/auth/logout: operator sessions.
 - Authenticated user/device APIs support owner/admin mutations and read access for support/read-only roles.
-- POST /v1/client/enroll: public rate-limited activation-code flow; returns HTTP 202 while peer provisioning remains asynchronous.
+- POST /v1/client/enroll: accepts either the legacy one-time activation code (no bearer token) or an OIDC ID token (Authorization: Bearer). The OIDC path requires verified email and binds the customer to issuer + subject, provisions the account on first use, and returns HTTP 202 while peer provisioning remains asynchronous.
+- GET /v1/client/devices/{deviceID}: authenticated customer-only status lookup. The Android app polls this endpoint before saving the generated profile and only completes automatic enrollment after the node acknowledges the peer as active.
 - GET /v1/nodes/{nodeID}/certificates: authenticated certificate inventory for owner/admin/support/read_only.
 - POST /v1/nodes/{nodeID}/certificates: owner/admin registration of a CA-verified, node-bound ClientAuth certificate.
 - POST /v1/nodes/{nodeID}/certificates/{certificateID}/revoke: owner/admin certificate revocation.

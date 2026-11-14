@@ -69,6 +69,7 @@ func main() {
 		Interface:      envOrDefault("ZEUS_WG_INTERFACE", "wg0"),
 		ConfigPath:     envOrDefault("ZEUS_WG_CONFIG_PATH", "/etc/wireguard/wg0.conf"),
 		WGBinary:       envOrDefault("ZEUS_WG_BINARY", "/usr/bin/wg"),
+		IPBinary:       envOrDefault("ZEUS_IP_BINARY", "/usr/sbin/ip"),
 		IPv4Pool:       ipv4Pool,
 		IPv6Pool:       ipv6Pool,
 		AllowMutations: allowMutations,

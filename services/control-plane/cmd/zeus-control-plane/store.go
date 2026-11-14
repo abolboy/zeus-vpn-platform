@@ -8,6 +8,7 @@ import (
 )
 
 var (
+	ErrCustomerIdentityNotVerified = errors.New("customer identity is not verified")
 	ErrIdempotencyConflict     = errors.New("idempotency key was already used with a different request")
 	ErrVPNUserNotFound         = errors.New("VPN user not found")
 	ErrNodeNotFound            = errors.New("VPN node not found")
@@ -144,6 +145,12 @@ type DeviceMutationStore interface {
 	EnrollVPNDevice(context.Context, []byte, string, []byte, CreateDeviceInput, string, *string) (VPNDevice, bool, error)
 	CreateVPNDevice(context.Context, string, string, string, string, []byte, CreateDeviceInput, string, *string) (VPNDevice, bool, error)
 	RevokeVPNDevice(context.Context, string, string, string, string, string, []byte, string, *string) (VPNDevice, bool, error)
+}
+
+type CustomerSelfServiceStore interface {
+	EnsureExternalVPNUser(context.Context, string, string) (VPNUser, error)
+	EnrollCustomerVPNDevice(context.Context, string, string, []byte, CreateDeviceInput, string, *string) (VPNDevice, bool, error)
+	GetCustomerVPNDevice(context.Context, string, string) (VPNDevice, error)
 }
 
 type NodeAgentStore interface {

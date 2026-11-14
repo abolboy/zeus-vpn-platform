@@ -24,6 +24,8 @@ var (
 	ErrEnrollmentCodeInvalid   = errors.New("enrollment code is invalid or revoked")
 	ErrEnrollmentCodeExpired   = errors.New("enrollment code has expired")
 	ErrEnrollmentCodeUsed      = errors.New("enrollment code has already been consumed")
+	ErrNodeCertificateNotFound = errors.New("node certificate not found")
+	ErrNodeCertificateConflict = errors.New("node certificate fingerprint is already registered with different metadata")
 )
 
 type Operator struct {
@@ -147,4 +149,20 @@ type NodeAgentStore interface {
 	FindNodeByCertFingerprint(context.Context, []byte) (NodeIdentity, error)
 	LeaseNodeCommand(context.Context, string, time.Duration) (NodeCommand, error)
 	AcknowledgeNodeCommand(context.Context, string, string, string, string) error
+}
+
+type NodeAgentCertificate struct {
+	ID                string     `json:"id"`
+	NodeID            string     `json:"node_id"`
+	FingerprintSHA256 string     `json:"fingerprint_sha256"`
+	NotBefore         time.Time  `json:"not_before"`
+	NotAfter          time.Time  `json:"not_after"`
+	RevokedAt         *time.Time `json:"revoked_at,omitempty"`
+	CreatedAt         time.Time  `json:"created_at"`
+}
+
+type NodeCertificateStore interface {
+	ListNodeAgentCertificates(context.Context, string) ([]NodeAgentCertificate, error)
+	RegisterNodeAgentCertificate(context.Context, string, string, []byte, time.Time, time.Time, string, *string) (NodeAgentCertificate, bool, error)
+	RevokeNodeAgentCertificate(context.Context, string, string, string, string, *string) (NodeAgentCertificate, bool, error)
 }

@@ -132,6 +132,7 @@ func main() {
 			logger.Error("node mTLS configuration failed", "error", err)
 			os.Exit(1)
 		}
+		api.SetNodeClientCAs(tlsConfig.ClientCAs)
 		nodeAddress := envOrDefault("ZEUS_NODE_HTTP_ADDR", "127.0.0.1:8443")
 		nodeListener, err = net.Listen("tcp", nodeAddress)
 		if err != nil {

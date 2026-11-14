@@ -96,6 +96,15 @@ export default function App() {
   const [nodeCertificateBusy, setNodeCertificateBusy] = useState(false)
   const [nodeCertificateMutationID, setNodeCertificateMutationID] = useState('')
   const nodeCertificateFetchSequence = useRef(0)
+  const [showCreateNode, setShowCreateNode] = useState(false)
+  const [nodeCreateForm, setNodeCreateForm] = useState({
+    name: '', region: '', endpoint_host: '', endpoint_port: '51820', public_key: '',
+    interface_name: 'wg0', client_ipv4_pool: '', client_ipv6_pool: '',
+    interface_ipv4: '', interface_ipv6: '',
+  })
+  const [nodeCreateKey, setNodeCreateKey] = useState('')
+  const [nodeCreateBusy, setNodeCreateBusy] = useState(false)
+  const [nodeCreateError, setNodeCreateError] = useState('')
 
   async function checkControlPlane() {
     setApiStatus('checking')
@@ -216,6 +225,10 @@ export default function App() {
     setNodeCertificatesError('')
     setNodeCertificatePEM('')
     setNodeCertificateMutationID('')
+    setShowCreateNode(false)
+    setNodeCreateForm({ name: '', region: '', endpoint_host: '', endpoint_port: '51820', public_key: '', interface_name: 'wg0', client_ipv4_pool: '', client_ipv6_pool: '', interface_ipv4: '', interface_ipv6: '' })
+    setNodeCreateKey('')
+    setNodeCreateError('')
     setRemoteUsersState('idle')
     try {
       await logoutOperator(token)
@@ -487,6 +500,47 @@ export default function App() {
     }
   }
 
+  function updateNodeCreateField(field, value) {
+    setNodeCreateForm(current => ({ ...current, [field]: value }))
+    setNodeCreateKey('')
+    setNodeCreateError('')
+  }
+
+  async function submitCreateNode(event) {
+    event.preventDefault()
+    if (!accessToken || !canManageRemoteUsers || nodeCreateBusy) return
+    const payload = {
+      ...nodeCreateForm,
+      endpoint_port: Number(nodeCreateForm.endpoint_port),
+    }
+    if (!Number.isInteger(payload.endpoint_port)) {
+      setNodeCreateError('پورت Endpoint باید یک عدد صحیح باشد.')
+      return
+    }
+    const key = nodeCreateKey || createIdempotencyKey()
+    setNodeCreateKey(key)
+    setNodeCreateBusy(true)
+    setNodeCreateError('')
+    try {
+      const result = await createVPNNode(accessToken, payload, key)
+      setRemoteNodes(current => [result, ...current.filter(node => node.id !== result.id)])
+      setShowCreateNode(false)
+      setNodeCreateForm({ name: '', region: '', endpoint_host: '', endpoint_port: '51820', public_key: '', interface_name: 'wg0', client_ipv4_pool: '', client_ipv6_pool: '', interface_ipv4: '', interface_ipv6: '' })
+      setNodeCreateKey('')
+      toast('نود ثبت شد و در وضعیت «در انتظار اتصال عامل» قرار گرفت؛ هیچ peer یا پیکربندی WireGuard تغییر نکرد.')
+      await refreshRemoteNodes()
+    } catch (error) {
+      setNodeCreateError(error.message || 'ثبت نود انجام نشد. برای تلاش مجدد، همین فرم و کلید درخواست حفظ شده‌اند.')
+      if (error.status === 401) {
+        setAccessToken('')
+        setOperator(null)
+        setLoginError('نشست منقضی شده است؛ دوباره وارد شوید.')
+      }
+    } finally {
+      setNodeCreateBusy(false)
+    }
+  }
+
   async function refreshRemoteNodes() {
     if (!accessToken) return
     setRemoteNodesState('loading')
@@ -678,10 +732,37 @@ export default function App() {
         <div className="panel-heading">
           <div><h2>مدیریت سرورها</h2><p>{isControlPlaneConfigured ? 'موجودی واقعی نودها از Control Plane دریافت می‌شود.' : 'فهرست زیر داده نمایشی است و به نود واقعی متصل نیست.'}</p></div>
           {isControlPlaneConfigured
-            ? <button className="button secondary" onClick={refreshRemoteNodes} disabled={remoteNodesState === 'loading'}>↻ بروزرسانی نودها</button>
+            ? <div className="head-actions">
+                {canManageRemoteUsers && <button className="button primary" onClick={() => { setShowCreateNode(v => !v); setNodeCreateError(''); setNodeCreateKey('') }}>{showCreateNode ? 'بستن فرم' : '＋ ثبت نود جدید'}</button>}
+                <button className="button secondary" onClick={refreshRemoteNodes} disabled={remoteNodesState === 'loading'}>↻ بروزرسانی نودها</button>
+              </div>
             : <button className="button primary" onClick={() => setShowServerForm(v => !v)}>＋ سرور نمایشی</button>}
         </div>
         {isControlPlaneConfigured ? <>
+          {showCreateNode && canManageRemoteUsers && <form className="remote-user-form glass node-create-form" onSubmit={submitCreateNode}>
+            <div className="remote-user-form-title">
+              <b>ثبت نود WireGuard جدید</b>
+              <span>این مرحله فقط مشخصات را در Control Plane ذخیره می‌کند؛ نود تا دریافت گواهی mTLS و اتصال عامل، Pending می‌ماند و هیچ peerای ساخته یا تغییر داده نمی‌شود.</span>
+            </div>
+            <div className="node-create-fields">
+              <label>نام نود<input value={nodeCreateForm.name} onChange={event => updateNodeCreateField('name', event.target.value)} maxLength={80} required placeholder="ZEUS · Staging" /></label>
+              <label>منطقه<input value={nodeCreateForm.region} onChange={event => updateNodeCreateField('region', event.target.value)} maxLength={80} required placeholder="Germany / Frankfurt" /></label>
+              <label>Endpoint host<input value={nodeCreateForm.endpoint_host} onChange={event => updateNodeCreateField('endpoint_host', event.target.value)} maxLength={253} required dir="ltr" placeholder="vpn.example.com" /></label>
+              <label>Endpoint UDP port<input type="number" min="1" max="65535" step="1" value={nodeCreateForm.endpoint_port} onChange={event => updateNodeCreateField('endpoint_port', event.target.value)} required dir="ltr" /></label>
+              <label>WireGuard public key<input value={nodeCreateForm.public_key} onChange={event => updateNodeCreateField('public_key', event.target.value)} maxLength={44} required dir="ltr" autoCapitalize="off" autoCorrect="off" placeholder="Base64 · 44 characters" /></label>
+              <label>نام اینترفیس<input value={nodeCreateForm.interface_name} onChange={event => updateNodeCreateField('interface_name', event.target.value)} maxLength={15} required dir="ltr" placeholder="wg0" /></label>
+              <label>Client IPv4 pool<input value={nodeCreateForm.client_ipv4_pool} onChange={event => updateNodeCreateField('client_ipv4_pool', event.target.value)} required dir="ltr" placeholder="10.88.77.0/24" /></label>
+              <label>Client IPv6 pool<input value={nodeCreateForm.client_ipv6_pool} onChange={event => updateNodeCreateField('client_ipv6_pool', event.target.value)} required dir="ltr" placeholder="fd88:77:77::/64" /></label>
+              <label>Interface IPv4<input value={nodeCreateForm.interface_ipv4} onChange={event => updateNodeCreateField('interface_ipv4', event.target.value)} required dir="ltr" placeholder="10.88.77.1" /></label>
+              <label>Interface IPv6<input value={nodeCreateForm.interface_ipv6} onChange={event => updateNodeCreateField('interface_ipv6', event.target.value)} required dir="ltr" placeholder="fd88:77:77::1" /></label>
+            </div>
+            <div className="node-create-warning">مقادیر باید دقیقاً با تنظیمات نود تازه و مستقل مطابقت داشته باشند. برای نود دارای peerهای قبلی، قبل از فعال‌سازی باید همهٔ آدرس‌ها و peerهای موجود ثبت و رزرو شوند.</div>
+            {nodeCreateError && <div className="remote-users-error" role="alert">{nodeCreateError}</div>}
+            <div className="remote-user-form-actions">
+              <button className="button primary" type="submit" disabled={nodeCreateBusy}>{nodeCreateBusy ? 'در حال اعتبارسنجی و ثبت...' : 'ثبت نود در وضعیت Pending'}</button>
+              <button className="button secondary" type="button" disabled={nodeCreateBusy} onClick={() => { setShowCreateNode(false); setNodeCreateError(''); setNodeCreateKey('') }}>لغو</button>
+            </div>
+          </form>}
           <div className="remote-users-toolbar">
             <span>{remoteNodesState === 'loading' ? 'در حال دریافت نودها...' : remoteNodesState === 'error' ? remoteNodesError : remoteNodes.length + ' نود ثبت‌شده'}</span>
             <span>اطلاعات از پایگاه داده؛ بدون بارگذاری کلید خصوصی</span>

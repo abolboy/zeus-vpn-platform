@@ -38,7 +38,7 @@ Mutation requests use cryptographically random idempotency keys. A key is preser
 - Device and peer status comes from the database; revocation completes only after node acknowledgement.
 - User suspension blocks new device enrollment but does not automatically revoke already-provisioned peers.
 - The API connection indicator calls only \`GET /healthz\`; it does not prove database readiness or VPN-node health.
-- Authenticated server inventory and per-node certificate inspection/registration/revocation are live; node creation/onboarding, traffic metrics, subscriptions and activity events remain sample/unfinished.
+- Authenticated node inventory, new-node registration (pending-only), and per-node certificate inspection/registration/revocation are live. Existing-node peer import, live traffic metrics, subscriptions and activity events remain unfinished.
 - Android-side enrollment is implemented in the client build; staging HTTPS enrollment, node creation/onboarding UI, billing, subscriptions and live traffic telemetry remain rollout tasks.
 
 ## Security status

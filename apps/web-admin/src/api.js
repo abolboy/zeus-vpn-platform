@@ -133,3 +133,13 @@ export function revokeNodeCertificate(token, nodeID, certificateID) {
     { method: 'POST', token },
   )
 }
+
+export function createVPNNode(token, input, idempotencyKey = createIdempotencyKey()) {
+  return requestJSON('/v1/nodes', {
+    method: 'POST',
+    token,
+    body: input,
+    idempotencyKey,
+    timeoutMs: 12000,
+  })
+}

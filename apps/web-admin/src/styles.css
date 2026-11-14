@@ -495,3 +495,12 @@ tbody tr:hover { background: rgba(var(--accent-rgb),.045); }
   .node-certificate-card .mini-action { grid-column:1 / -1; justify-self:start; }
   .node-certificate-form { padding:11px; }
 }
+
+.node-create-form { margin:0 0 16px; }
+.node-create-fields { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:11px; margin-top:12px; }
+.node-create-fields label { display:grid; gap:6px; min-width:0; color:#9ba9c2; font-size:9px; }
+.node-create-fields input { width:100%; min-width:0; background:rgba(0,0,0,.2); border:1px solid rgba(255,255,255,.1); border-radius:8px; color:#edf4ff; padding:9px 10px; outline:none; font-size:10px; }
+.node-create-fields input:focus { border-color:var(--accent); }
+.node-create-warning { margin-top:12px; color:#d8b78f; background:rgba(255,179,107,.06); border:1px solid rgba(255,179,107,.12); border-radius:8px; padding:9px 11px; font-size:9px; line-height:1.9; }
+.node-create-form .remote-user-form-title span { line-height:1.9; }
+@media(max-width:760px) { .node-create-fields { grid-template-columns:1fr; } }

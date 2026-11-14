@@ -25,7 +25,7 @@ After login:
 - Only the public certificate is submitted. Never paste a CA or node private key into the dashboard.
 - The node mTLS CA must be configured on the Control Plane for certificate registration. Node inventory and certificate history can still be read when the node listener is not configured.
 
-The admin UI does not create or mutate VPN nodes yet. Node bootstrap and inventory onboarding must remain a separate reviewed operation after verifying the staging node's WireGuard interface, pools, and existing peers.
+Owner/admin can register a new VPN node from the servers page. The operation is idempotent and writes only the validated node inventory fields; the node remains pending until its mTLS agent authenticates. It does not execute WireGuard commands or alter peers. Before onboarding a node that already has peers, import and reserve its existing assignments first.
 
 ## Build
 

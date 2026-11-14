@@ -169,6 +169,20 @@ export default function App() {
   const filteredUsers = useMemo(() => sourceUsers.filter(u => (u.name + u.id).toLowerCase().includes(query.toLowerCase())), [sourceUsers, query])
   const canManageRemoteUsers = operator?.role === 'owner' || operator?.role === 'admin'
   const selectedNode = remoteNodes.find(node => node.id === selectedNodeID) || null
+  const hasLiveControlPlane = Boolean(isControlPlaneConfigured && accessToken)
+  const onlineNodeCount = remoteNodes.filter(node => node.status === 'online').length
+  const activeCustomerCount = remoteUsers.filter(user => user.status === 'active').length
+  const overviewServerRows = hasLiveControlPlane
+    ? remoteNodes.map(node => ({
+        id: node.id,
+        name: node.name,
+        region: node.region,
+        protocol: 'WireGuard',
+        load: null,
+        status: node.status,
+        ip: node.endpoint_host + ':' + node.endpoint_port,
+      }))
+    : servers
 
   useEffect(() => {
     try { window.localStorage.setItem('zeus.theme', theme) } catch { /* Browser storage is optional. */ }
@@ -654,6 +668,89 @@ export default function App() {
     }
   }
 
+
+  useEffect(() => {
+    if (!autoRefresh || !accessToken || !isControlPlaneConfigured) return
+
+    let active = true
+    let inFlight = false
+
+    async function refreshSnapshot() {
+      if (inFlight) return
+      inFlight = true
+      const deviceSequence = deviceFetchSequence.current
+      try {
+        const [healthResult, nodesResult, usersResult, devicesResult] = await Promise.allSettled([
+          getControlPlaneHealth(),
+          listVPNNodes(accessToken),
+          listVPNUsers(accessToken, { limit: 100 }),
+          devicesUserId ? listVPNDevices(accessToken, devicesUserId) : Promise.resolve(null),
+        ])
+        if (!active) return
+
+        if (healthResult.status === 'fulfilled') {
+          setApiStatus(healthResult.value.state)
+          setApiMessage(healthResult.value.message)
+        }
+
+        const unauthorized = [nodesResult, usersResult, devicesResult]
+          .some(result => result.status === 'rejected' && result.reason?.status === 401)
+        if (unauthorized) {
+          setAccessToken('')
+          setOperator(null)
+          setRemoteUsers([])
+          setRemoteNodes([])
+          setRemoteDevices([])
+          setDevicesUserId('')
+          setLoginError('نشست منقضی شده است؛ دوباره وارد شوید.')
+          return
+        }
+
+        if (nodesResult.status === 'fulfilled') {
+          setRemoteNodes(Array.isArray(nodesResult.value?.items) ? nodesResult.value.items : [])
+          setRemoteNodesState('loaded')
+          setRemoteNodesError('')
+        } else {
+          setRemoteNodesError(nodesResult.reason?.message || 'بروزرسانی نودها انجام نشد.')
+          setRemoteNodesState('error')
+        }
+
+        if (usersResult.status === 'fulfilled') {
+          const firstPage = Array.isArray(usersResult.value?.items) ? usersResult.value.items : []
+          setRemoteUsers(current => {
+            const firstPageIDs = new Set(firstPage.map(user => user.id))
+            return [...firstPage, ...current.filter(user => !firstPageIDs.has(user.id))]
+          })
+          setRemoteUsersNextCursor(usersResult.value?.next_cursor || '')
+          setRemoteUsersState('loaded')
+          setRemoteUsersError('')
+        } else {
+          setRemoteUsersError(usersResult.reason?.message || 'بروزرسانی کاربران انجام نشد.')
+          setRemoteUsersState('error')
+        }
+
+        if (devicesUserId && devicesResult.status === 'fulfilled' &&
+            deviceSequence === deviceFetchSequence.current) {
+          setRemoteDevices(Array.isArray(devicesResult.value?.items) ? devicesResult.value.items : [])
+          setRemoteDevicesState('loaded')
+          setRemoteDevicesError('')
+        } else if (devicesUserId && devicesResult.status === 'rejected' &&
+                   deviceSequence === deviceFetchSequence.current) {
+          setRemoteDevicesError(devicesResult.reason?.message || 'بروزرسانی دستگاه‌ها انجام نشد.')
+          setRemoteDevicesState('error')
+        }
+      } finally {
+        inFlight = false
+      }
+    }
+
+    const timer = window.setInterval(() => { void refreshSnapshot() }, 30_000)
+    return () => {
+      active = false
+      window.clearInterval(timer)
+    }
+  }, [autoRefresh, accessToken, devicesUserId])
+
   function addServer(event) {
     event.preventDefault()
     if (!serverName.trim() || !serverRegion.trim()) return
@@ -723,10 +820,20 @@ export default function App() {
         <div className="hero-index"><span>01</span><small>CONTROL<br/>LAYER</small></div>
       </section>}
 
-      {page === 'overview' && <><section className="metrics-grid"><Metric icon="⌘" label="سرورهای آنلاین" value="۰۲ / ۰۳" note="+۱ در این هفته" /><Metric icon="♙" label="کاربران فعال" value="۲۱۴" note="نمونه نمایشی" tone="purple" /><Metric icon="⇅" label="ترافیک مصرفی" value="۱.۲۸ TB" note="۳۰ روز اخیر" tone="blue" /><Metric icon="◷" label="میانگین تأخیر" value="۹۸ ms" note="از نودهای نمونه" tone="pink" /></section>
-      <section className="content-grid"><article className="panel glass server-panel"><div className="panel-heading"><div><h2>وضعیت سرورها</h2><p>پایش سلامت نودهای ثبت‌شده</p></div><button className="text-link" onClick={() => setPage('servers')}>همه سرورها ←</button></div><div className="server-list">{servers.slice(0,3).map(server => <div className="server-row" key={server.id}><div className="server-symbol">⌘</div><div className="server-info"><b>{server.name}</b><small>{server.region} · {server.protocol}</small></div><div className="server-load"><div className="load-label"><span>بار سرور</span><b>{server.status === 'pending' ? '—' : server.load + '%'}</b></div><div className="progress"><i style={{ width: server.load + '%' }} /></div></div><Status value={server.status} /></div>)}</div></article>
-      <article className="panel glass traffic-panel"><div className="panel-heading"><div><h2>ترافیک شبکه</h2><p>نمای نمونه مصرف در ۷ روز اخیر</p></div><span className="select-like">۷ روز اخیر⌄</span></div><div className="traffic-total"><b>۸۴۲.۶ <small>GB</small></b><span>↑ ۱۲.۸٪ <small>نسبت به دوره قبل</small></span></div><div className="chart"><div className="chart-y"><span>۱۰۰GB</span><span>۷۵GB</span><span>۵۰GB</span><span>۲۵GB</span><span>۰</span></div><div className="chart-bars">{[42,68,52,86,61,74,95].map((v,i)=><div className="bar-wrap" key={i}><i style={{height:v+'%'}} /><small>{['ش','ی','د','س','چ','پ','ج'][i]}</small></div>)}</div></div></article></section>
-      <section className="panel glass activity-panel"><div className="panel-heading"><div><h2>رویدادهای اخیر</h2><p>آخرین فعالیت‌های ثبت‌شده در داده آزمایشی</p></div><button className="text-link" onClick={() => setPage('activity')}>مشاهده گزارش‌ها ←</button></div><div className="activity-list"><div><i className="activity-icon green">✓</i><span><b>نود Frankfurt در دسترس است</b><small>بررسی نمونه سلامت · ۲ دقیقه پیش</small></span><Status value="online" /></div><div><i className="activity-icon purple">♙</i><span><b>کاربر نمونه به فهرست اضافه شد</b><small>رویداد آزمایشی · ۱۸ دقیقه پیش</small></span><Status value="active" /></div><div><i className="activity-icon orange">!</i><span><b>راه‌اندازی نود Warsaw تکمیل نشده</b><small>نیازمند نصب Agent و تنظیم کلیدها</small></span><Status value="pending" /></div></div></section></>}
+      {page === 'overview' && <><section className="metrics-grid">
+        <Metric icon="⌘" label="نودهای آنلاین" value={hasLiveControlPlane ? remoteNodesState === 'loaded' ? `${onlineNodeCount} / ${remoteNodes.length}` : '…' : '—'} note={hasLiveControlPlane ? 'از موجودی واقعی Control Plane' : 'پس از اتصال API'} />
+        <Metric icon="♙" label="کاربران فعال" value={hasLiveControlPlane ? remoteUsersState === 'loaded' ? String(activeCustomerCount) : '…' : '—'} note={hasLiveControlPlane ? 'در صفحات دریافت‌شده' : 'پس از اتصال API'} tone="purple" />
+        <Metric icon="⇅" label="ترافیک مصرفی" value="—" note="گزارش مصرف نود هنوز متصل نیست" tone="blue" />
+        <Metric icon="◷" label="میانگین تأخیر" value="—" note="متریک زندهٔ نود هنوز در دسترس نیست" tone="pink" />
+      </section>
+       <section className="content-grid"><article className="panel glass server-panel"><div className="panel-heading"><div><h2>وضعیت سرورها</h2><p>{hasLiveControlPlane ? 'موجودی واقعی نودها؛ بار و تأخیر تا اتصال عامل مانیتورینگ گزارش نمی‌شود.' : 'دادهٔ واقعی پس از پیکربندی Control Plane در این بخش نمایش داده می‌شود.'}</p></div><button className="text-link" onClick={() => setPage('servers')}>همه سرورها ←</button></div>
+       <div className="server-list">{overviewServerRows.slice(0,3).map(server => <div className="server-row" key={server.id}><div className="server-symbol">⌘</div><div className="server-info"><b>{server.name}</b><small>{server.region} · {server.protocol}</small></div><div className="server-load"><div className="load-label"><span>بار سرور</span><b>{server.load == null ? '—' : server.load + '%'}</b></div><div className="progress"><i style={{ width: (server.load || 0) + '%' }} /></div></div><Status value={server.status} /></div>)}
+       {hasLiveControlPlane && remoteNodesState === 'loading' && <div className="empty">در حال دریافت نودهای واقعی...</div>}
+       {hasLiveControlPlane && remoteNodesState === 'loaded' && remoteNodes.length === 0 && <div className="empty">هنوز نودی در Control Plane ثبت نشده است.</div>}
+       {hasLiveControlPlane && remoteNodesState === 'error' && <div className="remote-users-error">{remoteNodesError}</div>}
+       </div></article>
+       <article className="panel glass traffic-panel"><div className="panel-heading"><div><h2>ترافیک شبکه</h2><p>آمار واقعی پس از اتصال گزارش‌گر مصرف نود</p></div><span className="select-like">داده در دسترس نیست</span></div><div className="traffic-total"><b>—</b><span>هنوز منبع معتبر مصرف ترافیک متصل نشده است</span></div><div className="devices-empty">برای نمایش نمودار ۷ روزه باید عامل نود شمارنده‌های RX/TX را دوره‌ای به Control Plane گزارش کند. تا آن زمان عدد یا نمودار نمونه نمایش داده نمی‌شود.</div></article></section>
+       <section className="panel glass activity-panel"><div className="panel-heading"><div><h2>گزارش رویدادها</h2><p>رویدادهای ممیزی هنوز در API پنل ارائه نشده‌اند</p></div><button className="text-link" onClick={() => setPage('activity')}>وضعیت گزارش‌ها ←</button></div><div className="devices-empty">هیچ رویداد نمونه‌ای به‌عنوان رویداد واقعی نمایش داده نمی‌شود. پس از اتصال API گزارش ممیزی، رویدادهای ثبت‌شده در این بخش ظاهر می‌شوند.</div></section></>}
 
       {page === 'servers' && <section className="panel glass full-panel">
         <div className="panel-heading">
@@ -953,9 +1060,12 @@ export default function App() {
         </section>}
       </section>}
 
-      {page === 'plans' && <section className="plan-grid">{[['STARTER','۷ روزه','برای استفاده کوتاه‌مدت','۷ روز','۵۰ GB'],['PRO','۳۰ روزه','برای استفاده روزمره','۳۰ روز','نامحدود'],['ULTRA','۹۰ روزه','برای کاربران حرفه‌ای','۹۰ روز','نامحدود']].map((p,i)=><article className="plan-card glass" key={p[0]}><span className="plan-index">۰{i+1}</span><h2>{p[0]}</h2><h3>{p[1]}</h3><p>{p[2]}</p><div className="plan-detail"><span>مدت اعتبار</span><b>{p[3]}</b></div><div className="plan-detail"><span>سقف ترافیک</span><b>{p[4]}</b></div><button className="button secondary" onClick={()=>toast('تعریف و قیمت‌گذاری اشتراک‌ها پس از اتصال API فعال می‌شود.')}>ویرایش طرح</button></article>)}</section>}
+      {page === 'plans' && <section className="panel glass full-panel">
+        <div className="panel-heading"><div><h2>مدیریت اشتراک‌ها</h2><p>زیرساخت طرح، پرداخت و اعمال سهمیه هنوز به API متصل نشده است.</p></div></div>
+        <div className="devices-empty">طرح‌های STARTER، PRO و ULTRA که قبلاً در صفحه نمایش داده می‌شدند نمونهٔ نمایشی بودند و به‌عنوان محصول قابل خرید یا اشتراک فعال حذف شدند. پیش از فعال‌سازی این بخش باید سیاست واقعی قیمت، مدت، حجم، تمدید و درگاه پرداخت تعیین و در سرور enforce شود.</div>
+      </section>}
 
-      {page === 'activity' && <section className="panel glass full-panel"><div className="panel-heading"><div><h2>گزارش رویدادها</h2><p>رخدادهای نمونه؛ لاگ واقعی هنوز به پنل متصل نیست</p></div><span className="live-indicator"><i/> DEMO LOG</span></div><div className="activity-list large"><div><i className="activity-icon green">✓</i><span><b>Health check موفق برای Frankfurt</b><small>۲۰۲۶/۱۱/۱۳ · ۰۹:۴۲ · سیستم پایش</small></span><Status value="online"/></div><div><i className="activity-icon purple">♙</i><span><b>ورود مدیر نمونه</b><small>۲۰۲۶/۱۱/۱۳ · ۰۹:۲۱ · پنل محلی</small></span><Status value="active"/></div><div><i className="activity-icon orange">!</i><span><b>نود Warsaw هنوز پیکربندی نشده</b><small>۲۰۲۶/۱۱/۱۳ · ۰۸:۵۵ · زیرساخت</small></span><Status value="pending"/></div></div></section>}
+      {page === 'activity' && <section className="panel glass full-panel"><div className="panel-heading"><div><h2>گزارش رویدادها</h2><p>رخدادهای نمونه؛ لاگ واقعی هنوز به پنل متصل نیست</p></div><span className="live-indicator"><i/> DEMO LOG</span></div><div className="devices-empty">گزارش ممیزی هنوز endpoint خواندنی در Control Plane ندارد؛ رویداد نمونه یا ساختگی نمایش داده نمی‌شود.</div></section>}
 
       {page === 'settings' && <section className="panel glass full-panel settings-panel"><div className="panel-heading"><div><h2>تنظیمات پنل</h2><p>ترجیحات رابط کاربری و رفتار نمایشی</p></div></div><div className="setting-row"><span><b>بروزرسانی خودکار رابط</b><small>در نسخه متصل، داده‌ها به‌صورت دوره‌ای از API خوانده می‌شوند.</small></span><button className={autoRefresh?'switch on':'switch'} onClick={()=>setAutoRefresh(v=>!v)} aria-label="تغییر بروزرسانی خودکار"><i/></button></div><div className="setting-row"><span><b>وضعیت Control Plane</b><small>{apiMessage} — این بررسی فقط GET /healthz را می‌خواند و به معنی اتصال داده‌های مدیریتی نیست.</small></span><button className="button secondary" onClick={checkControlPlane}>بررسی دوباره</button></div><div className="setting-row"><span><b>حالت فشرده</b><small>کاهش فاصله‌ها برای نمایش اطلاعات بیشتر.</small></span><button className={compact?'switch on':'switch'} onClick={()=>setCompact(v=>!v)} aria-label="تغییر حالت فشرده"><i/></button></div><div className="setting-row"><span><b>پوسته فعلی</b><small>{themes.find(t=>t.id===theme).name}</small></span><button className="button secondary" onClick={()=>setTheme(themes[(themes.findIndex(t=>t.id===theme)+1)%themes.length].id)}>تغییر پوسته</button></div><div className="notice-box">امنیت: این نسخه به API واقعی، احراز هویت یا داده تولیدی متصل نیست. پیش از اتصال عمومی باید ورود امن، نقش‌ها، CSRF/CORS، اعتبارسنجی ورودی و ثبت ممیزی پیاده‌سازی شوند.</div></section>}
 

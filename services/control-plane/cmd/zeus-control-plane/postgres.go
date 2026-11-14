@@ -75,11 +75,11 @@ func (s *PostgresStore) Ping(ctx context.Context) error {
 		FROM information_schema.tables
 		WHERE table_schema = 'public'
 		  AND table_name = ANY($1::text[])
-	`, []string{"operators", "operator_sessions", "vpn_users", "vpn_nodes", "vpn_devices", "wireguard_peers", "audit_events", "idempotency_records", "node_commands", "vpn_user_enrollment_codes", "vpn_node_agent_certificates"}).Scan(&count)
+	`, []string{"operators", "operator_sessions", "vpn_users", "vpn_nodes", "vpn_devices", "wireguard_peers", "audit_events", "idempotency_records", "node_commands", "vpn_user_enrollment_codes", "vpn_node_agent_certificates", "client_device_idempotency_records"}).Scan(&count)
 	if err != nil {
 		return err
 	}
-	if count != 11 {
+	if count != 12 {
 		return errors.New("database schema is not migrated")
 	}
 	var poolColumns int
@@ -413,6 +413,111 @@ func (s *PostgresStore) CreateVPNDevice(ctx context.Context, actorID, userID, ro
 	})
 }
 
+func (s *PostgresStore) EnsureExternalVPNUser(ctx context.Context, externalRef, displayName string) (VPNUser, error) {
+	if externalRef == "" || len(externalRef) > 512 || displayName == "" || len(displayName) > 120 {
+		return VPNUser{}, errors.New("invalid external customer identity")
+	}
+	var user VPNUser
+	err := s.pool.QueryRow(ctx, `
+		INSERT INTO vpn_users (external_ref, display_name, status, max_devices)
+		VALUES ($1, $2, 'active', 3)
+		ON CONFLICT (external_ref) DO UPDATE SET updated_at = now()
+		RETURNING id::text, display_name, status, max_devices, created_at
+	`, externalRef, displayName).Scan(&user.ID, &user.DisplayName, &user.Status, &user.MaxDevices, &user.CreatedAt)
+	return user, err
+}
+
+func (s *PostgresStore) EnrollCustomerVPNDevice(
+	ctx context.Context,
+	userID, idempotencyKey string,
+	requestHash []byte,
+	input CreateDeviceInput,
+	requestID string,
+	sourceIP *string,
+) (VPNDevice, bool, error) {
+	if !uuidPattern.MatchString(userID) || !idempotencyKeyPattern.MatchString(idempotencyKey) || len(requestHash) != 32 {
+		return VPNDevice{}, false, errors.New("invalid self-service device enrollment request")
+	}
+	route := "POST:/v1/client/enroll"
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return VPNDevice{}, false, err
+	}
+	defer tx.Rollback(ctx)
+
+	if _, err := tx.Exec(ctx, `
+		DELETE FROM client_device_idempotency_records
+		WHERE user_id = $1::uuid AND expires_at <= now()
+	`, userID); err != nil {
+		return VPNDevice{}, false, err
+	}
+
+	var reserved bool
+	err = tx.QueryRow(ctx, `
+		INSERT INTO client_device_idempotency_records
+			(user_id, route, idempotency_key, request_hash)
+		VALUES ($1::uuid, $2, $3, $4)
+		ON CONFLICT (user_id, route, idempotency_key) DO NOTHING
+		RETURNING true
+	`, userID, route, idempotencyKey, requestHash).Scan(&reserved)
+	if errors.Is(err, pgx.ErrNoRows) {
+		var existingHash, responseBody []byte
+		var responseStatus *int16
+		err = tx.QueryRow(ctx, `
+			SELECT request_hash, response_body, response_status
+			FROM client_device_idempotency_records
+			WHERE user_id = $1::uuid AND route = $2 AND idempotency_key = $3
+		`, userID, route, idempotencyKey).Scan(&existingHash, &responseBody, &responseStatus)
+		if err != nil {
+			return VPNDevice{}, false, err
+		}
+		if !bytes.Equal(existingHash, requestHash) {
+			return VPNDevice{}, false, ErrIdempotencyConflict
+		}
+		if len(responseBody) == 0 || responseStatus == nil {
+			return VPNDevice{}, false, errors.New("customer idempotency record is incomplete")
+		}
+		var device VPNDevice
+		if err := json.Unmarshal(responseBody, &device); err != nil {
+			return VPNDevice{}, false, err
+		}
+		if err := tx.Commit(ctx); err != nil {
+			return VPNDevice{}, false, err
+		}
+		return device, true, nil
+	}
+	if err != nil {
+		return VPNDevice{}, false, err
+	}
+
+	device, err := s.createVPNDeviceTx(ctx, tx, "", userID, input)
+	if err != nil {
+		return VPNDevice{}, false, err
+	}
+	body, err := json.Marshal(device)
+	if err != nil {
+		return VPNDevice{}, false, err
+	}
+	if _, err := tx.Exec(ctx, `
+		UPDATE client_device_idempotency_records
+		SET response_status = 202, response_body = $4::jsonb
+		WHERE user_id = $1::uuid AND route = $2 AND idempotency_key = $3
+	`, userID, route, idempotencyKey, string(body)); err != nil {
+		return VPNDevice{}, false, err
+	}
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO audit_events
+			(actor_operator_id, subject_user_id, action, outcome, request_id, source_ip, metadata)
+		VALUES (NULL, $1::uuid, 'device.enroll.self_service', 'success', $2, $3::inet, '{}'::jsonb)
+	`, userID, requestID, sourceIP); err != nil {
+		return VPNDevice{}, false, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return VPNDevice{}, false, err
+	}
+	return device, false, nil
+}
+
 func (s *PostgresStore) createVPNDeviceTx(ctx context.Context, tx pgx.Tx, actorID, userID string, input CreateDeviceInput) (VPNDevice, error) {
 		var userStatus string
 		var maxDevices int
@@ -532,7 +637,7 @@ func (s *PostgresStore) createVPNDeviceTx(ctx context.Context, tx pgx.Tx, actorI
 		if _, err := tx.Exec(ctx, `
 			INSERT INTO node_commands
 				(node_id, created_by_operator_id, command_type, payload, request_hash, idempotency_key)
-			VALUES ($1::uuid, $2::uuid, 'peer.ensure', $3::jsonb, $4, $5)
+			VALUES ($1::uuid, NULLIF($2, '')::uuid, 'peer.ensure', $3::jsonb, $4, $5)
 		`, node.id, actorID, string(payload), commandHash[:], newRequestID()); err != nil {
 			return VPNDevice{}, err
 		}

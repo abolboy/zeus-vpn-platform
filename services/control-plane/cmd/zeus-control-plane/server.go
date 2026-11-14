@@ -21,6 +21,7 @@ import (
 
 	"crypto/x509"
 
+	"github.com/coreos/go-oidc/v3/oidc"
 	"github.com/jackc/pgx/v5"
 )
 
@@ -34,6 +35,8 @@ type API struct {
 	dummyHash    string
 	allowedOrigin map[string]struct{}
 	nodeClientCAs *x509.CertPool
+	customerVerifier *oidc.IDTokenVerifier
+	customerIssuer string
 }
 
 type contextKey string
@@ -728,6 +731,10 @@ func (a *API) handleCreateEnrollmentCode(w http.ResponseWriter, r *http.Request)
 }
 
 func (a *API) handleClientEnrollment(w http.ResponseWriter, r *http.Request) {
+	if strings.TrimSpace(r.Header.Get("Authorization")) != "" {
+		a.handleCustomerClientEnrollment(w, r)
+		return
+	}
 	ip := remoteIP(r.RemoteAddr)
 	limiterKey := "unknown"
 	if ip != nil {

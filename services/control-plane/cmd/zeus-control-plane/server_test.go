@@ -96,6 +96,19 @@ func newTestAPI(t *testing.T, store ControlStore, origins ...string) http.Handle
 	return api.Handler()
 }
 
+func TestCustomerEnrollmentRequiresConfiguredOIDC(t *testing.T) {
+	handler := newTestAPI(t, nil)
+	body := []byte(`{"device_ref":"customer-device-ref-0001","device_name":"Android","platform":"android","public_key":"BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc="}`)
+	request := httptest.NewRequest(http.MethodPost, "/v1/client/enroll", bytes.NewReader(body))
+	request.Header.Set("Authorization", "Bearer not-a-real-token")
+	request.Header.Set("Idempotency-Key", "customer-request-key-0001")
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusServiceUnavailable || !bytes.Contains(response.Body.Bytes(), []byte("customer_identity_not_configured")) {
+		t.Fatalf("unconfigured customer enrollment status=%d body=%s", response.Code, response.Body.String())
+	}
+}
+
 func TestHealthReadinessAndSecurityHeaders(t *testing.T) {
 	handler := newTestAPI(t, nil)
 	health := httptest.NewRecorder()

@@ -1,6 +1,6 @@
 # ZEUS Control Plane — Phase 2 Alpha
 
-The Go service supports PostgreSQL-backed operator authentication, VPN user and device lifecycle APIs, one-time client activation codes, a durable peer command queue, and a separate optional mTLS node-agent listener. This is still an alpha: staging deployment, full node inventory bootstrap, production rollout, subscriptions, billing, and live telemetry remain incomplete.
+The Go service supports PostgreSQL-backed operator authentication, verified OIDC customer identity, self-service VPN device enrollment, one-time invite-code fallback, a durable peer command queue, and a separate optional mTLS node-agent listener. This remains an alpha: staging deployment, full node inventory bootstrap, production rollout, subscriptions, billing, and live telemetry remain incomplete.
 
 ## Requirements
 - Go 1.27 or newer.
@@ -30,6 +30,7 @@ Optional settings:
 - ZEUS_VERSION: reported build version.
 - ZEUS_ENV=production: requires a database URL using sslmode=verify-full.
 - ZEUS_ALLOWED_ORIGINS: comma-separated exact browser origins; no wildcard is accepted.
+- ZEUS_OIDC_ISSUER and ZEUS_OIDC_CLIENT_ID: configure together to enable self-service customer enrollment through a verified OIDC identity provider. The app client is a public native client; no client secret belongs in the Android app.
 
 ## Node-agent certificates
 
@@ -49,7 +50,7 @@ Do not register a node for client provisioning until its endpoint, server public
 - GET /v1/meta: service metadata.
 - POST /v1/auth/login, GET /v1/auth/me, POST /v1/auth/logout: operator sessions.
 - Authenticated user/device APIs support owner/admin mutations and read access for support/read-only roles.
-- POST /v1/client/enroll: public rate-limited activation-code flow; returns HTTP 202 while peer provisioning remains asynchronous.
+- POST /v1/client/enroll: accepts either the legacy one-time activation code (no bearer token) or an OIDC ID token (Authorization: Bearer). The OIDC path requires verified email and binds the customer to issuer + subject, provisions the account on first use, and returns HTTP 202 while peer provisioning remains asynchronous.
 - GET /v1/nodes/{nodeID}/certificates: authenticated certificate inventory for owner/admin/support/read_only.
 - POST /v1/nodes/{nodeID}/certificates: owner/admin registration of a CA-verified, node-bound ClientAuth certificate.
 - POST /v1/nodes/{nodeID}/certificates/{certificateID}/revoke: owner/admin certificate revocation.

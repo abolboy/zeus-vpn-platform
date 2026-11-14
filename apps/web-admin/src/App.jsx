@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { getControlPlaneHealth, isControlPlaneConfigured, loginOperator, logoutOperator, listVPNUsers, createVPNUser, updateVPNUser, createIdempotencyKey, listVPNDevices, revokeVPNDevice, createDeviceEnrollmentCode, listVPNNodes, listNodeCertificates, registerNodeCertificate, revokeNodeCertificate } from './api.js'
+import { getControlPlaneHealth, isControlPlaneConfigured, loginOperator, logoutOperator, listVPNUsers, createVPNUser, updateVPNUser, createIdempotencyKey, listVPNDevices, revokeVPNDevice, createDeviceEnrollmentCode, createVPNNode, listVPNNodes, listNodeCertificates, registerNodeCertificate, revokeNodeCertificate } from './api.js'
 
 const initialServers = [
   { id: 1, name: 'ZEUS • Frankfurt', region: 'آلمان', ip: '185.220.101.14', protocol: 'WireGuard', load: 38, latency: 82, status: 'online', users: 128 },

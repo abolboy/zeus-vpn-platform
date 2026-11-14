@@ -10,7 +10,7 @@ required_files=(
   "docs/staging-deployment.md"
 )
 
-for file in "${required_files[@]}"; do
+for file in "\${required_files[@]}"; do
   [[ -s "$file" ]] || { echo "FAIL: missing or empty deployment file: $file"; exit 1; }
 done
 
@@ -39,12 +39,12 @@ if command -v systemd-analyze >/dev/null 2>&1; then
   : > "$temp_root/opt/zeus/bin/zeus-vpn-node"
   chmod 0755 "$temp_root/opt/zeus/bin/zeus-control-plane" "$temp_root/opt/zeus/bin/zeus-migrate" "$temp_root/opt/zeus/bin/zeus-vpn-node"
   for target in sysinit.target network-online.target multi-user.target; do
-    printf '[Unit]\\nDescription=%s\\n' "$target" > "$temp_root/etc/systemd/system/$target"
+    printf '[Unit]\nDescription=%s\n' "$target" > "$temp_root/etc/systemd/system/$target"
   done
   cp deploy/systemd/zeus-control-plane.service deploy/systemd/zeus-migrate.service deploy/systemd/zeus-vpn-node.service "$temp_root/etc/systemd/system/"
-  systemd-analyze verify --root="$temp_root" \\
-    "$temp_root/etc/systemd/system/zeus-control-plane.service" \\
-    "$temp_root/etc/systemd/system/zeus-migrate.service" \\
+  systemd-analyze verify --root="$temp_root" \
+    "$temp_root/etc/systemd/system/zeus-control-plane.service" \
+    "$temp_root/etc/systemd/system/zeus-migrate.service" \
     "$temp_root/etc/systemd/system/zeus-vpn-node.service"
   echo "PASS: systemd-analyze accepted all three service units"
 else

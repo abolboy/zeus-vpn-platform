@@ -62,12 +62,12 @@ Use a TLS reverse proxy for the admin API and route it to `127.0.0.1:8080`. Do n
 
 Back up the empty/dedicated staging database first. Then run the migration binary using the same root-only environment file as the service:
 
-\`\`\`sh
+```sh
 sudo systemctl daemon-reload
 sudo systemctl start zeus-migrate
 sudo systemctl status zeus-migrate --no-pager
 sudo journalctl -u zeus-migrate -n 100 --no-pager
-\`\`\`
+```
 
 Do not point this command at an unrelated database. The application does not auto-migrate schema at startup.
 

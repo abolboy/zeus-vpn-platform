@@ -26,13 +26,14 @@ func (s *PostgresStore) DeleteExpiredSessions(ctx context.Context, batchSize int
 		return 0, errors.New("database is not configured")
 	}
 
+	cutoff := time.Now().UTC().Add(-sessionRetentionPeriod)
 	var deleted int64
 	err := s.pool.QueryRow(ctx, `
 		WITH stale_sessions AS (
 			SELECT id
 			FROM operator_sessions
-			WHERE (revoked_at IS NOT NULL AND revoked_at <= now() - interval '30 days')
-			   OR (revoked_at IS NULL AND expires_at <= now() - interval '30 days')
+			WHERE (revoked_at IS NOT NULL AND revoked_at <= $2)
+			   OR (revoked_at IS NULL AND expires_at <= $2)
 			ORDER BY CASE WHEN revoked_at IS NULL THEN expires_at ELSE revoked_at END, id
 			LIMIT $1
 			FOR UPDATE SKIP LOCKED
@@ -43,7 +44,7 @@ func (s *PostgresStore) DeleteExpiredSessions(ctx context.Context, batchSize int
 			RETURNING 1
 		)
 		SELECT count(*) FROM deleted_sessions
-	`, batchSize).Scan(&deleted)
+	`, batchSize, cutoff).Scan(&deleted)
 	return deleted, err
 }
 

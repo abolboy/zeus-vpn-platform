@@ -19,10 +19,20 @@ Errors use a stable envelope with `error.code`, `error.message`, and `error.requ
 - `POST /v1/users`: create a VPN user.
 - `PATCH /v1/users/{userID}`: update display name, status, or device limit.
 - `GET /v1/users/{userID}/devices`: list the user's registered devices and associated peer profile.
-- `POST /v1/users/{userID}/devices`: register a device and enqueue peer provisioning.
+- `POST /v1/users/{userID}/enrollment-code`: issue a one-time 256-bit client activation code (15-minute lifetime).
+- `POST /v1/users/{userID}/devices`: operator-only direct registration (administrative/testing path).
 - `POST /v1/users/{userID}/devices/{deviceID}/revoke`: enqueue peer removal for one device.
+- `POST /v1/client/enroll`: public, rate-limited client registration using a one-time activation code and a client-generated WireGuard public key.
 
 All operator endpoints require a bearer session. `owner` and `admin` may create/update users and register/revoke devices. `support` and `read_only` may read users and device lists but cannot mutate. Authorization is enforced by the API, not just by hiding UI controls.
+
+## Client activation-code flow
+- Owner/admin issues a 256-bit random code for an active VPN user. The raw code is returned once, expires after 15 minutes, and is never stored; PostgreSQL stores only its SHA-256 hash.
+- Issuing a replacement code revokes the previous unconsumed code for that user.
+- The client submits the code, a stable device reference, name, platform, and WireGuard public key to `POST /v1/client/enroll`. This endpoint does not accept or require an operator bearer token.
+- The enrollment route is rate-limited by source IP. A code can provision only one device identity.
+- Network retries are recoverable: repeating the same code with the same device reference and public key returns the existing device, even with a new idempotency key. A different identity is rejected.
+- Code consumption, device/peer creation, `peer.ensure` queueing, idempotency response, and audit event commit transactionally.
 
 ## Device registration
 Request body:
@@ -34,7 +44,7 @@ Request body:
   "public_key": "base64-WireGuard-public-key"
 }
 ```
-- The client generates the WireGuard key pair. Only the public key is sent to the control plane; the private key remains on the client device.
+- The client generates the WireGuard key pair. Only the public key is sent to the control plane; the private key remains on the client device. The Android client builds the final tunnel profile locally and saves it using Android Keystore-backed AES-GCM encryption.
 - The node must be online, registered with an mTLS certificate fingerprint, and configured with explicit IPv4/IPv6 client pools and interface addresses.
 - The user row is locked while the device limit is checked. Device, peer, `peer.ensure` command, idempotency response, and audit event are committed transactionally.
 - IP allocation excludes the node interface addresses and all non-revoked peer assignments. The node-scoped unique indexes prevent concurrent duplicate assignments.

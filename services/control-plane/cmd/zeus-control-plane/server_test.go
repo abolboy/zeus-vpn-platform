@@ -589,4 +589,99 @@ func TestPostgresStoreIntegration(t *testing.T) {
 		replacementDevice.Peer.AssignedIPv6 != device.Peer.AssignedIPv6 {
 		t.Fatalf("released node addresses were not reused: old=%+v new=%+v", device.Peer, replacementDevice.Peer)
 	}
+
+	// Issue a one-time enrollment code from the authenticated admin API.
+	var enrollmentUserID string
+	if err := store.pool.QueryRow(ctx, `
+		INSERT INTO vpn_users (display_name, max_devices)
+		VALUES ('ZEUS Client Enrollment User', 1)
+		RETURNING id::text
+	`).Scan(&enrollmentUserID); err != nil {
+		t.Fatal(err)
+	}
+	issueCodeRequest := httptest.NewRequest(http.MethodPost, "/v1/users/"+enrollmentUserID+"/enrollment-code", nil)
+	issueCodeRequest.Header.Set("Authorization", "Bearer "+token)
+	issueCodeResponse := httptest.NewRecorder()
+	handler.ServeHTTP(issueCodeResponse, issueCodeRequest)
+	if issueCodeResponse.Code != http.StatusCreated {
+		t.Fatalf("enrollment code issue status=%d body=%s", issueCodeResponse.Code, issueCodeResponse.Body.String())
+	}
+	var enrollmentCode EnrollmentCodeResponse
+	if err := json.Unmarshal(issueCodeResponse.Body.Bytes(), &enrollmentCode); err != nil {
+		t.Fatal(err)
+	}
+	if len(enrollmentCode.Code) != 43 || !enrollmentCode.ExpiresAt.After(time.Now()) {
+		t.Fatalf("invalid one-time enrollment response: %+v", enrollmentCode)
+	}
+
+	enrollmentInput := ClientEnrollmentInput{
+		ActivationCode: enrollmentCode.Code,
+		DeviceRef: "ci-enrollment-device-0001",
+		DeviceName: "Enrollment Android",
+		Platform: "android",
+		PublicKey: "AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgI=",
+	}
+	enrollmentBody, err := json.Marshal(enrollmentInput)
+	if err != nil {
+		t.Fatal(err)
+	}
+	enrollmentKey := newRequestID()
+	clientEnrollRequest := httptest.NewRequest(http.MethodPost, "/v1/client/enroll", bytes.NewReader(enrollmentBody))
+	clientEnrollRequest.Header.Set("Idempotency-Key", enrollmentKey)
+	clientEnrollResponse := httptest.NewRecorder()
+	handler.ServeHTTP(clientEnrollResponse, clientEnrollRequest)
+	if clientEnrollResponse.Code != http.StatusAccepted {
+		t.Fatalf("client enrollment status=%d body=%s", clientEnrollResponse.Code, clientEnrollResponse.Body.String())
+	}
+	var enrolledDevice VPNDevice
+	if err := json.Unmarshal(clientEnrollResponse.Body.Bytes(), &enrolledDevice); err != nil {
+		t.Fatal(err)
+	}
+	if enrolledDevice.UserID != enrollmentUserID || enrolledDevice.Status != "provisioning" ||
+		enrolledDevice.Peer.Status != "pending" || enrolledDevice.Peer.PublicKey != enrollmentInput.PublicKey {
+		t.Fatalf("unexpected client enrollment result: %+v", enrolledDevice)
+	}
+
+	// Lost-response retry with the same key is idempotent.
+	clientEnrollReplay := httptest.NewRequest(http.MethodPost, "/v1/client/enroll", bytes.NewReader(enrollmentBody))
+	clientEnrollReplay.Header.Set("Idempotency-Key", enrollmentKey)
+	clientEnrollReplayResponse := httptest.NewRecorder()
+	handler.ServeHTTP(clientEnrollReplayResponse, clientEnrollReplay)
+	var enrolledReplay VPNDevice
+	if clientEnrollReplayResponse.Code != http.StatusAccepted ||
+		clientEnrollReplayResponse.Header().Get("Idempotency-Replayed") != "true" ||
+		json.Unmarshal(clientEnrollReplayResponse.Body.Bytes(), &enrolledReplay) != nil ||
+		enrolledReplay.ID != enrolledDevice.ID {
+		t.Fatalf("client enrollment idempotent replay failed: status=%d body=%s", clientEnrollReplayResponse.Code, clientEnrollReplayResponse.Body.String())
+	}
+
+	// A retry with a fresh idempotency key but identical client identity recovers the same device.
+	clientEnrollFreshRetry := httptest.NewRequest(http.MethodPost, "/v1/client/enroll", bytes.NewReader(enrollmentBody))
+	clientEnrollFreshRetry.Header.Set("Idempotency-Key", newRequestID())
+	clientEnrollFreshRetryResponse := httptest.NewRecorder()
+	handler.ServeHTTP(clientEnrollFreshRetryResponse, clientEnrollFreshRetry)
+	var enrolledFreshRetry VPNDevice
+	if clientEnrollFreshRetryResponse.Code != http.StatusAccepted ||
+		json.Unmarshal(clientEnrollFreshRetryResponse.Body.Bytes(), &enrolledFreshRetry) != nil ||
+		enrolledFreshRetry.ID != enrolledDevice.ID {
+		t.Fatalf("fresh-key enrollment recovery failed: status=%d body=%s", clientEnrollFreshRetryResponse.Code, clientEnrollFreshRetryResponse.Body.String())
+	}
+
+	// The same one-time code cannot provision another key or another device reference.
+	secondEnrollmentInput := enrollmentInput
+	secondEnrollmentInput.DeviceRef = "ci-enrollment-device-0002"
+	secondEnrollmentInput.PublicKey = "BAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQ="
+	secondEnrollmentBody, err := json.Marshal(secondEnrollmentInput)
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondClientEnroll := httptest.NewRequest(http.MethodPost, "/v1/client/enroll", bytes.NewReader(secondEnrollmentBody))
+	secondClientEnroll.Header.Set("Idempotency-Key", newRequestID())
+	secondClientEnrollResponse := httptest.NewRecorder()
+	handler.ServeHTTP(secondClientEnrollResponse, secondClientEnroll)
+	if secondClientEnrollResponse.Code != http.StatusConflict ||
+		!bytes.Contains(secondClientEnrollResponse.Body.Bytes(), []byte("activation_code_used")) {
+		t.Fatalf("consumed activation code status=%d body=%s, want 409 activation_code_used", secondClientEnrollResponse.Code, secondClientEnrollResponse.Body.String())
+	}
+
 }

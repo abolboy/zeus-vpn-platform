@@ -38,6 +38,8 @@ Deliver authenticated multi-user management while keeping the already-working pr
 - [x] Device revocation and `peer.remove` command enqueue in one transaction.
 - [x] Device/peer state updates after node acknowledgements; acknowledged removal releases addresses.
 - [x] PostgreSQL integration test exercises registration, limit, address allocation, ensure, revoke, replay, and address reuse.
+- [x] One-time 256-bit enrollment codes with 15-minute expiry, hashed storage, replacement revocation, and safe retry recovery.
+- [x] Public client enrollment endpoint that accepts only the client-generated WireGuard public key; rate-limited and idempotent.
 - Account suspension blocks new enrollment but does not automatically revoke already-registered devices; revoke each device explicitly.
 
 ## 2D — Node agent and WireGuard executor

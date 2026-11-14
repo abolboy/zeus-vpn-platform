@@ -349,6 +349,29 @@ type provisioningNode struct {
 	endpointPort int
 }
 
+func getVPNDeviceTx(ctx context.Context, tx pgx.Tx, deviceID string) (VPNDevice, error) {
+	var device VPNDevice
+	err := tx.QueryRow(ctx, `
+		SELECT d.id::text, d.user_id::text, d.device_ref, d.device_name, d.platform,
+		       d.status, d.created_at, COALESCE(d.last_error, ''),
+		       p.id::text, p.node_id::text, p.public_key, host(p.assigned_ipv4),
+		       COALESCE(host(p.assigned_ipv6), ''), n.public_key, n.endpoint_host,
+		       n.endpoint_port, p.status
+		FROM vpn_devices d
+		JOIN wireguard_peers p ON p.device_id = d.id
+		JOIN vpn_nodes n ON n.id = p.node_id
+		WHERE d.id = $1::uuid
+	`, deviceID).Scan(
+		&device.ID, &device.UserID, &device.DeviceRef, &device.DeviceName,
+		&device.Platform, &device.Status, &device.CreatedAt, &device.LastError,
+		&device.Peer.ID, &device.Peer.NodeID, &device.Peer.PublicKey,
+		&device.Peer.AssignedIPv4, &device.Peer.AssignedIPv6,
+		&device.Peer.ServerPublicKey, &device.Peer.EndpointHost,
+		&device.Peer.EndpointPort, &device.Peer.Status,
+	)
+	return device, err
+}
+
 func (s *PostgresStore) ListVPNDevices(ctx context.Context, userID string) ([]VPNDevice, error) {
 	rows, err := s.pool.Query(ctx, `
 		SELECT d.id::text, d.user_id::text, d.device_ref, d.device_name, d.platform,
@@ -386,6 +409,11 @@ func (s *PostgresStore) ListVPNDevices(ctx context.Context, userID string) ([]VP
 
 func (s *PostgresStore) CreateVPNDevice(ctx context.Context, actorID, userID, route, key string, requestHash []byte, input CreateDeviceInput, requestID string, sourceIP *string) (VPNDevice, bool, error) {
 	return s.runIdempotentDeviceMutation(ctx, actorID, route, key, requestHash, "device.create", requestID, sourceIP, func(tx pgx.Tx) (VPNDevice, error) {
+		return s.createVPNDeviceTx(ctx, tx, actorID, userID, input)
+	})
+}
+
+func (s *PostgresStore) createVPNDeviceTx(ctx context.Context, tx pgx.Tx, actorID, userID string, input CreateDeviceInput) (VPNDevice, error) {
 		var userStatus string
 		var maxDevices int
 		if err := tx.QueryRow(ctx, `
@@ -506,6 +534,133 @@ func (s *PostgresStore) CreateVPNDevice(ctx context.Context, actorID, userID, ro
 				(node_id, created_by_operator_id, command_type, payload, request_hash, idempotency_key)
 			VALUES ($1::uuid, $2::uuid, 'peer.ensure', $3::jsonb, $4, $5)
 		`, node.id, actorID, string(payload), commandHash[:], newRequestID()); err != nil {
+			return VPNDevice{}, err
+		}
+		return device, nil
+}
+
+
+
+
+func (s *PostgresStore) CreateDeviceEnrollmentCode(ctx context.Context, actorID, userID string, tokenHash []byte, expiresAt time.Time, requestID string, sourceIP *string) error {
+	if len(tokenHash) != 32 {
+		return errors.New("invalid enrollment token hash")
+	}
+	now := time.Now().UTC()
+	if !expiresAt.After(now) || expiresAt.After(now.Add(time.Hour)) {
+		return errors.New("enrollment token expiry is out of range")
+	}
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+
+	var userStatus string
+	if err := tx.QueryRow(ctx, `
+		SELECT status FROM vpn_users WHERE id = $1::uuid FOR UPDATE
+	`, userID).Scan(&userStatus); errors.Is(err, pgx.ErrNoRows) {
+		return ErrVPNUserNotFound
+	} else if err != nil {
+		return err
+	}
+	if userStatus != "active" {
+		return ErrUserNotActive
+	}
+	if _, err := tx.Exec(ctx, `
+		UPDATE vpn_user_enrollment_codes
+		SET revoked_at = now()
+		WHERE user_id = $1::uuid
+		  AND consumed_at IS NULL
+		  AND revoked_at IS NULL
+	`, userID); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO vpn_user_enrollment_codes
+			(user_id, created_by_operator_id, token_hash, expires_at)
+		VALUES ($1::uuid, $2::uuid, $3, $4)
+	`, userID, actorID, tokenHash, expiresAt); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO audit_events
+			(actor_operator_id, subject_user_id, action, outcome, request_id, source_ip, metadata)
+		VALUES ($1::uuid, $2::uuid, 'device.enrollment_code.create', 'success', $3, $4::inet, '{}'::jsonb)
+	`, actorID, userID, requestID, sourceIP); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
+func (s *PostgresStore) EnrollVPNDevice(ctx context.Context, tokenHash []byte, idempotencyKey string, requestHash []byte, input CreateDeviceInput, requestID string, sourceIP *string) (VPNDevice, bool, error) {
+	if len(tokenHash) != 32 || len(requestHash) != 32 ||
+		!idempotencyKeyPattern.MatchString(idempotencyKey) {
+		return VPNDevice{}, false, errors.New("invalid client enrollment request")
+	}
+	var enrollmentID, userID, actorID string
+	err := s.pool.QueryRow(ctx, `
+		SELECT id::text, user_id::text, created_by_operator_id::text
+		FROM vpn_user_enrollment_codes
+		WHERE token_hash = $1 AND revoked_at IS NULL
+	`, tokenHash).Scan(&enrollmentID, &userID, &actorID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return VPNDevice{}, false, ErrEnrollmentCodeInvalid
+	}
+	if err != nil {
+		return VPNDevice{}, false, err
+	}
+	route := "POST:/v1/client/enroll/" + enrollmentID
+	return s.runIdempotentDeviceMutation(ctx, actorID, route, idempotencyKey, requestHash, "device.enroll", requestID, sourceIP, func(tx pgx.Tx) (VPNDevice, error) {
+		var codeUserID string
+		var expiresAt time.Time
+		var consumedAt, revokedAt *time.Time
+		var consumedDeviceID *string
+		err := tx.QueryRow(ctx, `
+			SELECT user_id::text, expires_at, consumed_at, revoked_at, device_id::text
+			FROM vpn_user_enrollment_codes
+			WHERE id = $1::uuid AND token_hash = $2
+			FOR UPDATE
+		`, enrollmentID, tokenHash).Scan(&codeUserID, &expiresAt, &consumedAt, &revokedAt, &consumedDeviceID)
+		if errors.Is(err, pgx.ErrNoRows) || revokedAt != nil {
+			return VPNDevice{}, ErrEnrollmentCodeInvalid
+		}
+		if err != nil {
+			return VPNDevice{}, err
+		}
+		if codeUserID != userID {
+			return VPNDevice{}, ErrEnrollmentCodeInvalid
+		}
+		if consumedAt != nil {
+			if consumedDeviceID == nil {
+				return VPNDevice{}, ErrEnrollmentCodeUsed
+			}
+			existing, err := getVPNDeviceTx(ctx, tx, *consumedDeviceID)
+			if errors.Is(err, pgx.ErrNoRows) {
+				return VPNDevice{}, ErrEnrollmentCodeUsed
+			}
+			if err != nil {
+				return VPNDevice{}, err
+			}
+			if existing.UserID != userID || existing.DeviceRef != input.DeviceRef ||
+				existing.Peer.PublicKey != input.PublicKey {
+				return VPNDevice{}, ErrEnrollmentCodeUsed
+			}
+			return existing, nil
+		}
+		if !expiresAt.After(time.Now().UTC()) {
+			return VPNDevice{}, ErrEnrollmentCodeExpired
+		}
+
+		device, err := s.createVPNDeviceTx(ctx, tx, actorID, userID, input)
+		if err != nil {
+			return VPNDevice{}, err
+		}
+		if _, err := tx.Exec(ctx, `
+			UPDATE vpn_user_enrollment_codes
+			SET consumed_at = now(), device_id = $2::uuid
+			WHERE id = $1::uuid AND consumed_at IS NULL AND revoked_at IS NULL
+		`, enrollmentID, device.ID); err != nil {
 			return VPNDevice{}, err
 		}
 		return device, nil

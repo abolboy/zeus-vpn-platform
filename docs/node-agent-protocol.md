@@ -14,6 +14,8 @@ Status: the server-side mTLS listener, certificate-to-node mapping, durable comm
 ## Device lifecycle and queued commands
 
 - Device registration stores a client-generated public key only. Client private keys never leave the device.
+- Owner/admin operators issue 256-bit, 15-minute activation codes; only SHA-256 hashes are stored, and an activation code is limited to one client identity.
+- The public client enrollment endpoint is rate-limited and does not accept operator bearer tokens. A retry with the same activation code, device reference, and public key recovers the original record; different identities are rejected.
 - Registration is accepted only for an active VPN user and an online mTLS-registered node with explicit client pools and interface addresses.
 - IP allocation considers the node's interface IPs and every non-revoked peer assignment. Per-node unique indexes prevent concurrent duplicate assignment.
 - Device and peer records, the `peer.ensure` command, idempotency response, and audit event are committed in the same PostgreSQL transaction.

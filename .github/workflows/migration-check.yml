@@ -45,16 +45,18 @@ jobs:
           psql --host 127.0.0.1 --username zeus_test --dbname zeus_test --set ON_ERROR_STOP=1 --single-transaction --file services/control-plane/migrations/0002_idempotency_records.sql
           psql --host 127.0.0.1 --username zeus_test --dbname zeus_test --set ON_ERROR_STOP=1 --single-transaction --file services/control-plane/migrations/0003_node_agent_commands.sql
           psql --host 127.0.0.1 --username zeus_test --dbname zeus_test --set ON_ERROR_STOP=1 --single-transaction --file services/control-plane/migrations/0004_device_lifecycle.sql
+          psql --host 127.0.0.1 --username zeus_test --dbname zeus_test --set ON_ERROR_STOP=1 --single-transaction --file services/control-plane/migrations/0005_client_enrollment_codes.sql
           psql --host 127.0.0.1 --username zeus_test --dbname zeus_test --set ON_ERROR_STOP=1 --single-transaction --file services/control-plane/migrations/0001_initial.sql
           psql --host 127.0.0.1 --username zeus_test --dbname zeus_test --set ON_ERROR_STOP=1 --single-transaction --file services/control-plane/migrations/0002_idempotency_records.sql
           psql --host 127.0.0.1 --username zeus_test --dbname zeus_test --set ON_ERROR_STOP=1 --single-transaction --file services/control-plane/migrations/0003_node_agent_commands.sql
           psql --host 127.0.0.1 --username zeus_test --dbname zeus_test --set ON_ERROR_STOP=1 --single-transaction --file services/control-plane/migrations/0004_device_lifecycle.sql
+          psql --host 127.0.0.1 --username zeus_test --dbname zeus_test --set ON_ERROR_STOP=1 --single-transaction --file services/control-plane/migrations/0005_client_enrollment_codes.sql
       - name: Verify expected tables and constraints
         env:
           PGPASSWORD: zeus_ci_only_password
         run: |
-          actual="$(psql --host 127.0.0.1 --username zeus_test --dbname zeus_test --tuples-only --no-align --command "SELECT count(*) FROM information_schema.tables WHERE table_schema = 'public' AND table_name IN ('operators', 'operator_sessions', 'vpn_users', 'vpn_nodes', 'vpn_devices', 'wireguard_peers', 'audit_events', 'idempotency_records', 'node_commands');")"
-          test "$actual" = "9"
+          actual="$(psql --host 127.0.0.1 --username zeus_test --dbname zeus_test --tuples-only --no-align --command "SELECT count(*) FROM information_schema.tables WHERE table_schema = 'public' AND table_name IN ('operators', 'operator_sessions', 'vpn_users', 'vpn_nodes', 'vpn_devices', 'wireguard_peers', 'audit_events', 'idempotency_records', 'node_commands', 'vpn_user_enrollment_codes');")"
+          test "$actual" = "10"
           columns="$(psql --host 127.0.0.1 --username zeus_test --dbname zeus_test --tuples-only --no-align --command "SELECT count(*) FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'vpn_nodes' AND column_name IN ('client_ipv4_pool', 'client_ipv6_pool', 'interface_ipv4', 'interface_ipv6');")"
           test "$columns" = "4"
           constraint="$(psql --host 127.0.0.1 --username zeus_test --dbname zeus_test --tuples-only --no-align --command "SELECT count(*) FROM pg_constraint WHERE conname IN ('vpn_nodes_client_ipv4_pool_family_check', 'vpn_nodes_client_ipv6_pool_family_check', 'vpn_nodes_interface_ipv4_pool_check', 'vpn_nodes_interface_ipv6_pool_check', 'vpn_devices_status_check');")"

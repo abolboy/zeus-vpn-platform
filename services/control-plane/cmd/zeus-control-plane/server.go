@@ -27,6 +27,7 @@ type API struct {
 	store        ControlStore
 	logger       *slog.Logger
 	limiter      *loginLimiter
+	enrollmentLimiter *loginLimiter
 	hashSlots    chan struct{}
 	dummyHash    string
 	allowedOrigin map[string]struct{}
@@ -100,7 +101,7 @@ func NewAPI(version string, store ControlStore, logger *slog.Logger, allowedOrig
 	}
 	return &API{
 		version: version, store: store, logger: logger,
-		limiter: newLoginLimiter(), hashSlots: make(chan struct{}, 2),
+		limiter: newLoginLimiter(), enrollmentLimiter: newLoginLimiter(), hashSlots: make(chan struct{}, 2),
 		dummyHash: dummyHash, allowedOrigin: origins,
 	}, nil
 }
@@ -119,6 +120,8 @@ func (a *API) Handler() http.Handler {
 	mux.HandleFunc("PATCH /v1/users/{userID}", a.handleUpdateUser)
 	mux.HandleFunc("GET /v1/users/{userID}/devices", a.handleListDevices)
 	mux.HandleFunc("POST /v1/users/{userID}/devices", a.handleCreateDevice)
+	mux.HandleFunc("POST /v1/users/{userID}/enrollment-code", a.handleCreateEnrollmentCode)
+	mux.HandleFunc("POST /v1/client/enroll", a.handleClientEnrollment)
 	mux.HandleFunc("POST /v1/users/{userID}/devices/{deviceID}/revoke", a.handleRevokeDevice)
 	return a.middleware(mux)
 }
@@ -662,6 +665,169 @@ func (a *API) handleCreateDevice(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Idempotency-Replayed", "true")
 	}
 	writeJSON(w, http.StatusAccepted, device)
+}
+
+
+func (a *API) handleCreateEnrollmentCode(w http.ResponseWriter, r *http.Request) {
+	operator, _, ok := a.authenticate(w, r)
+	if !ok {
+		return
+	}
+	if !canManageUsers(operator.Role) {
+		a.recordAudit(r, &operator.ID, "device.enrollment_code.create", "denied")
+		writeError(w, http.StatusForbidden, "forbidden", "فقط مدیران مجاز به صدور کد فعال‌سازی هستند", requestIDFrom(r))
+		return
+	}
+	userID := r.PathValue("userID")
+	if !uuidPattern.MatchString(userID) {
+		writeError(w, http.StatusBadRequest, "invalid_user_id", "شناسه کاربر معتبر نیست", requestIDFrom(r))
+		return
+	}
+	store, ok := a.store.(DeviceMutationStore)
+	if !ok {
+		writeError(w, http.StatusServiceUnavailable, "not_ready", "فعال‌سازی دستگاه آماده نیست", requestIDFrom(r))
+		return
+	}
+
+	rawCode := make([]byte, 32)
+	if _, err := rand.Read(rawCode); err != nil {
+		a.logger.Error("enrollment code generation failed", "request_id", requestIDFrom(r))
+		writeError(w, http.StatusInternalServerError, "internal_error", "صدور کد فعال‌سازی انجام نشد", requestIDFrom(r))
+		return
+	}
+	code := base64.RawURLEncoding.EncodeToString(rawCode)
+	tokenHash := sha256.Sum256(rawCode)
+	for index := range rawCode {
+		rawCode[index] = 0
+	}
+
+	expiresAt := time.Now().UTC().Add(15 * time.Minute)
+	err := store.CreateDeviceEnrollmentCode(
+		r.Context(), operator.ID, userID, tokenHash[:], expiresAt,
+		requestIDFrom(r), remoteIP(r.RemoteAddr),
+	)
+	switch {
+	case errors.Is(err, ErrVPNUserNotFound):
+		writeError(w, http.StatusNotFound, "user_not_found", "کاربر پیدا نشد", requestIDFrom(r))
+	case errors.Is(err, ErrUserNotActive):
+		writeError(w, http.StatusConflict, "user_not_active", "برای حساب غیرفعال نمی‌توان کد فعال‌سازی صادر کرد", requestIDFrom(r))
+	case err != nil:
+		a.logger.Error("enrollment code creation failed", "request_id", requestIDFrom(r), "error", err)
+		writeError(w, http.StatusInternalServerError, "internal_error", "صدور کد فعال‌سازی انجام نشد", requestIDFrom(r))
+	default:
+		writeJSON(w, http.StatusCreated, EnrollmentCodeResponse{Code: code, ExpiresAt: expiresAt})
+	}
+}
+
+func (a *API) handleClientEnrollment(w http.ResponseWriter, r *http.Request) {
+	ip := remoteIP(r.RemoteAddr)
+	limiterKey := "unknown"
+	if ip != nil {
+		limiterKey = *ip
+	}
+	if a.enrollmentLimiter == nil || !a.enrollmentLimiter.allow(limiterKey, time.Now()) {
+		w.Header().Set("Retry-After", "300")
+		writeError(w, http.StatusTooManyRequests, "rate_limited", "تعداد تلاش‌های فعال‌سازی بیش از حد مجاز است", requestIDFrom(r))
+		return
+	}
+
+	store, ok := a.store.(DeviceMutationStore)
+	if !ok {
+		writeError(w, http.StatusServiceUnavailable, "not_ready", "فعال‌سازی دستگاه آماده نیست", requestIDFrom(r))
+		return
+	}
+	var input ClientEnrollmentInput
+	if err := decodeJSON(w, r, &input, 16*1024); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_request", "اطلاعات فعال‌سازی معتبر نیست", requestIDFrom(r))
+		return
+	}
+	input.ActivationCode = strings.TrimSpace(input.ActivationCode)
+	if len(input.ActivationCode) != 43 {
+		writeError(w, http.StatusBadRequest, "invalid_activation_code", "کد فعال‌سازی معتبر نیست", requestIDFrom(r))
+		return
+	}
+	rawCode, err := base64.RawURLEncoding.DecodeString(input.ActivationCode)
+	if err != nil || len(rawCode) != 32 || base64.RawURLEncoding.EncodeToString(rawCode) != input.ActivationCode {
+		writeError(w, http.StatusBadRequest, "invalid_activation_code", "کد فعال‌سازی معتبر نیست", requestIDFrom(r))
+		return
+	}
+	tokenHash := sha256.Sum256(rawCode)
+	for index := range rawCode {
+		rawCode[index] = 0
+	}
+
+	deviceInput := CreateDeviceInput{
+		DeviceRef: strings.TrimSpace(input.DeviceRef),
+		DeviceName: strings.TrimSpace(input.DeviceName),
+		Platform: strings.ToLower(strings.TrimSpace(input.Platform)),
+		PublicKey: strings.TrimSpace(input.PublicKey),
+	}
+	input.ActivationCode = strings.TrimSpace(input.ActivationCode)
+	input.DeviceRef = deviceInput.DeviceRef
+	input.DeviceName = deviceInput.DeviceName
+	input.Platform = deviceInput.Platform
+	input.PublicKey = deviceInput.PublicKey
+	if !deviceRefPattern.MatchString(deviceInput.DeviceRef) {
+		writeError(w, http.StatusBadRequest, "invalid_device_ref", "شناسه دستگاه معتبر نیست", requestIDFrom(r))
+		return
+	}
+	if !validDisplayName(deviceInput.DeviceName) {
+		writeError(w, http.StatusBadRequest, "invalid_device_name", "نام دستگاه باید بین ۱ تا ۸۰ نویسه باشد", requestIDFrom(r))
+		return
+	}
+	switch deviceInput.Platform {
+	case "android", "ios", "windows", "macos", "linux", "other":
+	default:
+		writeError(w, http.StatusBadRequest, "invalid_platform", "سیستم‌عامل دستگاه معتبر نیست", requestIDFrom(r))
+		return
+	}
+	if !validWireGuardPublicKey(deviceInput.PublicKey) {
+		writeError(w, http.StatusBadRequest, "invalid_public_key", "کلید عمومی WireGuard معتبر نیست", requestIDFrom(r))
+		return
+	}
+	idempotencyKey := r.Header.Get("Idempotency-Key")
+	if !idempotencyKeyPattern.MatchString(idempotencyKey) {
+		writeError(w, http.StatusBadRequest, "idempotency_key_required", "کلید یکتای درخواست معتبر نیست", requestIDFrom(r))
+		return
+	}
+	requestBody, err := json.Marshal(input)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_request", "اطلاعات فعال‌سازی معتبر نیست", requestIDFrom(r))
+		return
+	}
+	requestHash := sha256.Sum256(requestBody)
+	device, replayed, err := store.EnrollVPNDevice(
+		r.Context(), tokenHash[:], idempotencyKey, requestHash[:], deviceInput,
+		requestIDFrom(r), ip,
+	)
+	switch {
+	case errors.Is(err, ErrEnrollmentCodeInvalid):
+		writeError(w, http.StatusUnauthorized, "activation_code_invalid", "کد فعال‌سازی معتبر نیست", requestIDFrom(r))
+	case errors.Is(err, ErrEnrollmentCodeExpired):
+		writeError(w, http.StatusGone, "activation_code_expired", "مهلت کد فعال‌سازی پایان یافته است", requestIDFrom(r))
+	case errors.Is(err, ErrEnrollmentCodeUsed):
+		writeError(w, http.StatusConflict, "activation_code_used", "این کد قبلاً مصرف شده است", requestIDFrom(r))
+	case errors.Is(err, ErrDeviceLimitReached):
+		writeError(w, http.StatusConflict, "device_limit_reached", "سقف دستگاه‌های این کاربر تکمیل شده است", requestIDFrom(r))
+	case errors.Is(err, ErrUserNotActive):
+		writeError(w, http.StatusConflict, "user_not_active", "حساب کاربر فعال نیست", requestIDFrom(r))
+	case errors.Is(err, ErrDeviceConflict):
+		writeError(w, http.StatusConflict, "device_conflict", "این دستگاه یا کلید عمومی قبلاً ثبت شده است", requestIDFrom(r))
+	case errors.Is(err, ErrNoProvisioningNode):
+		writeError(w, http.StatusServiceUnavailable, "node_unavailable", "نود آنلاین و آمادهٔ تخصیص دستگاه موجود نیست", requestIDFrom(r))
+	case errors.Is(err, ErrAddressPoolExhausted):
+		writeError(w, http.StatusServiceUnavailable, "address_pool_exhausted", "محدوده آدرس نود ظرفیت آزاد ندارد", requestIDFrom(r))
+	case errors.Is(err, ErrIdempotencyConflict):
+		writeError(w, http.StatusConflict, "idempotency_conflict", "این کلید درخواست قبلاً با اطلاعات دیگری استفاده شده است", requestIDFrom(r))
+	case err != nil:
+		a.logger.Error("client enrollment failed", "request_id", requestIDFrom(r), "error", err)
+		writeError(w, http.StatusInternalServerError, "internal_error", "فعال‌سازی دستگاه انجام نشد", requestIDFrom(r))
+	default:
+		if replayed {
+			w.Header().Set("Idempotency-Replayed", "true")
+		}
+		writeJSON(w, http.StatusAccepted, device)
+	}
 }
 
 func (a *API) handleRevokeDevice(w http.ResponseWriter, r *http.Request) {

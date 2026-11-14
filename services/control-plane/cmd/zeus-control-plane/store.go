@@ -21,6 +21,9 @@ var (
 	ErrDeviceLimitReached      = errors.New("VPN user has reached the device limit")
 	ErrNoProvisioningNode      = errors.New("no eligible online VPN node is available")
 	ErrAddressPoolExhausted    = errors.New("VPN node address pool is exhausted")
+	ErrEnrollmentCodeInvalid   = errors.New("enrollment code is invalid or revoked")
+	ErrEnrollmentCodeExpired   = errors.New("enrollment code has expired")
+	ErrEnrollmentCodeUsed      = errors.New("enrollment code has already been consumed")
 )
 
 type Operator struct {
@@ -62,6 +65,19 @@ type CreateDeviceInput struct {
 	DeviceName string "json:\"device_name\""
 	Platform string "json:\"platform\""
 	PublicKey string "json:\"public_key\""
+}
+
+type ClientEnrollmentInput struct {
+	ActivationCode string `json:"activation_code"`
+	DeviceRef string `json:"device_ref"`
+	DeviceName string `json:"device_name"`
+	Platform string `json:"platform"`
+	PublicKey string `json:"public_key"`
+}
+
+type EnrollmentCodeResponse struct {
+	Code string `json:"code"`
+	ExpiresAt time.Time `json:"expires_at"`
 }
 
 type VPNPeerProfile struct {
@@ -121,6 +137,8 @@ type UserMutationStore interface {
 
 type DeviceMutationStore interface {
 	ListVPNDevices(context.Context, string) ([]VPNDevice, error)
+	CreateDeviceEnrollmentCode(context.Context, string, string, []byte, time.Time, string, *string) error
+	EnrollVPNDevice(context.Context, []byte, string, []byte, CreateDeviceInput, string, *string) (VPNDevice, bool, error)
 	CreateVPNDevice(context.Context, string, string, string, string, []byte, CreateDeviceInput, string, *string) (VPNDevice, bool, error)
 	RevokeVPNDevice(context.Context, string, string, string, string, string, []byte, string, *string) (VPNDevice, bool, error)
 }

@@ -75,11 +75,11 @@ func (s *PostgresStore) Ping(ctx context.Context) error {
 		FROM information_schema.tables
 		WHERE table_schema = 'public'
 		  AND table_name = ANY($1::text[])
-	`, []string{"operators", "operator_sessions", "vpn_users", "vpn_nodes", "vpn_devices", "wireguard_peers", "audit_events", "idempotency_records", "node_commands"}).Scan(&count)
+	`, []string{"operators", "operator_sessions", "vpn_users", "vpn_nodes", "vpn_devices", "wireguard_peers", "audit_events", "idempotency_records", "node_commands", "vpn_user_enrollment_codes", "vpn_node_agent_certificates"}).Scan(&count)
 	if err != nil {
 		return err
 	}
-	if count != 9 {
+	if count != 11 {
 		return errors.New("database schema is not migrated")
 	}
 	var poolColumns int
@@ -816,7 +816,13 @@ func selectProvisioningNode(ctx context.Context, tx pgx.Tx) (provisioningNode, e
 		FROM vpn_nodes n
 		WHERE n.status = 'online'
 		  AND n.last_seen_at > now() - interval '90 seconds'
-		  AND n.agent_cert_sha256 IS NOT NULL
+		  AND EXISTS (
+			  SELECT 1 FROM vpn_node_agent_certificates ac
+			  WHERE ac.node_id = n.id
+			    AND ac.revoked_at IS NULL
+			    AND ac.not_before <= now()
+			    AND ac.not_after > now()
+		  )
 		  AND n.client_ipv4_pool IS NOT NULL
 		  AND n.client_ipv6_pool IS NOT NULL
 		  AND n.interface_ipv4 IS NOT NULL
@@ -939,11 +945,15 @@ func (s *PostgresStore) FindNodeByCertFingerprint(ctx context.Context, fingerpri
 
 	var node NodeIdentity
 	err = tx.QueryRow(ctx, `
-		SELECT id::text
-		FROM vpn_nodes
-		WHERE agent_cert_sha256 = $1
-		  AND status <> 'disabled'
-		FOR UPDATE
+		SELECT n.id::text
+		FROM vpn_node_agent_certificates ac
+		JOIN vpn_nodes n ON n.id = ac.node_id
+		WHERE ac.fingerprint_sha256 = $1
+		  AND ac.revoked_at IS NULL
+		  AND ac.not_before <= now()
+		  AND ac.not_after > now()
+		  AND n.status <> 'disabled'
+		FOR UPDATE OF n
 	`, fingerprint).Scan(&node.ID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return NodeIdentity{}, ErrNodeNotFound

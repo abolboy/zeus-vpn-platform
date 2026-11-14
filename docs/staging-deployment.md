@@ -40,10 +40,11 @@ Create a dedicated service account and directories:
 ```sh
 sudo useradd --system --home /nonexistent --shell /usr/sbin/nologin zeus
 sudo install -d -o root -g root -m 0750 /opt/zeus/bin
-sudo install -d -o root -g root -m 0750 /etc/zeus/node-listener
+sudo install -d -o root -g zeus -m 0750 /etc/zeus
+sudo install -d -o root -g zeus -m 0750 /etc/zeus/node-listener
 ```
 
-Install the Control Plane and migration binaries under `/opt/zeus/bin`. Install `deploy/systemd/zeus-control-plane.service` as `/etc/systemd/system/zeus-control-plane.service`.
+Install the Control Plane and migration binaries under `/opt/zeus/bin`. Install `deploy/systemd/zeus-control-plane.service` as `/etc/systemd/system/zeus-control-plane.service` and `deploy/systemd/zeus-migrate.service` as `/etc/systemd/system/zeus-migrate.service`.
 
 Copy `deploy/examples/control-plane.env.example` to `/etc/zeus/control-plane.env`, replace all placeholders, and use mode `0600` owned by root. The file contains database credentials and must not be readable by ordinary users.
 
@@ -52,7 +53,7 @@ Requirements before startup:
 - PostgreSQL TLS validation with `sslmode=verify-full`; the hostname in the connection URL must match the database certificate.
 - Exact browser origin(s) in `ZEUS_ALLOWED_ORIGINS`; do not use `*`.
 - A deployed Cognito User Pool and its exact issuer/client ID outputs if automatic customer registration is enabled.
-- A server certificate and matching private key for the node mTLS listener. The private key must be a regular file owned by `zeus`, mode `0600`, because the service checks for owner-only permissions. The certificate and client-CA bundle must be readable by `zeus`.
+- A server certificate and matching private key for the node mTLS listener. The private key must be a regular file owned by `zeus`, mode `0600`, because the service checks for owner-only permissions. The certificate and client-CA bundle must be readable by `zeus`. The `/etc/zeus` and `/etc/zeus/node-listener` directories must be traversable by the `zeus` group; keep the environment file root-only.
 - A firewall rule for TCP `8443` allowing only the registered staging node source IPs. Prefer a private VPC address in `ZEUS_NODE_HTTP_ADDR` instead of `0.0.0.0:8443` when possible.
 
 Use a TLS reverse proxy for the admin API and route it to `127.0.0.1:8080`. Do not publish port 8080 directly.
@@ -61,13 +62,12 @@ Use a TLS reverse proxy for the admin API and route it to `127.0.0.1:8080`. Do n
 
 Back up the empty/dedicated staging database first. Then run the migration binary using the same root-only environment file as the service:
 
-```sh
-sudo systemd-run --unit=zeus-migrate --wait --collect --pipe \
-  --property=User=zeus \
-  --property=Group=zeus \
-  --property=EnvironmentFile=/etc/zeus/control-plane.env \
-  /opt/zeus/bin/zeus-migrate
-```
+\`\`\`sh
+sudo systemctl daemon-reload
+sudo systemctl start zeus-migrate
+sudo systemctl status zeus-migrate --no-pager
+sudo journalctl -u zeus-migrate -n 100 --no-pager
+\`\`\`
 
 Do not point this command at an unrelated database. The application does not auto-migrate schema at startup.
 
@@ -92,7 +92,7 @@ curl --fail --silent http://127.0.0.1:8080/readyz
 3. Generate the node-agent CA and per-node ClientAuth certificate on an encrypted/offline administrator workstation with `zeus-node-cert`. Never copy the CA private key to either server.
 4. Register the public node certificate through the authenticated node-certificate endpoint for the exact node record. The Control Plane checks its chain, ClientAuth EKU, expiry, and node URI identity.
 5. Transfer only the node client certificate, its matching private key, and the Control Plane server CA trust bundle to the staging node. Keep the client private key root-owned mode `0600`.
-6. Copy `deploy/examples/vpn-node.env.example` to `/etc/zeus/vpn-node.env`; replace the Control Plane URL, trust paths, and client pools with values confirmed on the staging host. Keep it root-owned mode `0600`.
+6. Create `/etc/zeus-node` as root-owned mode `0700`, then install the node client certificate, client private key, and Control Plane CA bundle there. Keep the private key root-owned mode `0600`. Copy `deploy/examples/vpn-node.env.example` to `/etc/zeus/vpn-node.env`; replace the Control Plane URL, trust paths, and client pools with values confirmed on the staging host. Keep it root-owned mode `0600`.
 7. Install `deploy/systemd/zeus-vpn-node.service` as `/etc/systemd/system/zeus-vpn-node.service`.
 
 The server TLS certificate chain and the node client certificate are not interchangeable. The client certificate is used by the node to authenticate to the Control Plane; the Control Plane's server certificate is validated by the node against `ZEUS_NODE_SERVER_CA_FILE`.

@@ -5,8 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"time"
-
+	
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 )
@@ -112,5 +111,3 @@ func (s *PostgresStore) CreateVPNNode(ctx context.Context, actorID, route, key s
 	}
 	return node, false, nil
 }
-
-var _ = time.Second

@@ -411,7 +411,7 @@ func TestPostgresStoreIntegration(t *testing.T) {
 	if conflictingNodeResponse.Code != http.StatusConflict {
 		t.Fatalf("node idempotency conflict status=%d body=%s", conflictingNodeResponse.Code, conflictingNodeResponse.Body.String())
 	}
-	createKey = newRequestID()
+	createKey := newRequestID()
 	createBody := `{"display_name":"ZEUS Integration User","max_devices":4}`
 	createRequest := func(body string) *httptest.ResponseRecorder {
 		request := httptest.NewRequest(http.MethodPost, "/v1/users", bytes.NewBufferString(body))

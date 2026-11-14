@@ -63,15 +63,17 @@ class CustomerIdentityRepository(context: Context) {
     }
 
     suspend fun completeAuthorization(data: Intent?): String {
-        val authorization = AuthorizationResponse.fromIntent(data)
+        val resultIntent = data ?: throw IOException("The identity provider returned no authorization response.")
+        val authorization = AuthorizationResponse.fromIntent(resultIntent)
             ?: throw IOException("The identity provider returned no authorization response.")
-        val authorizationError = AuthorizationException.fromIntent(data)
+        val authorizationError = AuthorizationException.fromIntent(resultIntent)
         if (authorizationError != null) {
             throw IOException("Customer sign-in failed: ${authorizationError.error ?: "authorization_error"}")
         }
 
         val service = AuthorizationService(appContext)
-        val authState = AuthState(authorization)
+        val authState = AuthState(authorization.request.configuration)
+        authState.update(authorization, null)
         try {
             val tokenResponse = suspendCancellableCoroutine { continuation ->
                 val completed = AtomicBoolean(false)

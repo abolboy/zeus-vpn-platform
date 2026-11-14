@@ -6,9 +6,11 @@ A successful Android `VpnService` / WireGuard engine start is only a local state
 
 Copy `scripts/diagnose-wireguard-node.sh` to the VPN host (or clone this repository there), then run:
 
-    sudo bash scripts/diagnose-wireguard-node.sh
+    sudo env WG_CLIENT_IPV4_CIDR=<actual-client-pool-cidr> bash scripts/diagnose-wireguard-node.sh
 
 The script prints peer handshake age and byte counters with public keys shortened. It does not print private keys and does not change the server.
+
+The diagnostic compares NAT/SNAT rules against both the actual client IPv4 pool and the detected uplink. Supply the pool explicitly (for example, use the exact value configured for `ZEUS_WG_IPV4_POOL` on that node); the script may infer a subnet from the interface route, but that inference must be checked against the real allocation pool. It also checks both the forward path and established return path. It remains read-only.
 
 ## Interpret the result
 

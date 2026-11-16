@@ -1056,10 +1056,14 @@ func TestPostgresStoreIntegration(t *testing.T) {
 		t.Fatalf("insert failed peer.remove fixture: %v", err)
 	}
 	if _, err := store.pool.Exec(ctx, `
-		UPDATE wireguard_peers SET status = 'error' WHERE id = $1::uuid;
-		UPDATE vpn_devices SET status = 'error', last_error = 'wg_remove_failed' WHERE id = $2::uuid;
-	`, enrolledDevice.Peer.ID, enrolledDevice.ID); err != nil {
-		t.Fatalf("set failed removal fixture: %v", err)
+		UPDATE wireguard_peers SET status = 'error' WHERE id = $1::uuid
+	`, enrolledDevice.Peer.ID); err != nil {
+		t.Fatalf("set failed removal peer fixture: %v", err)
+	}
+	if _, err := store.pool.Exec(ctx, `
+		UPDATE vpn_devices SET status = 'error', last_error = 'wg_remove_failed' WHERE id = $1::uuid
+	`, enrolledDevice.ID); err != nil {
+		t.Fatalf("set failed removal device fixture: %v", err)
 	}
 	unsafeRetry := httptest.NewRequest(http.MethodPost, "/v1/client/devices/"+enrolledDevice.ID+"/retry", nil)
 	unsafeRetry.Header.Set("Authorization", "EnrollmentCode "+enrollmentCode.Code)

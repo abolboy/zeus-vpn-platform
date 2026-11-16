@@ -38,10 +38,17 @@ private val pendingEnrollmentClearErrorCodes = setOf(
     "device_conflict",
     "device_not_found",
     "enrollment_status_invalid",
+    "device_retry_not_allowed",
 )
 
 internal fun shouldClearPendingEnrollment(errorCode: String): Boolean =
     errorCode in pendingEnrollmentClearErrorCodes
+
+internal fun shouldRetryProvisioning(
+    deviceStatus: String,
+    peerStatus: String,
+    retryAlreadyRequested: Boolean,
+): Boolean = !retryAlreadyRequested && (deviceStatus == "error" || peerStatus == "error")
 
 /**
  * Client-side activation. The private key is generated locally and remains inside
@@ -122,13 +129,26 @@ class ClientEnrollmentRepository(
             "The ZEUS API returned an invalid device identifier."
         }
         var current = initial
+        var retryRequested = false
         val deadline = SystemClock.elapsedRealtime() + PROVISIONING_TIMEOUT_MS
 
         while (true) {
             val deviceStatus = current.optString("status")
             val peerStatus = current.optJSONObject("peer")?.optString("status").orEmpty()
             if (deviceStatus == "active" && peerStatus == "active") return current
-            if (deviceStatus in setOf("error", "revoking", "revoked") || peerStatus in setOf("error", "revoking", "revoked")) {
+            if (deviceStatus in setOf("revoking", "revoked") || peerStatus in setOf("revoking", "revoked")) {
+                val code = current.optString("last_error").ifBlank { "device_state_invalid" }
+                throw ClientEnrollmentException(
+                    code,
+                    "وضعیت دستگاه اجازه فعال‌سازی مجدد نمی‌دهد؛ وضعیت دستگاه باید در پنل بررسی شود.",
+                )
+            }
+            if (shouldRetryProvisioning(deviceStatus, peerStatus, retryRequested)) {
+                retryRequested = true
+                current = retryDeviceProvisioning(deviceID, authorization)
+                continue
+            }
+            if (deviceStatus == "error" || peerStatus == "error") {
                 val code = current.optString("last_error").ifBlank { "peer_provision_failed" }
                 throw ClientEnrollmentException(
                     code,
@@ -170,6 +190,40 @@ class ClientEnrollmentRepository(
                         error?.optString("code").orEmpty().ifBlank { "http_$status" },
                         error?.optString("message").orEmpty().ifBlank { "بررسی وضعیت ثبت دستگاه انجام نشد." },
                     )
+                }
+                json
+            } finally {
+                connection.disconnect()
+            }
+        }
+
+    private suspend fun retryDeviceProvisioning(deviceID: String, authorization: String): JSONObject =
+        withContext(Dispatchers.IO) {
+            val endpoint = URI(configuredBaseUrl + "/v1/client/devices/" + deviceID + "/retry").toURL()
+            val connection = endpoint.openConnection() as HttpsURLConnection
+            try {
+                connection.requestMethod = "POST"
+                connection.connectTimeout = CONNECT_TIMEOUT_MS
+                connection.readTimeout = READ_TIMEOUT_MS
+                connection.instanceFollowRedirects = false
+                connection.setRequestProperty("Accept", "application/json")
+                connection.setRequestProperty("Authorization", authorization)
+
+                val status = connection.responseCode
+                val stream = if (status in 200..299) connection.inputStream else connection.errorStream
+                val responseText = stream?.use { it.readUtf8Limited(MAX_RESPONSE_BYTES) }.orEmpty()
+                val json = runCatching { JSONObject(responseText) }.getOrElse {
+                    throw IOException("The ZEUS API returned an invalid retry response.")
+                }
+                if (status !in 200..299) {
+                    val error = json.optJSONObject("error")
+                    throw ClientEnrollmentException(
+                        error?.optString("code").orEmpty().ifBlank { "http_$status" },
+                        error?.optString("message").orEmpty().ifBlank { "تلاش مجدد برای فعال‌سازی دستگاه انجام نشد." },
+                    )
+                }
+                if (status != 200 && status != 202) {
+                    throw IOException("The ZEUS API returned an unexpected retry status.")
                 }
                 json
             } finally {

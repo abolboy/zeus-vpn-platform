@@ -32,7 +32,8 @@ func (a *API) ConfigureCustomerOIDC(ctx context.Context, issuer, clientID string
 		return fmt.Errorf("discover customer identity provider: %w", err)
 	}
 	a.customerVerifier = provider.Verifier(&oidc.Config{ClientID: clientID})
-	a.customerIssuer = strings.TrimRight(issuer, "/")
+	// OIDC issuer identifiers are exact, case-sensitive identifiers; do not normalize them.
+	a.customerIssuer = issuer
 	return nil
 }
 

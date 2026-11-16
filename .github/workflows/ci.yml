@@ -97,7 +97,9 @@ jobs:
 
           configured_count=0
           for value in "$ZEUS_API_BASE_URL" "$ZEUS_OIDC_ISSUER" "$ZEUS_OIDC_CLIENT_ID"; do
-            [[ -n "$value" ]] && ((configured_count += 1))
+            if [[ -n "$value" ]]; then
+              configured_count=$((configured_count + 1))
+            fi
           done
           if [[ "$configured_count" -ne 0 && "$configured_count" -ne 3 ]]; then
             echo "Set all three ZEUS GitHub repository variables together, or leave all three empty."

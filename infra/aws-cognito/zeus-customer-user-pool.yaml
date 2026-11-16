@@ -99,7 +99,6 @@ Resources:
     Type: AWS::Cognito::ManagedLoginBranding
     DependsOn:
       - ZeusCustomerUserPoolDomain
-      - ZeusAndroidPublicClient
     Properties:
       UserPoolId: !Ref ZeusCustomerUserPool
       ClientId: !Ref ZeusAndroidPublicClient

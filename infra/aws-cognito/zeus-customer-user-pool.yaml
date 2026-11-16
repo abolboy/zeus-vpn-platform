@@ -67,8 +67,10 @@ Resources:
       GenerateSecret: false
       EnableTokenRevocation: true
       PreventUserExistenceErrors: ENABLED
+      # Refresh-token rotation is OAuth token-endpoint based. Cognito's
+      # REFRESH_TOKEN_AUTH API flow is incompatible with rotation, so do not enable it.
       ExplicitAuthFlows:
-        - ALLOW_REFRESH_TOKEN_AUTH
+        - ALLOW_USER_SRP_AUTH
       AllowedOAuthFlowsUserPoolClient: true
       AllowedOAuthFlows:
         - code

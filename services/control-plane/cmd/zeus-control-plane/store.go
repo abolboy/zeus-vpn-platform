@@ -17,6 +17,7 @@ var (
 	ErrNodeCommandConflict     = errors.New("node command is not in an acknowledgeable state")
 	ErrNodeCommandLeaseExpired = errors.New("node command lease expired")
 	ErrDeviceNotFound          = errors.New("VPN device not found")
+	ErrDeviceRetryNotAllowed   = errors.New("VPN device provisioning cannot be retried in its current state")
 	ErrDeviceConflict          = errors.New("VPN device already exists or is not in a mutable state")
 	ErrUserNotActive           = errors.New("VPN user is not active")
 	ErrDeviceLimitReached      = errors.New("VPN user has reached the device limit")
@@ -155,6 +156,10 @@ type CustomerSelfServiceStore interface {
 
 type EnrollmentStatusStore interface {
 	GetEnrolledVPNDeviceStatus(context.Context, string, []byte) (VPNDevice, error)
+}
+
+type ClientDeviceRetryStore interface {
+	RetryVPNDeviceProvisioning(context.Context, string, string, string, *string) (VPNDevice, bool, error)
 }
 
 type NodeAgentStore interface {

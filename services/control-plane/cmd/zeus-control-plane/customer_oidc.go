@@ -161,6 +161,121 @@ func (a *API) handleCustomerDeviceStatus(w http.ResponseWriter, r *http.Request)
 	writeJSON(w, http.StatusOK, device)
 }
 
+func (a *API) handleCustomerDeviceRetry(w http.ResponseWriter, r *http.Request) {
+	requestID := requestIDFrom(r)
+	ip := remoteIP(r.RemoteAddr)
+	limiterKey := "unknown"
+	if ip != nil {
+		limiterKey = *ip
+	}
+	if a.customerStatusLimiter == nil || !a.customerStatusLimiter.allowWindow(limiterKey, time.Now(), 30, time.Minute) {
+		w.Header().Set("Retry-After", "60")
+		writeError(w, http.StatusTooManyRequests, "rate_limited", "تعداد درخواست‌های بازیابی بیش از حد مجاز است", requestID)
+		return
+	}
+
+	deviceID := r.PathValue("deviceID")
+	if !uuidPattern.MatchString(deviceID) {
+		writeError(w, http.StatusBadRequest, "invalid_device_id", "شناسه دستگاه معتبر نیست", requestID)
+		return
+	}
+	authorization := strings.TrimSpace(r.Header.Get("Authorization"))
+	scheme, credential, ok := strings.Cut(authorization, " ")
+	if !ok || credential == "" || strings.ContainsAny(credential, " \t\r\n") {
+		writeError(w, http.StatusUnauthorized, "customer_identity_invalid", "نشست مشتری یا کد فعال‌سازی معتبر نیست", requestID)
+		return
+	}
+
+	var userID string
+	switch {
+	case strings.EqualFold(scheme, "EnrollmentCode"):
+		tokenHash, valid := activationCodeTokenHash(credential)
+		if !valid {
+			writeError(w, http.StatusUnauthorized, "enrollment_status_invalid", "کد وضعیت ثبت دستگاه معتبر نیست", requestID)
+			return
+		}
+		statusStore, ok := a.store.(EnrollmentStatusStore)
+		if !ok {
+			writeError(w, http.StatusServiceUnavailable, "not_ready", "بررسی مالکیت دستگاه آماده نیست", requestID)
+			return
+		}
+		device, err := statusStore.GetEnrolledVPNDeviceStatus(r.Context(), deviceID, tokenHash[:])
+		if errors.Is(err, ErrDeviceNotFound) {
+			writeError(w, http.StatusNotFound, "device_not_found", "دستگاه پیدا نشد", requestID)
+			return
+		}
+		if err != nil {
+			a.logger.Error("activation-code retry authorization failed", "request_id", requestID)
+			writeError(w, http.StatusInternalServerError, "device_status_unavailable", "بررسی مالکیت دستگاه انجام نشد", requestID)
+			return
+		}
+		userID = device.UserID
+
+	case strings.EqualFold(scheme, "Bearer"):
+		if a.customerVerifier == nil {
+			writeError(w, http.StatusServiceUnavailable, "customer_identity_not_configured", "ورود مشتری هنوز پیکربندی نشده است", requestID)
+			return
+		}
+		claims, externalRef, err := a.verifyCustomerIdentity(r.Context(), authorization)
+		if err != nil {
+			writeError(w, http.StatusUnauthorized, "customer_identity_invalid", "نشست مشتری معتبر یا تأییدشده نیست", requestID)
+			return
+		}
+		customerStore, ok := a.store.(CustomerSelfServiceStore)
+		if !ok {
+			writeError(w, http.StatusServiceUnavailable, "not_ready", "حساب مشتری آماده نیست", requestID)
+			return
+		}
+		user, err := customerStore.EnsureExternalVPNUser(r.Context(), externalRef, claims.Name)
+		if err != nil {
+			a.logger.Error("customer retry account lookup failed", "request_id", requestID)
+			writeError(w, http.StatusInternalServerError, "customer_account_unavailable", "دریافت حساب مشتری انجام نشد", requestID)
+			return
+		}
+		if user.Status != "active" {
+			writeError(w, http.StatusForbidden, "customer_account_inactive", "حساب مشتری فعال نیست", requestID)
+			return
+		}
+		userID = user.ID
+
+	default:
+		writeError(w, http.StatusUnauthorized, "customer_identity_invalid", "نشست مشتری یا کد فعال‌سازی معتبر نیست", requestID)
+		return
+	}
+
+	retryStore, ok := a.store.(ClientDeviceRetryStore)
+	if !ok {
+		writeError(w, http.StatusServiceUnavailable, "not_ready", "بازیابی ثبت دستگاه آماده نیست", requestID)
+		return
+	}
+	device, queued, err := retryStore.RetryVPNDeviceProvisioning(
+		r.Context(), userID, deviceID, requestID, ip,
+	)
+	switch {
+	case errors.Is(err, ErrDeviceNotFound):
+		writeError(w, http.StatusNotFound, "device_not_found", "دستگاه پیدا نشد", requestID)
+		return
+	case errors.Is(err, ErrDeviceRetryNotAllowed):
+		writeError(w, http.StatusConflict, "device_retry_not_allowed", "وضعیت فعلی دستگاه اجازه تلاش مجدد برای ساخت Peer را نمی‌دهد", requestID)
+		return
+	case errors.Is(err, ErrNoProvisioningNode):
+		writeError(w, http.StatusServiceUnavailable, "node_unavailable", "نود اختصاص‌یافته آنلاین و آماده نیست؛ پس از بازگشت نود دوباره تلاش کنید", requestID)
+		return
+	case err != nil:
+		a.logger.Error("customer device provisioning retry failed", "request_id", requestID)
+		writeError(w, http.StatusInternalServerError, "device_retry_failed", "تلاش مجدد برای فعال‌سازی دستگاه انجام نشد", requestID)
+		return
+	}
+	if queued {
+		w.Header().Set("Retry-Queued", "true")
+	}
+	if device.Status == "active" {
+		writeJSON(w, http.StatusOK, device)
+		return
+	}
+	writeJSON(w, http.StatusAccepted, device)
+}
+
 func (a *API) handleCustomerClientEnrollment(w http.ResponseWriter, r *http.Request) {
 	requestID := requestIDFrom(r)
 	ip := remoteIP(r.RemoteAddr)

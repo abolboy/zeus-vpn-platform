@@ -151,6 +151,12 @@ class ClientEnrollmentRepository(
                 continue
             }
             if (deviceStatus == "error" || peerStatus == "error") {
+                if (deviceStatus != "error" || peerStatus != "error") {
+                    throw ClientEnrollmentException(
+                        "provisioning_state_inconsistent",
+                        "وضعیت دستگاه و Peer در سرور با هم سازگار نیست؛ ثبت امن حفظ شده و باید وضعیت Node و Control Plane بررسی شود.",
+                    )
+                }
                 val code = current.optString("last_error").ifBlank { "peer_provision_failed" }
                 throw ClientEnrollmentException(
                     code,

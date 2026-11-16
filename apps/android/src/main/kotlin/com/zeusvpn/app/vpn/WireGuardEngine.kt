@@ -66,7 +66,22 @@ class WireGuardEngine private constructor(context: Context) {
     }
 
     suspend fun hasProfile(): Boolean = withContext(Dispatchers.IO) {
-        profileStore.hasProfile()
+        operationMutex.withLock {
+            val profileBytes = try {
+                profileStore.read()
+            } catch (_: Exception) {
+                null
+            } ?: return@withLock false
+
+            try {
+                WireGuardProfileValidator.parse(profileBytes)
+                true
+            } catch (_: Exception) {
+                false
+            } finally {
+                profileBytes.fill(0)
+            }
+        }
     }
 
     /**

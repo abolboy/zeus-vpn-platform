@@ -6,11 +6,11 @@ import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.core.stringSetPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
+import com.zeusvpn.app.network.SplitTunnelMode
+import com.zeusvpn.app.network.SplitTunnelPolicy
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
-import com.zeusvpn.app.network.SplitTunnelMode
-import com.zeusvpn.app.network.SplitTunnelPolicy
 
 private val Context.zeusSettings by preferencesDataStore(name = "zeus_local_settings")
 
@@ -55,7 +55,6 @@ class SettingsRepository(context: Context) {
             preferences[SPLIT_TUNNEL_PACKAGES] = policy.packageNames
         }
     }
-
 
     suspend fun setAutoReconnectEnabled(enabled: Boolean) {
         store.edit { it[AUTO_RECONNECT] = enabled }

@@ -127,10 +127,11 @@ class WireGuardEngine private constructor(context: Context) {
             val actualState = syncBackendStateLocked()
             if (actualState == WireGuardState.ENGINE_UP) return@withLock
 
+            val validatedPolicy = validateInstalledApplications(splitTunnelPolicy)
             val profileBytes = profileStore.read() ?: throw MissingWireGuardProfileException()
             val config = try {
                 val storedProfile = profileBytes.toString(Charsets.UTF_8)
-                val routedProfile = SplitTunnelProfilePolicy.apply(storedProfile, splitTunnelPolicy)
+                val routedProfile = SplitTunnelProfilePolicy.apply(storedProfile, validatedPolicy)
                 WireGuardProfileValidator.parse(routedProfile)
             } finally {
                 profileBytes.fill(0)
@@ -192,6 +193,15 @@ class WireGuardEngine private constructor(context: Context) {
             }
             profileStore.clearProfile()
         }
+    }
+
+    private fun validateInstalledApplications(policy: SplitTunnelPolicy): SplitTunnelPolicy {
+        val installedPackages = policy.packageNames.filterTo(linkedSetOf()) { packageName ->
+            runCatching {
+                appContext.packageManager.getApplicationInfo(packageName, 0)
+            }.isSuccess
+        }
+        return policy.copy(packageNames = installedPackages).also(SplitTunnelPolicy::validate)
     }
 
     private fun syncBackendStateLocked(): WireGuardState {

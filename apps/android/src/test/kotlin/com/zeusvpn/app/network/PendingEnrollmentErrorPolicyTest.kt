@@ -29,8 +29,9 @@ class PendingEnrollmentErrorPolicyTest {
     @Test
     fun retriesProvisioningOnlyOnceForAnErrorState() {
         assertTrue(shouldRetryProvisioning("error", "error", retryAlreadyRequested = false))
-        assertTrue(shouldRetryProvisioning("provisioning", "error", retryAlreadyRequested = false))
-        assertTrue(shouldRetryProvisioning("error", "pending", retryAlreadyRequested = false))
+        // The API only accepts recovery once both device and peer transitions are complete.
+        assertFalse(shouldRetryProvisioning("provisioning", "error", retryAlreadyRequested = false))
+        assertFalse(shouldRetryProvisioning("error", "pending", retryAlreadyRequested = false))
         assertFalse(shouldRetryProvisioning("provisioning", "pending", retryAlreadyRequested = false))
         assertFalse(shouldRetryProvisioning("active", "active", retryAlreadyRequested = false))
         assertFalse(shouldRetryProvisioning("error", "error", retryAlreadyRequested = true))

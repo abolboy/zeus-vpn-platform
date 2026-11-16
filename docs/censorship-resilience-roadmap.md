@@ -141,3 +141,63 @@ Use its architecture as a reference and implement in ZEUS in this order:
 
 No UAC source, binary, server list, certificate or account credential was copied into ZEUS by this review. No device or VPN server was changed.
 
+## Freeport Android — source review (2026-11-16)
+
+Repository reviewed: https://github.com/mhammaddawudi/freeport  
+Reviewed Android source branch: `main`, commit `210d6360cd6203949969de2a51af497f9f963e2f`  
+Android release observed: `v3.2.0`, published 2026-11-13. The separate `configs` branch was observed at `1ca694b2831f437fbc22fb0ce69b727f4ac83fb8`.
+
+This was a static source, manifest, build-script, workflow, release-metadata and server-worker review. The APK was not downloaded, installed or executed, and no physical-network acceptance test was performed.
+
+### What the implementation contains
+
+Freeport is a WARP-oriented Android client with additional standalone engines. The current source has four WARP paths — nested WireGuard (Warp in Warp), MASQUE, MASQUE over HTTP/2, and WireGuard — plus separate V2Ray/Xray, Psiphon and Tor paths. The README does not fully describe the current engine set.
+
+The app uses one Android `VpnService` and a serialized session engine. The active engine owns the TUN lifecycle; the WARP paths use either direct packet-mode WireGuard attachment or a TUN-to-SOCKS bridge. The app avoids routing its own engine traffic back into its TUN. This is consistent with ZEUS's requirement for one VPN-service/TUN owner and explicit engine adapters.
+
+Useful implementation patterns observed:
+
+- The engine serializes connect, disconnect and reconnect operations, uses bounded state transitions, and retries with backoff instead of treating a process start as a successful tunnel.
+- A candidate is not considered usable merely because a local SOCKS listener opened: the implementation waits for a real request to pass through the proxy.
+- Automatic selection combines known-good endpoints with fresh scans. Endpoint ranking considers latency and measured download/upload throughput rather than latency alone.
+- Health checks test whether traffic actually passes. A speed guard checks for sustained degradation and confirms the suspicion before replacing a session; tunnel replacement can keep the existing Android TUN capture alive.
+- A background scout uses a separate probe identity and waits for low user traffic before measuring alternate endpoints. This avoids intentionally consuming bandwidth during active use.
+- Network-scoped endpoint memory and explicit per-app routing are useful design references. The app also has a manual, optional LAN proxy-sharing feature.
+
+These patterns are architectural references only; they are not evidence that the app bypasses every carrier restriction or that its reported performance is independently verified.
+
+### Additional engines and data flows
+
+- **V2Ray/Xray:** the app fetches public VLESS, VMess, Trojan and Shadowsocks links from several public GitHub collections, tests candidates through Xray, and keeps a local pool. It can use an existing proxy or Psiphon to fetch lists when GitHub is unreachable. The project explicitly warns that these servers belong to third parties and can read traffic that is not protected by end-to-end encryption. These are not ZEUS-authorized servers.
+- **Psiphon:** a separate client process, optionally used as an upstream or fallback path. Its server-list URL is accompanied by a public-key signature check in the Psiphon configuration.
+- **Tor:** Arti and Snowflake run as separate processes. This is a distinct privacy/availability route with different latency and exit-node properties, not another WARP endpoint.
+- **Shared edge board:** the app sends protocol, IP-family, edge address/port and measured RTT/throughput to a Cloudflare Worker. Mobile-network identity can include MCC/MNC; the worker can derive the caller's ASN from request metadata. The feature therefore shares network/operator and performance metadata, and requires clear disclosure and a retention policy. The worker validates reported Cloudflare address ranges, but the inspected handlers do not show application-level authentication or rate limiting.
+- **Shared public V2Ray pool:** candidate links are submitted to the worker, which accepts only link hashes present in the public census list. This restricts submissions to known public-list entries; it does not turn those third-party credentials or servers into trusted ZEUS infrastructure.
+- **LAN proxy sharing:** the inspected listener binds wildcard interfaces and exposes SOCKS5/HTTP proxy ports without client authentication. It is an opt-in convenience feature, but should be treated as an open proxy to reachable LAN clients and must not be copied into ZEUS without authentication, interface scoping, explicit consent and threat-model review.
+
+### Security, privacy and supply-chain findings
+
+- The project declares **AGPL-3.0** at repository level. Its NOTICE also identifies separate obligations for the Aether/WARP core (AGPL-3.0), Psiphon (GPL-3.0), hev-socks5-tunnel (MIT), BoringSSL (ISC/OpenSSL), Arti (MIT/Apache-2.0) and Snowflake (BSD-3-Clause). Copying or linking the application as a whole into ZEUS would create substantial license-compliance obligations. Do not copy its application source or ship its prebuilt binaries as part of ZEUS without a deliberate licensing decision and required source/notice compliance.
+- V2Ray link credentials are retained in the local config pool. The Android manifest allows backup, while the inspected backup rules explicitly exclude `identity/` but do not similarly exclude the `configs/` pool. Confirm the intended backup policy before storing any provider or user credentials there.
+- The Android build tracks large native executable/shared-library artifacts in the repository. The arm64 libraries include approximately 10.6 MB WARP, 32.7 MB Xray, 23.1 MB Psiphon, 9.0 MB Arti, 17.7 MB Snowflake and 0.3 MB TUN bridge binaries. The arm64 release APK observed was approximately 36.7 MB; the universal APK approximately 71.1 MB.
+- The Android native build script defaults `CORE_REF` to the mutable upstream `main` branch rather than an immutable commit. Its NDK host-toolchain path assumes an x86_64 build host; it is not a drop-in native build for ZEUS's Android Termux environment. Pin source commits, toolchains and artifact hashes before adopting any comparable native dependency.
+- The inspected GitHub Actions workflows cover the scheduled public-config census and Windows/macOS desktop releases. No Android assemble/test workflow was present in the reviewed tree. The successful scheduled census run is not an Android build result. The reviewed main commit was unsigned and the main branch protection setting was off.
+- Release update code checks that a downloaded APK's signing certificate matches the installed app before moving it to Downloads. This is a useful update-integrity pattern, but it does not replace reproducible builds, signed release provenance or independent artifact verification.
+
+### ZEUS decision
+
+Do **not** import Freeport's APK, native libraries, public V2Ray lists, shared credentials, edge-board data or application implementation into ZEUS. Do not make arbitrary public relays or LAN proxy sharing default ZEUS behavior.
+
+Implement the transferable ideas independently and under ZEUS's own trust model:
+
+1. Keep a single engine coordinator and a single TUN/VpnService owner. Each transport must have a separate adapter, isolated identity and explicit start/stop semantics.
+2. Extend the endpoint verifier to require a real handshake, successful traffic through the candidate, DNS/HTTPS checks and bounded throughput measurements. Keep probes cancellable and low-concurrency.
+3. Store a small, expiring last-known-good set per network. Re-test after network handoff; do not assume a result from one carrier or Wi-Fi network applies to another.
+4. Permit background probing only under conservative idle/bandwidth budgets and never at the expense of active user traffic.
+5. Use a ZEUS-owned, versioned, expiry-bound, cryptographically signed endpoint manifest. Do not use third-party public config feeds as an authority for customer traffic.
+6. Keep telemetry off by default or obtain explicit consent. Minimize network identifiers, never upload private keys/profile URIs, and define retention and access controls for any shared measurements.
+7. Before any new native adapter is adopted, pin immutable source revisions and hashes, document every dependency license, build supported ABIs in CI, and verify the resulting artifacts. Protect release branches and sign commits/releases where practical.
+8. Treat user-provided or public third-party relays as untrusted: disclose the operator and cleartext exposure, and never imply that TLS protects traffic beyond the destination's end-to-end encryption.
+
+No Freeport source, binary, profile list, credential or server was copied into ZEUS. No device, staging host or production VPN server was changed.
+

@@ -107,6 +107,7 @@ fun ZeusDashboard() {
     var enrollmentBusy by remember { mutableStateOf(false) }
     var enrollmentMessage by remember { mutableStateOf("") }
     var hasPendingEnrollment by remember { mutableStateOf(false) }
+    var pendingInviteEnrollment by remember { mutableStateOf(false) }
     var profileDraft by remember { mutableStateOf("") }
     var wireGuardMessage by remember { mutableStateOf("") }
     var profileSetupMessage by remember { mutableStateOf("") }
@@ -169,10 +170,12 @@ fun ZeusDashboard() {
         runCatching { wireGuard.refreshState() }
         profileSaved = runCatching { wireGuard.hasProfile() }.getOrDefault(false)
         hasPendingEnrollment = runCatching { enrollment.hasPendingEnrollment() }.getOrDefault(false)
+        pendingInviteEnrollment = runCatching { enrollment.hasPendingInviteEnrollment() }.getOrDefault(false)
         customerSignedIn = identity.hasStoredSession()
         if (profileSaved && hasPendingEnrollment) {
             runCatching { enrollment.completeEnrollment() }
             hasPendingEnrollment = runCatching { enrollment.hasPendingEnrollment() }.getOrDefault(false)
+            pendingInviteEnrollment = runCatching { enrollment.hasPendingInviteEnrollment() }.getOrDefault(false)
         }
     }
 
@@ -321,6 +324,7 @@ fun ZeusDashboard() {
                 enrollmentMessage = error.message ?: "ثبت انجام نشد؛ تلاش امن برای ادامه روی همین گوشی نگهداری شده است."
             } finally {
                 hasPendingEnrollment = runCatching { enrollment.hasPendingEnrollment() }.getOrDefault(false)
+                pendingInviteEnrollment = runCatching { enrollment.hasPendingInviteEnrollment() }.getOrDefault(false)
                 enrollmentBusy = false
             }
         }
@@ -376,6 +380,8 @@ fun ZeusDashboard() {
             enrollmentMessage = "دریافت خودکار تا زمان تنظیم نشانی HTTPS کنترل‌پلین فعال نمی‌شود."
         } else if (profileSaved) {
             enrollmentMessage = "پروفایل فعلی روی این گوشی وجود دارد."
+        } else if (hasPendingEnrollment && pendingInviteEnrollment) {
+            scope.launch { performEnrollment(null, "") }
         } else if (customerSignedIn) {
             scope.launch {
                 try {
@@ -514,6 +520,7 @@ fun ZeusDashboard() {
                             onSignOut = signOutCustomer,
                             profileSaved = profileSaved,
                             hasPendingEnrollment = hasPendingEnrollment,
+                            hasPendingInviteEnrollment = pendingInviteEnrollment,
                             activationCode = activationCodeDraft,
                             showInviteFallback = showInviteFallback,
                             enrollmentBusy = enrollmentBusy,
@@ -1124,6 +1131,7 @@ private fun ProfileSetupCard(
     onSignOut: () -> Unit,
     profileSaved: Boolean,
     hasPendingEnrollment: Boolean,
+    hasPendingInviteEnrollment: Boolean,
     activationCode: String,
     showInviteFallback: Boolean,
     enrollmentBusy: Boolean,
@@ -1180,9 +1188,24 @@ private fun ProfileSetupCard(
         } else {
             if (hasPendingEnrollment) {
                 InlineNotice(
-                    text = "ثبت قبلی به‌صورت امن ذخیره شده است. ادامهٔ فرآیند از همان کلید دستگاه استفاده می‌کند.",
+                    text = if (hasPendingInviteEnrollment) {
+                        "ثبت قبلی با کد دعوت به‌صورت رمزگذاری‌شده ذخیره شده است؛ برای ادامه نیازی به واردکردن دوبارهٔ کد نیست."
+                    } else {
+                        "ثبت قبلی به‌صورت امن ذخیره شده است. برای ادامه از همان کلید دستگاه استفاده می‌شود؛ ممکن است ورود دوباره لازم باشد."
+                    },
                     color = Warning,
                 )
+            }
+            if (hasPendingInviteEnrollment) {
+                Button(
+                    onClick = onEnroll,
+                    enabled = configured && !enrollmentBusy,
+                    modifier = Modifier.fillMaxWidth().height(48.dp),
+                    shape = RoundedCornerShape(13.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = Primary, contentColor = Color.White),
+                ) {
+                    Text(if (enrollmentBusy) "در حال ادامهٔ ثبت..." else "ادامهٔ ثبت قبلی")
+                }
             }
 
             if (identityConfigured) {
@@ -1237,13 +1260,13 @@ private fun ProfileSetupCard(
                 )
             }
 
-            if (!customerSignedIn && !showInviteFallback) {
+            if (!customerSignedIn && !showInviteFallback && !hasPendingInviteEnrollment) {
                 TextButton(onClick = onToggleInviteFallback, modifier = Modifier.align(Alignment.Start)) {
                     Text("کد دعوت یک‌بارمصرف دارم", color = SecondaryText)
                 }
             }
 
-            if (showInviteFallback && !customerSignedIn) {
+            if (showInviteFallback && !customerSignedIn && !hasPendingInviteEnrollment) {
                 OutlinedTextField(
                     value = activationCode,
                     onValueChange = onActivationCodeChange,

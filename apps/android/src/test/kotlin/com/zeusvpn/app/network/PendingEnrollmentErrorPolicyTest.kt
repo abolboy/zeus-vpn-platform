@@ -15,6 +15,7 @@ class PendingEnrollmentErrorPolicyTest {
             "device_not_found",
             "enrollment_status_invalid",
             "device_retry_not_allowed",
+            "device_state_invalid",
         )
 
         permanentErrors.forEach { errorCode ->

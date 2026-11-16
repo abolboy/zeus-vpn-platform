@@ -78,6 +78,7 @@ import kotlinx.coroutines.withContext
 import java.io.ByteArrayOutputStream
 import java.io.IOException
 import java.util.Locale
+import java.util.concurrent.atomic.AtomicBoolean
 
 private val AppBackground = Color(0xFF080F1C)
 private val Panel = Color(0xFF111C2D)
@@ -122,6 +123,7 @@ fun ZeusDashboard() {
     var manualProbeRequest by remember { mutableIntStateOf(0) }
     var connectAfterProvisioning by remember { mutableStateOf(false) }
     var pendingResumeAttempted by remember { mutableStateOf(false) }
+    val enrollmentGate = remember { AtomicBoolean(false) }
 
     val network by produceState(NetworkCondition.UNKNOWN, monitor) {
         monitor.observe().collect { value = it }
@@ -296,37 +298,45 @@ fun ZeusDashboard() {
     }
 
     val performEnrollment: suspend (String?, String) -> Unit = { idToken, activationCode ->
-        if (!enrollment.isConfigured) {
-            enrollmentMessage = "نشانی HTTPS کنترل‌پلین در این نسخه تنظیم نشده است."
-        } else if (profileSaved) {
-            enrollmentMessage = "پروفایل فعلی روی این گوشی وجود دارد."
-        } else if (enrollmentBusy) {
-            enrollmentMessage = "درخواست ثبت دستگاه در حال اجراست."
+        if (!enrollmentGate.compareAndSet(false, true)) {
+            enrollmentMessage = "درخواست ثبت دستگاه از قبل در حال اجراست؛ از ارسال درخواست تکراری جلوگیری شد."
         } else {
-            enrollmentBusy = true
-            enrollmentMessage = "در حال ساخت کلید روی گوشی و دریافت خودکار پروفایل..."
             try {
-                val result = enrollment.enroll(
-                    activationCode = activationCode,
-                    deviceName = Build.MODEL.orEmpty(),
-                    idToken = idToken,
-                )
-                wireGuard.saveProfile(result.profileText)
-                enrollment.completeEnrollment()
-                profileSaved = true
-                hasPendingEnrollment = false
-                activationCodeDraft = ""
-                enrollmentMessage = "دستگاه ثبت شد؛ پروفایل اتصال به‌صورت رمزگذاری‌شده ذخیره شد."
-            } catch (error: ClientEnrollmentException) {
-                connectAfterProvisioning = false
-                enrollmentMessage = error.message ?: "ثبت دستگاه انجام نشد."
-            } catch (error: Exception) {
-                connectAfterProvisioning = false
-                enrollmentMessage = error.message ?: "ثبت انجام نشد؛ تلاش امن برای ادامه روی همین گوشی نگهداری شده است."
+                if (!enrollment.isConfigured) {
+                    enrollmentMessage = "نشانی HTTPS کنترل‌پلین در این نسخه تنظیم نشده است."
+                } else if (profileSaved) {
+                    enrollmentMessage = "پروفایل فعلی روی این گوشی وجود دارد."
+                } else if (enrollmentBusy) {
+                    enrollmentMessage = "درخواست ثبت دستگاه در حال اجراست."
+                } else {
+                    enrollmentBusy = true
+                    enrollmentMessage = "در حال ساخت کلید روی گوشی و دریافت خودکار پروفایل..."
+                    try {
+                        val result = enrollment.enroll(
+                            activationCode = activationCode,
+                            deviceName = Build.MODEL.orEmpty(),
+                            idToken = idToken,
+                        )
+                        wireGuard.saveProfile(result.profileText)
+                        enrollment.completeEnrollment()
+                        profileSaved = true
+                        hasPendingEnrollment = false
+                        activationCodeDraft = ""
+                        enrollmentMessage = "دستگاه ثبت شد؛ پروفایل اتصال به‌صورت رمزگذاری‌شده ذخیره شد."
+                    } catch (error: ClientEnrollmentException) {
+                        connectAfterProvisioning = false
+                        enrollmentMessage = error.message ?: "ثبت دستگاه انجام نشد."
+                    } catch (error: Exception) {
+                        connectAfterProvisioning = false
+                        enrollmentMessage = error.message ?: "ثبت انجام نشد؛ تلاش امن برای ادامه روی همین گوشی نگهداری شده است."
+                    } finally {
+                        hasPendingEnrollment = runCatching { enrollment.hasPendingEnrollment() }.getOrDefault(false)
+                        pendingInviteEnrollment = runCatching { enrollment.hasPendingInviteEnrollment() }.getOrDefault(false)
+                        enrollmentBusy = false
+                    }
+                }
             } finally {
-                hasPendingEnrollment = runCatching { enrollment.hasPendingEnrollment() }.getOrDefault(false)
-                pendingInviteEnrollment = runCatching { enrollment.hasPendingInviteEnrollment() }.getOrDefault(false)
-                enrollmentBusy = false
+                enrollmentGate.set(false)
             }
         }
     }

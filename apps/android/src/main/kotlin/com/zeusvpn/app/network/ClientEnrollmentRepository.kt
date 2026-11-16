@@ -31,6 +31,18 @@ class PendingEnrollmentExistsException : Exception(
     "An unfinished enrollment is stored securely on this device. Retry it before starting another one."
 )
 
+private val pendingEnrollmentClearErrorCodes = setOf(
+    "activation_code_invalid",
+    "activation_code_expired",
+    "activation_code_used",
+    "device_conflict",
+    "device_not_found",
+    "enrollment_status_invalid",
+)
+
+internal fun shouldClearPendingEnrollment(errorCode: String): Boolean =
+    errorCode in pendingEnrollmentClearErrorCodes
+
 /**
  * Client-side activation. The private key is generated locally and remains inside
  * the encrypted pending record/profile store; only its public key is sent to the API.
@@ -61,48 +73,40 @@ class ClientEnrollmentRepository(
             hasCustomerIdentity = cleanIdToken != null,
         )
 
-        if (cleanActivationCode.isNotBlank() && cleanActivationCode != pending.activationCode) {
-            throw PendingEnrollmentExistsException()
-        }
+        try {
+            if (cleanActivationCode.isNotBlank() && cleanActivationCode != pending.activationCode) {
+                throw PendingEnrollmentExistsException()
+            }
 
-        val response = try {
-            postEnrollment(pending, cleanIdToken)
+            val response = postEnrollment(pending, cleanIdToken)
+            var device = response.getJSONObject("device")
+            val statusAuthorization = if (pending.activationCode.isNotBlank()) {
+                "EnrollmentCode ${pending.activationCode}"
+            } else {
+                val identityToken = cleanIdToken
+                    ?: throw ClientEnrollmentException("customer_identity_required", "برای ادامهٔ ثبت دستگاه دوباره وارد حساب شوید.")
+                "Bearer $identityToken"
+            }
+            device = awaitDeviceActive(device, statusAuthorization)
+            val peer = device.getJSONObject("peer")
+            val profile = WireGuardProfileBuilder.build(
+                clientPrivateKey = pending.privateKey,
+                clientIPv4 = peer.getString("assigned_ipv4"),
+                clientIPv6 = peer.getString("assigned_ipv6"),
+                serverPublicKey = peer.getString("server_public_key"),
+                endpointHost = peer.getString("endpoint_host"),
+                endpointPort = peer.getInt("endpoint_port"),
+            )
+            ClientEnrollmentResult(
+                profileText = profile,
+                deviceID = device.getString("id"),
+            )
         } catch (error: ClientEnrollmentException) {
-            if (error.errorCode in setOf(
-                    "activation_code_invalid",
-                    "activation_code_expired",
-                    "activation_code_used",
-                    "device_conflict",
-                    "device_not_found",
-                    "enrollment_status_invalid",
-                )
-            ) {
+            if (shouldClearPendingEnrollment(error.errorCode)) {
                 encryptedStore.clearPendingEnrollment()
             }
             throw error
         }
-        var device = response.getJSONObject("device")
-        val statusAuthorization = if (pending.activationCode.isNotBlank()) {
-            "EnrollmentCode ${pending.activationCode}"
-        } else {
-            val identityToken = cleanIdToken
-                ?: throw ClientEnrollmentException("customer_identity_required", "برای ادامهٔ ثبت دستگاه دوباره وارد حساب شوید.")
-            "Bearer $identityToken"
-        }
-        device = awaitDeviceActive(device, statusAuthorization)
-        val peer = device.getJSONObject("peer")
-        val profile = WireGuardProfileBuilder.build(
-            clientPrivateKey = pending.privateKey,
-            clientIPv4 = peer.getString("assigned_ipv4"),
-            clientIPv6 = peer.getString("assigned_ipv6"),
-            serverPublicKey = peer.getString("server_public_key"),
-            endpointHost = peer.getString("endpoint_host"),
-            endpointPort = peer.getInt("endpoint_port"),
-        )
-        ClientEnrollmentResult(
-            profileText = profile,
-            deviceID = device.getString("id"),
-        )
     }
 
     fun completeEnrollment() {

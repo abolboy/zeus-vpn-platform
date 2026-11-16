@@ -15,3 +15,11 @@ jobs:
         uses: actions/checkout@v4
       - name: Verify repository structure
         run: bash scripts/verify-repository.sh
+      - name: Set up Python for CloudFormation validation
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Install pinned CloudFormation linter
+        run: python -m pip install --disable-pip-version-check --no-input 'cfn-lint==1.59.0'
+      - name: Validate Cognito CloudFormation template
+        run: cfn-lint infra/aws-cognito/zeus-customer-user-pool.yaml

@@ -153,6 +153,10 @@ type CustomerSelfServiceStore interface {
 	GetCustomerVPNDevice(context.Context, string, string) (VPNDevice, error)
 }
 
+type EnrollmentStatusStore interface {
+	GetEnrolledVPNDeviceStatus(context.Context, string, []byte) (VPNDevice, error)
+}
+
 type NodeAgentStore interface {
 	FindNodeByCertFingerprint(context.Context, []byte) (NodeIdentity, error)
 	LeaseNodeCommand(context.Context, string, time.Duration) (NodeCommand, error)

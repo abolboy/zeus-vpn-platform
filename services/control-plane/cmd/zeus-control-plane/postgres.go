@@ -395,6 +395,46 @@ func (s *PostgresStore) GetCustomerVPNDevice(ctx context.Context, userID, device
 	return device, nil
 }
 
+func (s *PostgresStore) GetEnrolledVPNDeviceStatus(ctx context.Context, deviceID string, tokenHash []byte) (VPNDevice, error) {
+	if !uuidPattern.MatchString(deviceID) || len(tokenHash) != sha256.Size {
+		return VPNDevice{}, ErrDeviceNotFound
+	}
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return VPNDevice{}, err
+	}
+	defer tx.Rollback(ctx)
+
+	var boundDeviceID string
+	err = tx.QueryRow(ctx, `
+		SELECT d.id::text
+		FROM vpn_user_enrollment_codes c
+		JOIN vpn_devices d ON d.id = c.device_id AND d.user_id = c.user_id
+		WHERE c.token_hash = $1
+		  AND d.id = $2::uuid
+		  AND c.consumed_at IS NOT NULL
+		  AND c.revoked_at IS NULL
+		  AND c.consumed_at > now() - interval '24 hours'
+	`, tokenHash, deviceID).Scan(&boundDeviceID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return VPNDevice{}, ErrDeviceNotFound
+	}
+	if err != nil {
+		return VPNDevice{}, err
+	}
+	device, err := getVPNDeviceTx(ctx, tx, boundDeviceID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return VPNDevice{}, ErrDeviceNotFound
+	}
+	if err != nil {
+		return VPNDevice{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return VPNDevice{}, err
+	}
+	return device, nil
+}
+
 func (s *PostgresStore) ListVPNDevices(ctx context.Context, userID string) ([]VPNDevice, error) {
 	rows, err := s.pool.Query(ctx, `
 		SELECT d.id::text, d.user_id::text, d.device_ref, d.device_name, d.platform,

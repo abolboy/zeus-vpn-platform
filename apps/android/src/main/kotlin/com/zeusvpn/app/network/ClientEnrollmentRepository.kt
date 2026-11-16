@@ -73,6 +73,8 @@ class ClientEnrollmentRepository(
                     "activation_code_expired",
                     "activation_code_used",
                     "device_conflict",
+                    "device_not_found",
+                    "enrollment_status_invalid",
                 )
             ) {
                 encryptedStore.clearPendingEnrollment()
@@ -80,11 +82,14 @@ class ClientEnrollmentRepository(
             throw error
         }
         var device = response.getJSONObject("device")
-        if (pending.activationCode.isBlank()) {
+        val statusAuthorization = if (pending.activationCode.isNotBlank()) {
+            "EnrollmentCode ${pending.activationCode}"
+        } else {
             val identityToken = cleanIdToken
                 ?: throw ClientEnrollmentException("customer_identity_required", "برای ادامهٔ ثبت دستگاه دوباره وارد حساب شوید.")
-            device = awaitCustomerDeviceActive(device, identityToken)
+            "Bearer $identityToken"
         }
+        device = awaitDeviceActive(device, statusAuthorization)
         val peer = device.getJSONObject("peer")
         val profile = WireGuardProfileBuilder.build(
             clientPrivateKey = pending.privateKey,
@@ -104,7 +109,7 @@ class ClientEnrollmentRepository(
         encryptedStore.clearPendingEnrollment()
     }
 
-    private suspend fun awaitCustomerDeviceActive(initial: JSONObject, idToken: String): JSONObject {
+    private suspend fun awaitDeviceActive(initial: JSONObject, authorization: String): JSONObject {
         val deviceID = initial.getString("id")
         require(deviceID.matches(Regex("^[0-9a-fA-F-]{36}$"))) {
             "The ZEUS API returned an invalid device identifier."
@@ -130,11 +135,11 @@ class ClientEnrollmentRepository(
                 )
             }
             delay(PROVISIONING_POLL_INTERVAL_MS)
-            current = fetchCustomerDeviceStatus(deviceID, idToken)
+            current = fetchDeviceStatus(deviceID, authorization)
         }
     }
 
-    private suspend fun fetchCustomerDeviceStatus(deviceID: String, idToken: String): JSONObject =
+    private suspend fun fetchDeviceStatus(deviceID: String, authorization: String): JSONObject =
         withContext(Dispatchers.IO) {
             val endpoint = URI(configuredBaseUrl + "/v1/client/devices/" + deviceID).toURL()
             val connection = endpoint.openConnection() as HttpsURLConnection
@@ -144,7 +149,7 @@ class ClientEnrollmentRepository(
                 connection.readTimeout = READ_TIMEOUT_MS
                 connection.instanceFollowRedirects = false
                 connection.setRequestProperty("Accept", "application/json")
-                connection.setRequestProperty("Authorization", "Bearer $idToken")
+                connection.setRequestProperty("Authorization", authorization)
 
                 val status = connection.responseCode
                 val stream = if (status in 200..299) connection.inputStream else connection.errorStream

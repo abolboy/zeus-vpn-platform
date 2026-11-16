@@ -830,6 +830,14 @@ func TestPostgresStoreIntegration(t *testing.T) {
 		t.Fatalf("invalid one-time enrollment response: %+v", enrollmentCode)
 	}
 
+	activationStatusHash, validStatusCode := activationCodeTokenHash(enrollmentCode.Code)
+	if !validStatusCode {
+		t.Fatal("server generated an activation code that cannot be parsed as a status capability")
+	}
+	if _, statusErr := store.GetEnrolledVPNDeviceStatus(ctx, replacementDevice.ID, activationStatusHash[:]); !errors.Is(statusErr, ErrDeviceNotFound) {
+		t.Fatalf("unconsumed activation code must not authorize device status: err=%v", statusErr)
+	}
+
 	enrollmentInput := ClientEnrollmentInput{
 		ActivationCode: enrollmentCode.Code,
 		DeviceRef: "ci-enrollment-device-0001",
@@ -865,6 +873,29 @@ func TestPostgresStoreIntegration(t *testing.T) {
 	}
 	if _, statusErr := store.GetCustomerVPNDevice(ctx, deviceUserID, enrolledDevice.ID); !errors.Is(statusErr, ErrDeviceNotFound) {
 		t.Fatalf("customer device lookup leaked another user's device: err=%v", statusErr)
+	}
+
+	// The consumed invite code grants read-only status access to exactly its enrolled device,
+	// even when customer OIDC is not configured on this test API.
+	inviteStatusRequest := httptest.NewRequest(http.MethodGet, "/v1/client/devices/"+enrolledDevice.ID, nil)
+	inviteStatusRequest.Header.Set("Authorization", "EnrollmentCode "+enrollmentCode.Code)
+	inviteStatusResponse := httptest.NewRecorder()
+	handler.ServeHTTP(inviteStatusResponse, inviteStatusRequest)
+	var inviteStatusDevice VPNDevice
+	if inviteStatusResponse.Code != http.StatusOK ||
+		json.Unmarshal(inviteStatusResponse.Body.Bytes(), &inviteStatusDevice) != nil ||
+		inviteStatusDevice.ID != enrolledDevice.ID ||
+		inviteStatusDevice.Status != "provisioning" ||
+		inviteStatusDevice.Peer.Status != "pending" {
+		t.Fatalf("invite-code status polling failed: status=%d body=%s", inviteStatusResponse.Code, inviteStatusResponse.Body.String())
+	}
+
+	wrongInviteStatusRequest := httptest.NewRequest(http.MethodGet, "/v1/client/devices/"+replacementDevice.ID, nil)
+	wrongInviteStatusRequest.Header.Set("Authorization", "EnrollmentCode "+enrollmentCode.Code)
+	wrongInviteStatusResponse := httptest.NewRecorder()
+	handler.ServeHTTP(wrongInviteStatusResponse, wrongInviteStatusRequest)
+	if wrongInviteStatusResponse.Code != http.StatusNotFound {
+		t.Fatalf("invite code exposed a different device: status=%d body=%s", wrongInviteStatusResponse.Code, wrongInviteStatusResponse.Body.String())
 	}
 
 	// Lost-response retry with the same key is idempotent.
@@ -907,6 +938,17 @@ func TestPostgresStoreIntegration(t *testing.T) {
 	if secondClientEnrollResponse.Code != http.StatusConflict ||
 		!bytes.Contains(secondClientEnrollResponse.Body.Bytes(), []byte("activation_code_used")) {
 		t.Fatalf("consumed activation code status=%d body=%s, want 409 activation_code_used", secondClientEnrollResponse.Code, secondClientEnrollResponse.Body.String())
+	}
+
+	if _, err := store.pool.Exec(ctx, `
+		UPDATE vpn_user_enrollment_codes
+		SET consumed_at = now() - interval '25 hours'
+		WHERE token_hash = $1
+	`, activationStatusHash[:]); err != nil {
+		t.Fatal(err)
+	}
+	if _, statusErr := store.GetEnrolledVPNDeviceStatus(ctx, enrolledDevice.ID, activationStatusHash[:]); !errors.Is(statusErr, ErrDeviceNotFound) {
+		t.Fatalf("invite-code status capability must expire after 24 hours: err=%v", statusErr)
 	}
 
 }

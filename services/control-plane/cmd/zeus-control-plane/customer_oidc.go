@@ -72,10 +72,6 @@ func (a *API) verifyCustomerIdentity(ctx context.Context, authorizationHeader st
 
 func (a *API) handleCustomerDeviceStatus(w http.ResponseWriter, r *http.Request) {
 	requestID := requestIDFrom(r)
-	if a.customerVerifier == nil {
-		writeError(w, http.StatusServiceUnavailable, "customer_identity_not_configured", "ورود و ثبت‌نام مشتری هنوز پیکربندی نشده است", requestID)
-		return
-	}
 	ip := remoteIP(r.RemoteAddr)
 	limiterKey := "unknown"
 	if ip != nil {
@@ -86,14 +82,55 @@ func (a *API) handleCustomerDeviceStatus(w http.ResponseWriter, r *http.Request)
 		writeError(w, http.StatusTooManyRequests, "rate_limited", "درخواست‌های بررسی وضعیت بیش از حد مجاز است", requestID)
 		return
 	}
-	claims, externalRef, err := a.verifyCustomerIdentity(r.Context(), r.Header.Get("Authorization"))
-	if err != nil {
-		writeError(w, http.StatusUnauthorized, "customer_identity_invalid", "نشست مشتری معتبر یا تأییدشده نیست", requestID)
-		return
-	}
+
 	deviceID := r.PathValue("deviceID")
 	if !uuidPattern.MatchString(deviceID) {
 		writeError(w, http.StatusBadRequest, "invalid_device_id", "شناسه دستگاه معتبر نیست", requestID)
+		return
+	}
+	authorization := strings.TrimSpace(r.Header.Get("Authorization"))
+	scheme, credential, ok := strings.Cut(authorization, " ")
+	if !ok || credential == "" || strings.ContainsAny(credential, " \t\r\n") {
+		writeError(w, http.StatusUnauthorized, "customer_identity_invalid", "نشست مشتری یا کد فعال‌سازی معتبر نیست", requestID)
+		return
+	}
+
+	if strings.EqualFold(scheme, "EnrollmentCode") {
+		tokenHash, valid := activationCodeTokenHash(credential)
+		if !valid {
+			writeError(w, http.StatusUnauthorized, "enrollment_status_invalid", "کد وضعیت ثبت دستگاه معتبر نیست", requestID)
+			return
+		}
+		store, ok := a.store.(EnrollmentStatusStore)
+		if !ok {
+			writeError(w, http.StatusServiceUnavailable, "not_ready", "بررسی وضعیت دستگاه آماده نیست", requestID)
+			return
+		}
+		device, err := store.GetEnrolledVPNDeviceStatus(r.Context(), deviceID, tokenHash[:])
+		if errors.Is(err, ErrDeviceNotFound) {
+			writeError(w, http.StatusNotFound, "device_not_found", "دستگاه پیدا نشد", requestID)
+			return
+		}
+		if err != nil {
+			a.logger.Error("activation-code device status lookup failed", "request_id", requestID)
+			writeError(w, http.StatusInternalServerError, "device_status_unavailable", "بررسی وضعیت دستگاه انجام نشد", requestID)
+			return
+		}
+		writeJSON(w, http.StatusOK, device)
+		return
+	}
+
+	if !strings.EqualFold(scheme, "Bearer") {
+		writeError(w, http.StatusUnauthorized, "customer_identity_invalid", "نشست مشتری یا کد فعال‌سازی معتبر نیست", requestID)
+		return
+	}
+	if a.customerVerifier == nil {
+		writeError(w, http.StatusServiceUnavailable, "customer_identity_not_configured", "ورود و ثبت‌نام مشتری هنوز پیکربندی نشده است", requestID)
+		return
+	}
+	claims, externalRef, err := a.verifyCustomerIdentity(r.Context(), authorization)
+	if err != nil {
+		writeError(w, http.StatusUnauthorized, "customer_identity_invalid", "نشست مشتری معتبر یا تأییدشده نیست", requestID)
 		return
 	}
 	store, ok := a.store.(CustomerSelfServiceStore)

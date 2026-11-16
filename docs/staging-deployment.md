@@ -58,6 +58,25 @@ Requirements before startup:
 
 Use a TLS reverse proxy for the admin API and route it to `127.0.0.1:8080`. Do not publish port 8080 directly.
 
+## 2A. Prepare customer identity (Cognito)
+
+The template `infra/aws-cognito/zeus-customer-user-pool.yaml` creates an Essentials-tier User Pool, an app-specific Managed Login branding resource with Cognito-provided defaults, a public Authorization Code client, and refresh-token rotation. It deliberately does not enable Plus-tier threat protection. Review the AWS feature-tier pricing and the public self-sign-up exposure before deploying it.
+
+Deploy only to the dedicated staging AWS account and region:
+
+```sh
+aws cloudformation validate-template \
+  --template-body file://infra/aws-cognito/zeus-customer-user-pool.yaml
+aws cloudformation deploy \
+  --template-file infra/aws-cognito/zeus-customer-user-pool.yaml \
+  --stack-name zeus-vpn-customer-identity-staging
+aws cloudformation describe-stacks \
+  --stack-name zeus-vpn-customer-identity-staging \
+  --query 'Stacks[0].Outputs'
+```
+
+Record the exact `OidcIssuer`, `OidcClientId`, and `HostedUiDomain` outputs. Configure the Control Plane and Android build with the same issuer/client pair. Never put a client secret in the Android package. Confirm the managed-login authorization endpoint responds before building the configured APK. Do not enable production public signup until abuse controls, capacity policy, email delivery, and monitoring are approved.
+
 ## 3. Apply the database migrations
 
 Back up the empty/dedicated staging database first. Then run the migration binary using the same root-only environment file as the service:

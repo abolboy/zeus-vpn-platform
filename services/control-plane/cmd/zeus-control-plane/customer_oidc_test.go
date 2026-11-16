@@ -11,7 +11,6 @@ import (
 	"math/big"
 	"net/http"
 	"net/http/httptest"
-	"strings"
 	"testing"
 	"time"
 
@@ -186,9 +185,4 @@ func TestConfigureCustomerOIDCPreservesExactIssuer(t *testing.T) {
 		t.Fatalf("configured issuer = %q, want exact issuer %q", provider.api.customerIssuer, provider.issuer)
 	}
 
-	// The provider URL may be syntactically valid with a trailing slash, but its
-	// discovered issuer is still an exact OIDC identifier and must not be rewritten.
-	if strings.TrimRight(provider.api.customerIssuer, "/") != strings.TrimRight(provider.issuer, "/") {
-		t.Fatal("issuer comparison must not normalize a configured identifier")
-	}
 }

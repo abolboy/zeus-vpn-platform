@@ -150,6 +150,7 @@ func (a *API) Handler() http.Handler {
 	mux.HandleFunc("POST /v1/users/{userID}/enrollment-code", a.handleCreateEnrollmentCode)
 	mux.HandleFunc("POST /v1/client/enroll", a.handleClientEnrollment)
 	mux.HandleFunc("GET /v1/client/devices/{deviceID}", a.handleCustomerDeviceStatus)
+	mux.HandleFunc("POST /v1/client/devices/{deviceID}/retry", a.handleCustomerDeviceRetry)
 	mux.HandleFunc("POST /v1/users/{userID}/devices/{deviceID}/revoke", a.handleRevokeDevice)
 	mux.HandleFunc("GET /v1/nodes", a.handleListNodes)
 	mux.HandleFunc("POST /v1/nodes", a.handleCreateNode)

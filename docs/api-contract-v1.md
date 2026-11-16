@@ -100,7 +100,7 @@ On a separate listener, disabled unless the three node TLS files are configured:
 
 ## Not yet implemented
 - Node certificate enrollment, rotation, and automated revocation tooling.
-- Android app enrollment UI and end-to-end provisioning on a staging node.
+- Physical-device validation of the automatic Android enrollment flow and end-to-end provisioning on an enrolled staging node.
 - Operator lifecycle/password reset/role-management APIs.
 - Billing, subscriptions, live traffic telemetry, and full audit-log UI.
 - Production rollout and validation against the current AWS WireGuard host.

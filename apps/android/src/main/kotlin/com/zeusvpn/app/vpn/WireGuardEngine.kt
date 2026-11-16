@@ -201,7 +201,7 @@ class WireGuardEngine private constructor(context: Context) {
                 appContext.packageManager.getApplicationInfo(packageName, 0)
             }.isSuccess
         }
-        return policy.copy(packageNames = installedPackages).also(SplitTunnelPolicy::validate)
+        return policy.copy(packageNames = installedPackages).also { it.validate() }
     }
 
     private fun syncBackendStateLocked(): WireGuardState {

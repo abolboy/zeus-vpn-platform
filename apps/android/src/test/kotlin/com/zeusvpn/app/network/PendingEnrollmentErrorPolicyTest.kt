@@ -14,6 +14,7 @@ class PendingEnrollmentErrorPolicyTest {
             "device_conflict",
             "device_not_found",
             "enrollment_status_invalid",
+            "device_retry_not_allowed",
         )
 
         permanentErrors.forEach { errorCode ->
@@ -22,6 +23,16 @@ class PendingEnrollmentErrorPolicyTest {
                 shouldClearPendingEnrollment(errorCode),
             )
         }
+    }
+
+    @Test
+    fun retriesProvisioningOnlyOnceForAnErrorState() {
+        assertTrue(shouldRetryProvisioning("error", "error", retryAlreadyRequested = false))
+        assertTrue(shouldRetryProvisioning("provisioning", "error", retryAlreadyRequested = false))
+        assertTrue(shouldRetryProvisioning("error", "pending", retryAlreadyRequested = false))
+        assertFalse(shouldRetryProvisioning("provisioning", "pending", retryAlreadyRequested = false))
+        assertFalse(shouldRetryProvisioning("active", "active", retryAlreadyRequested = false))
+        assertFalse(shouldRetryProvisioning("error", "error", retryAlreadyRequested = true))
     }
 
     @Test

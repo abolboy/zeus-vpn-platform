@@ -49,7 +49,7 @@ internal fun shouldRetryProvisioning(
     deviceStatus: String,
     peerStatus: String,
     retryAlreadyRequested: Boolean,
-): Boolean = !retryAlreadyRequested && (deviceStatus == "error" || peerStatus == "error")
+): Boolean = !retryAlreadyRequested && deviceStatus == "error" && peerStatus == "error"
 
 /**
  * Client-side activation. The private key is generated locally and remains inside

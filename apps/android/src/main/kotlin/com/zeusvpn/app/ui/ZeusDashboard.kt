@@ -211,6 +211,9 @@ fun ZeusDashboard() {
                 settings.setTunnelDesired(false)
                 profileSaved = false
                 wireGuardMessage = missingProfileMessage
+            } catch (error: IllegalArgumentException) {
+                settings.setTunnelDesired(false)
+                wireGuardMessage = error.message ?: connectionFailedMessage
             } catch (_: Exception) {
                 settings.setTunnelDesired(false)
                 wireGuardMessage = connectionFailedMessage
@@ -250,6 +253,10 @@ fun ZeusDashboard() {
                             failedAttempts = 0
                         } catch (cancelled: CancellationException) {
                             throw cancelled
+                        } catch (error: IllegalArgumentException) {
+                            settings.setTunnelDesired(false)
+                            wireGuardMessage = error.message ?: "تنظیم مسیریابی برنامه‌ها معتبر نیست؛ آن را بررسی کنید."
+                            return@collectLatest
                         } catch (_: Exception) {
                             failedAttempts += 1
                             wireGuardMessage = "اتصال مجدد انجام نشد؛ تلاش بعدی با فاصلهٔ کنترل‌شده انجام می‌شود."

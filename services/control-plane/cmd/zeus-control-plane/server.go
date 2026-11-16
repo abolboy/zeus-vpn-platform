@@ -86,7 +86,7 @@ type cursorPayload struct {
 var uuidPattern = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$`)
 var idempotencyKeyPattern = regexp.MustCompile(`^[A-Za-z0-9._~-]{16,128}$`)
 var deviceRefPattern = regexp.MustCompile(`^[A-Za-z0-9._~-]{16,128}$`)
- 
+
 func activationCodeTokenHash(code string) ([32]byte, bool) {
 	if len(code) != 43 {
 		return [32]byte{}, false

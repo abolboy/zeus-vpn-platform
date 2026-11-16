@@ -39,6 +39,7 @@ private val pendingEnrollmentClearErrorCodes = setOf(
     "device_not_found",
     "enrollment_status_invalid",
     "device_retry_not_allowed",
+    "device_state_invalid",
 )
 
 internal fun shouldClearPendingEnrollment(errorCode: String): Boolean =
@@ -130,7 +131,7 @@ class ClientEnrollmentRepository(
         }
         var current = initial
         var retryRequested = false
-        val deadline = SystemClock.elapsedRealtime() + PROVISIONING_TIMEOUT_MS
+        var deadline = SystemClock.elapsedRealtime() + PROVISIONING_TIMEOUT_MS
 
         while (true) {
             val deviceStatus = current.optString("status")
@@ -146,6 +147,7 @@ class ClientEnrollmentRepository(
             if (shouldRetryProvisioning(deviceStatus, peerStatus, retryRequested)) {
                 retryRequested = true
                 current = retryDeviceProvisioning(deviceID, authorization)
+                deadline = SystemClock.elapsedRealtime() + PROVISIONING_TIMEOUT_MS
                 continue
             }
             if (deviceStatus == "error" || peerStatus == "error") {

@@ -40,6 +40,9 @@ jobs:
         with:
           go-version: '1.27.4'
           cache-dependency-path: services/control-plane/go.mod
+      - name: Resolve and verify pinned Go dependencies
+        working-directory: services/control-plane
+        run: go mod tidy
       - name: Install PostgreSQL client
         run: |
           sudo apt-get update

@@ -172,7 +172,7 @@ class WireGuardEngine private constructor(context: Context) {
             } else if (mutableState.value != WireGuardState.DISCONNECTED) {
                 throw IllegalStateException("Wait for the tunnel operation to finish")
             }
-            profileStore.clear()
+            profileStore.clearProfile()
         }
     }
 

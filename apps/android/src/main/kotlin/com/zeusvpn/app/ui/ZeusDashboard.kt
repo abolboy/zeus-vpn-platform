@@ -188,13 +188,17 @@ fun ZeusDashboard() {
         scope.launch {
             wireGuardMessage = connectingMessage
             try {
-                wireGuard.connect()
+                // Persist the user's intent before starting the tunnel so a process
+                // death during startup does not lose an explicit connection request.
                 settings.setTunnelDesired(true)
+                wireGuard.connect()
                 wireGuardMessage = connectedMessage
             } catch (_: MissingWireGuardProfileException) {
+                settings.setTunnelDesired(false)
                 profileSaved = false
                 wireGuardMessage = missingProfileMessage
             } catch (_: Exception) {
+                settings.setTunnelDesired(false)
                 wireGuardMessage = connectionFailedMessage
             }
         }

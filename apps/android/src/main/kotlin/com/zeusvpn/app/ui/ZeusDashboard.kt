@@ -753,7 +753,7 @@ private fun ConnectionCard(
                 Text(title, color = MainText, style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
             }
             StatusPill(statusColor, when (state) {
-                WireGuardState.ENGINE_UP -> if (internetVerified) "ONLINE" else "VERIFY"
+                WireGuardState.ENGINE_UP -> if (connectionVerified) "ONLINE" else "VERIFY"
                 WireGuardState.CONNECTING, WireGuardState.DISCONNECTING -> "BUSY"
                 WireGuardState.DISCONNECTED -> "READY"
             })
@@ -774,7 +774,7 @@ private fun ConnectionCard(
                 disabledContentColor = MutedText,
             ),
         ) {
-            Icon(if (connected) Icons.Outlined.PowerSettingsNew else Icons.Outlined.Shield, contentDescription = null)
+            Icon(if (engineRunning) Icons.Outlined.PowerSettingsNew else Icons.Outlined.Shield, contentDescription = null)
             Spacer(Modifier.width(9.dp))
             Text(
                 when {

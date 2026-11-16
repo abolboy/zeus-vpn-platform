@@ -60,6 +60,7 @@ import com.zeusvpn.app.network.TunnelConnectivityResult
 import com.zeusvpn.app.network.TunnelProbeFailure
 import com.zeusvpn.app.network.TunnelProbeStatus
 import com.zeusvpn.app.network.TunnelReconnectPolicy
+import com.zeusvpn.app.network.isTunnelConnectionVerified
 import com.zeusvpn.app.network.TrafficRateSampler
 import com.zeusvpn.app.network.TrafficRateSample
 import com.zeusvpn.app.vpn.InvalidWireGuardProfileException
@@ -119,6 +120,8 @@ fun ZeusDashboard() {
     var authMessage by remember { mutableStateOf("") }
     var selectedTab by remember { mutableIntStateOf(0) }
     var manualProbeRequest by remember { mutableIntStateOf(0) }
+    var connectAfterProvisioning by remember { mutableStateOf(false) }
+    var pendingResumeAttempted by remember { mutableStateOf(false) }
 
     val network by produceState(NetworkCondition.UNKNOWN, monitor) {
         monitor.observe().collect { value = it }
@@ -243,18 +246,14 @@ fun ZeusDashboard() {
     ) { result ->
         if (result.resultCode == Activity.RESULT_OK) connectWireGuard()
         else {
+            connectAfterProvisioning = false
             scope.launch { settings.setTunnelDesired(false) }
             wireGuardMessage = permissionDeniedMessage
         }
     }
 
-    val requestWireGuardConnection: () -> Unit = {
-        val permissionIntent = VpnService.prepare(context)
-        if (permissionIntent == null) connectWireGuard()
-        else vpnPermissionLauncher.launch(permissionIntent)
-    }
-
     val disconnectWireGuard: () -> Unit = {
+        connectAfterProvisioning = false
         scope.launch {
             settings.setTunnelDesired(false)
             try {
@@ -319,8 +318,10 @@ fun ZeusDashboard() {
                 activationCodeDraft = ""
                 enrollmentMessage = "دستگاه ثبت شد؛ پروفایل اتصال به‌صورت رمزگذاری‌شده ذخیره شد."
             } catch (error: ClientEnrollmentException) {
+                connectAfterProvisioning = false
                 enrollmentMessage = error.message ?: "ثبت دستگاه انجام نشد."
             } catch (error: Exception) {
+                connectAfterProvisioning = false
                 enrollmentMessage = error.message ?: "ثبت انجام نشد؛ تلاش امن برای ادامه روی همین گوشی نگهداری شده است."
             } finally {
                 hasPendingEnrollment = runCatching { enrollment.hasPendingEnrollment() }.getOrDefault(false)
@@ -336,6 +337,7 @@ fun ZeusDashboard() {
         scope.launch {
             authBusy = false
             if (result.resultCode != Activity.RESULT_OK) {
+                connectAfterProvisioning = false
                 authMessage = "ورود لغو شد؛ هر زمان آماده بودید دوباره تلاش کنید."
             } else {
                 try {
@@ -346,6 +348,7 @@ fun ZeusDashboard() {
                         performEnrollment(idToken, "")
                     }
                 } catch (error: Exception) {
+                    connectAfterProvisioning = false
                     authMessage = error.message ?: "ورود امن انجام نشد."
                 }
             }
@@ -397,6 +400,73 @@ fun ZeusDashboard() {
             enrollmentMessage = "برای دریافت خودکار، وارد حساب شوید؛ یا کد دعوت یک‌بارمصرف را وارد کنید."
         } else {
             scope.launch { performEnrollment(null, activationCodeDraft) }
+        }
+    }
+
+    // Resume pending enrollment once after process restart. The encrypted pending
+    // record preserves the same device ID and WireGuard key; OIDC gets a fresh token.
+    LaunchedEffect(hasPendingEnrollment, pendingInviteEnrollment, customerSignedIn, profileSaved) {
+        if (pendingResumeAttempted || profileSaved || !hasPendingEnrollment || enrollmentBusy) {
+            return@LaunchedEffect
+        }
+        when {
+            pendingInviteEnrollment -> {
+                pendingResumeAttempted = true
+                performEnrollment(null, "")
+            }
+            customerSignedIn && identity.isConfigured && enrollment.isConfigured -> {
+                pendingResumeAttempted = true
+                try {
+                    performEnrollment(identity.freshIdToken(), "")
+                } catch (error: Exception) {
+                    customerSignedIn = identity.hasStoredSession()
+                    authMessage = error.message ?: "برای ادامهٔ ثبت دستگاه دوباره وارد حساب شوید."
+                }
+            }
+        }
+    }
+
+    // Do not start the local tunnel until the backend has created and acknowledged
+    // the peer and the profile has been saved encrypted on this device.
+    LaunchedEffect(profileSaved, connectAfterProvisioning) {
+        if (profileSaved && connectAfterProvisioning) {
+            connectAfterProvisioning = false
+            val permissionIntent = VpnService.prepare(context)
+            if (permissionIntent == null) connectWireGuard()
+            else vpnPermissionLauncher.launch(permissionIntent)
+        }
+    }
+
+    // A connect tap now provisions a missing profile instead of failing with
+    // MissingWireGuardProfileException. Import and invitation flows stay available.
+    val requestWireGuardConnection: () -> Unit = {
+        when {
+            profileSaved -> {
+                val permissionIntent = VpnService.prepare(context)
+                if (permissionIntent == null) connectWireGuard()
+                else vpnPermissionLauncher.launch(permissionIntent)
+            }
+            !enrollment.isConfigured -> {
+                connectAfterProvisioning = false
+                enrollmentMessage = "دریافت خودکار هنوز فعال نیست؛ نشانی HTTPS کنترل‌پلین باید در نسخهٔ برنامه تنظیم شود."
+            }
+            enrollmentBusy -> {
+                connectAfterProvisioning = true
+                enrollmentMessage = "درخواست دریافت پروفایل در حال انجام است؛ پس از تکمیل، اتصال آغاز می‌شود."
+            }
+            identity.isConfigured && !customerSignedIn && !pendingInviteEnrollment &&
+                activationCodeDraft.isBlank() -> {
+                connectAfterProvisioning = true
+                startCustomerSignIn()
+            }
+            customerSignedIn || pendingInviteEnrollment || activationCodeDraft.isNotBlank() -> {
+                connectAfterProvisioning = true
+                enrollDevice()
+            }
+            else -> {
+                connectAfterProvisioning = false
+                enrollDevice()
+            }
         }
     }
 
@@ -500,6 +570,7 @@ fun ZeusDashboard() {
                         ConnectionCard(
                             state = wireGuardState,
                             profileSaved = profileSaved,
+                            autoProvisionAvailable = enrollment.isConfigured,
                             message = wireGuardMessage,
                             stats = trafficStats,
                             reachability = tunnelReachability,
@@ -623,27 +694,36 @@ private fun BrandHeader(customerSignedIn: Boolean) {
 private fun ConnectionCard(
     state: WireGuardState,
     profileSaved: Boolean,
+    autoProvisionAvailable: Boolean,
     message: String,
     stats: WireGuardTrafficStats,
     reachability: TunnelConnectivityResult,
     onConnect: () -> Unit,
     onDisconnect: () -> Unit,
 ) {
-    val connected = state == WireGuardState.ENGINE_UP
+    val engineRunning = state == WireGuardState.ENGINE_UP
     val busy = state == WireGuardState.CONNECTING || state == WireGuardState.DISCONNECTING
+    val now = System.currentTimeMillis()
     val handshakeFresh = stats.latestHandshakeEpochMillis > 0L &&
-        System.currentTimeMillis() - stats.latestHandshakeEpochMillis <= 180_000L
-    val internetVerified = connected && reachability.status == TunnelProbeStatus.REACHABLE
+        now >= stats.latestHandshakeEpochMillis &&
+        now - stats.latestHandshakeEpochMillis <= 180_000L
+    val connectionVerified = isTunnelConnectionVerified(
+        engineRunning = engineRunning,
+        latestHandshakeEpochMillis = stats.latestHandshakeEpochMillis,
+        nowEpochMillis = now,
+        httpsProbeSucceeded = reachability.status == TunnelProbeStatus.REACHABLE,
+    )
     val statusColor = when (state) {
-        WireGuardState.ENGINE_UP -> if (internetVerified) Positive else Warning
+        WireGuardState.ENGINE_UP -> if (connectionVerified) Positive else Warning
         WireGuardState.CONNECTING, WireGuardState.DISCONNECTING -> Warning
         WireGuardState.DISCONNECTED -> MutedText
     }
     val title = when (state) {
         WireGuardState.ENGINE_UP -> when {
-            internetVerified -> "اینترنت از مسیر VPN پاسخ می‌دهد"
-            handshakeFresh -> "تونل فعال است؛ اینترنت تأیید نشده"
-            else -> "موتور فعال است؛ Handshake تأیید نشده"
+            connectionVerified -> "اتصال VPN تأیید شد"
+            handshakeFresh -> "Handshake برقرار است؛ اینترنت تأیید نشده"
+            reachability.status == TunnelProbeStatus.REACHABLE -> "پاسخ اینترنت دریافت شد؛ Handshake تأیید نشده"
+            else -> "موتور روشن است؛ اتصال به سرور تأیید نشده"
         }
         WireGuardState.CONNECTING -> "در حال اتصال"
         WireGuardState.DISCONNECTING -> "در حال قطع اتصال"
@@ -651,14 +731,19 @@ private fun ConnectionCard(
     }
     val detail = when (state) {
         WireGuardState.ENGINE_UP -> when {
-            internetVerified -> "آزمون HTTPS از داخل برنامه پاسخ معتبر دریافت کرد؛ دسترسی همهٔ سایت‌ها و برنامه‌ها جداگانه تضمین نمی‌شود."
-            reachability.status == TunnelProbeStatus.CHECKING -> "موتور تونل روشن است؛ اکنون مسیر اینترنت از داخل برنامه بررسی می‌شود."
-            handshakeFresh -> "Handshake تازه ثبت شده، اما آزمون HTTPS موفق نبود. " + probeFailureMessage(reachability.failure)
-            else -> "فقط موتور محلی فعال است؛ هنوز Handshake معتبر و دسترسی اینترنت تأیید نشده است."
+            connectionVerified -> "Handshake تازهٔ WireGuard و آزمون HTTPS هر دو موفق‌اند. دسترسی همهٔ سایت‌ها و برنامه‌ها جداگانه تضمین نمی‌شود."
+            reachability.status == TunnelProbeStatus.CHECKING -> "موتور محلی روشن است؛ در حال بررسی Handshake واقعی و دسترسی اینترنت از داخل تونل هستیم."
+            handshakeFresh -> "سرور Handshake را تأیید کرده، اما آزمون HTTPS از داخل تونل ناموفق است. " + probeFailureMessage(reachability.failure)
+            reachability.status == TunnelProbeStatus.REACHABLE -> "پاسخ HTTPS دریافت شد، اما زمان Handshake معتبر WireGuard موجود نیست؛ اتصال امن هنوز تأیید نشده است."
+            else -> "فقط موتور محلی روشن است؛ از سرور هنوز Handshake دریافت نشده. Endpoint، کلید عمومی سرور، UDP، فایروال و وضعیت Node را بررسی کنید."
         }
         WireGuardState.CONNECTING -> "در حال ایجاد تونل رمزگذاری‌شده..."
-        WireGuardState.DISCONNECTING -> "در حال بستن تونل امن..."
-        WireGuardState.DISCONNECTED -> if (profileSaved) "پروفایل این دستگاه آمادهٔ استفاده است." else "برای شروع، حساب بسازید یا اتصال را با کد دعوت دریافت کنید."
+        WireGuardState.DISCONNECTING -> "در حال بستن تونل..."
+        WireGuardState.DISCONNECTED -> when {
+            profileSaved -> "پروفایل رمزگذاری‌شدهٔ این دستگاه آماده است."
+            autoProvisionAvailable -> "با زدن دکمه، ورود و ساخت کلید روی گوشی و دریافت خودکار پروفایل آغاز می‌شود."
+            else -> "برای فعال‌سازی دریافت خودکار، اتصال امن به Control Plane لازم است."
+        }
     }
 
     PanelCard {
@@ -674,16 +759,16 @@ private fun ConnectionCard(
             })
         }
         Box(modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp), contentAlignment = Alignment.Center) {
-            ConnectionOrb(statusColor, connected, busy)
+            ConnectionOrb(statusColor, connectionVerified, engineRunning, busy)
         }
         Text(detail, modifier = Modifier.fillMaxWidth(), color = SecondaryText, style = MaterialTheme.typography.bodyMedium, lineHeight = 21.sp)
         Button(
-            onClick = if (connected) onDisconnect else onConnect,
-            enabled = !busy && (connected || profileSaved),
+            onClick = if (engineRunning) onDisconnect else onConnect,
+            enabled = !busy && (engineRunning || profileSaved || autoProvisionAvailable),
             modifier = Modifier.fillMaxWidth().height(54.dp),
             shape = RoundedCornerShape(16.dp),
             colors = ButtonDefaults.buttonColors(
-                containerColor = if (connected) Danger else Primary,
+                containerColor = if (engineRunning) Danger else Primary,
                 contentColor = Color.White,
                 disabledContainerColor = PanelRaised,
                 disabledContentColor = MutedText,
@@ -694,9 +779,10 @@ private fun ConnectionCard(
             Text(
                 when {
                     busy -> "لطفاً صبر کنید..."
-                    connected -> "قطع اتصال امن"
+                    engineRunning -> "قطع تونل فعلی"
                     profileSaved -> "اتصال به ZEUS"
-                    else -> "ابتدا دریافت اتصال"
+                    autoProvisionAvailable -> "دریافت خودکار و اتصال"
+                    else -> "در انتظار پیکربندی سرویس"
                 },
                 fontWeight = FontWeight.Bold,
                 fontSize = 15.sp,
@@ -705,7 +791,7 @@ private fun ConnectionCard(
         if (message.isNotBlank()) {
             InlineNotice(
                 text = message,
-                color = if (internetVerified || message.contains("ذخیره شد") || message.contains("معتبر")) Positive else Warning,
+                color = if (connectionVerified || message.contains("ذخیره شد") || message.contains("معتبر")) Positive else Warning,
             )
         }
     }
@@ -722,7 +808,7 @@ private fun probeFailureMessage(failure: TunnelProbeFailure?): String = when (fa
 }
 
 @Composable
-private fun ConnectionOrb(statusColor: Color, connected: Boolean, busy: Boolean) {
+private fun ConnectionOrb(statusColor: Color, connected: Boolean, engineRunning: Boolean, busy: Boolean) {
     val pulse = rememberInfiniteTransition(label = "zeus-connection-pulse")
     val scale by pulse.animateFloat(
         initialValue = 0.97f,
@@ -762,14 +848,33 @@ private fun ConnectionOrb(statusColor: Color, connected: Boolean, busy: Boolean)
         ) {
             Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
                 Icon(
-                    imageVector = if (connected) Icons.Outlined.Shield else Icons.Outlined.PowerSettingsNew,
+                    imageVector = if (engineRunning) Icons.Outlined.Shield else Icons.Outlined.PowerSettingsNew,
                     contentDescription = null,
                     tint = statusColor,
                     modifier = Modifier.size(39.dp),
                 )
                 Spacer(Modifier.height(7.dp))
-                Text(if (connected) "ACTIVE" else if (busy) "WORKING" else "ZEUS", color = MainText, fontWeight = FontWeight.ExtraBold, letterSpacing = 1.3.sp)
-                Text(if (connected) "ENGINE ON" else "TUNNEL OFF", color = MutedText, style = MaterialTheme.typography.labelSmall, letterSpacing = 0.7.sp)
+                Text(
+                    when {
+                        connected -> "ONLINE"
+                        engineRunning -> "VERIFY"
+                        busy -> "WORKING"
+                        else -> "ZEUS"
+                    },
+                    color = MainText,
+                    fontWeight = FontWeight.ExtraBold,
+                    letterSpacing = 1.3.sp,
+                )
+                Text(
+                    when {
+                        connected -> "VERIFIED"
+                        engineRunning -> "NOT VERIFIED"
+                        else -> "TUNNEL OFF"
+                    },
+                    color = MutedText,
+                    style = MaterialTheme.typography.labelSmall,
+                    letterSpacing = 0.7.sp,
+                )
             }
         }
     }

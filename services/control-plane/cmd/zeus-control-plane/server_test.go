@@ -940,6 +940,137 @@ func TestPostgresStoreIntegration(t *testing.T) {
 		t.Fatalf("consumed activation code status=%d body=%s, want 409 activation_code_used", secondClientEnrollResponse.Code, secondClientEnrollResponse.Body.String())
 	}
 
+	// A failed peer.ensure can be retried by the owner without changing its
+	// WireGuard key, assigned addresses, or original node.
+	var ensureCommandID string
+	if err := store.pool.QueryRow(ctx, `
+		SELECT id::text
+		FROM node_commands
+		WHERE node_id = $1::uuid AND command_type = 'peer.ensure'
+		  AND payload->>'public_key' = $2 AND status = 'queued'
+		ORDER BY created_at DESC, id DESC
+		LIMIT 1
+	`, enrolledDevice.Peer.NodeID, enrolledDevice.Peer.PublicKey).Scan(&ensureCommandID); err != nil {
+		t.Fatalf("find enrolled device peer.ensure command: %v", err)
+	}
+	var leasedEnsure NodeCommand
+	for attempts := 0; attempts < 10; attempts++ {
+		command, leaseErr := store.LeaseNodeCommand(ctx, enrolledDevice.Peer.NodeID, 45*time.Second)
+		if leaseErr != nil {
+			t.Fatalf("lease command while locating enrolled peer.ensure: %v", leaseErr)
+		}
+		if command.ID == ensureCommandID {
+			leasedEnsure = command
+			break
+		}
+		if command.Type != "peer.ensure" {
+			t.Fatalf("unexpected command before enrolled peer.ensure: %+v", command)
+		}
+		if err := store.AcknowledgeNodeCommand(ctx, enrolledDevice.Peer.NodeID, command.ID, "succeeded", ""); err != nil {
+			t.Fatalf("acknowledge prior peer.ensure command %s: %v", command.ID, err)
+		}
+	}
+	if leasedEnsure.ID != ensureCommandID {
+		t.Fatalf("could not lease the expected peer.ensure command %s", ensureCommandID)
+	}
+	if err := store.AcknowledgeNodeCommand(ctx, enrolledDevice.Peer.NodeID, leasedEnsure.ID, "failed", "wg_apply_failed"); err != nil {
+		t.Fatalf("record failed peer.ensure: %v", err)
+	}
+	failedDevice, err := store.GetCustomerVPNDevice(ctx, enrollmentUserID, enrolledDevice.ID)
+	if err != nil || failedDevice.Status != "error" || failedDevice.Peer.Status != "error" ||
+		failedDevice.LastError != "wg_apply_failed" {
+		t.Fatalf("failed provisioning state was not recorded: device=%+v err=%v", failedDevice, err)
+	}
+
+	// The consumed invite code authorizes retry only for its bound device.
+	retryRequest := httptest.NewRequest(http.MethodPost, "/v1/client/devices/"+enrolledDevice.ID+"/retry", nil)
+	retryRequest.Header.Set("Authorization", "EnrollmentCode "+enrollmentCode.Code)
+	retryResponse := httptest.NewRecorder()
+	handler.ServeHTTP(retryResponse, retryRequest)
+	var retriedDevice VPNDevice
+	if retryResponse.Code != http.StatusAccepted || retryResponse.Header().Get("Retry-Queued") != "true" ||
+		json.Unmarshal(retryResponse.Body.Bytes(), &retriedDevice) != nil ||
+		retriedDevice.ID != enrolledDevice.ID || retriedDevice.Status != "provisioning" ||
+		retriedDevice.Peer.Status != "pending" || retriedDevice.Peer.PublicKey != enrolledDevice.Peer.PublicKey ||
+		retriedDevice.Peer.AssignedIPv4 != enrolledDevice.Peer.AssignedIPv4 ||
+		retriedDevice.Peer.AssignedIPv6 != enrolledDevice.Peer.AssignedIPv6 {
+		t.Fatalf("owner retry did not safely requeue the same peer: status=%d body=%s device=%+v",
+			retryResponse.Code, retryResponse.Body.String(), retriedDevice)
+	}
+
+	// A duplicate tap while the retry is queued must not create another command.
+	duplicateRetry := httptest.NewRequest(http.MethodPost, "/v1/client/devices/"+enrolledDevice.ID+"/retry", nil)
+	duplicateRetry.Header.Set("Authorization", "EnrollmentCode "+enrollmentCode.Code)
+	duplicateRetryResponse := httptest.NewRecorder()
+	handler.ServeHTTP(duplicateRetryResponse, duplicateRetry)
+	if duplicateRetryResponse.Code != http.StatusAccepted || duplicateRetryResponse.Header().Get("Retry-Queued") != "" {
+		t.Fatalf("duplicate retry should return the existing provisioning state: status=%d body=%s",
+			duplicateRetryResponse.Code, duplicateRetryResponse.Body.String())
+	}
+	var activeEnsureCount int
+	if err := store.pool.QueryRow(ctx, `
+		SELECT count(*) FROM node_commands
+		WHERE node_id = $1::uuid AND command_type = 'peer.ensure'
+		  AND payload->>'public_key' = $2 AND status IN ('queued', 'leased')
+	`, enrolledDevice.Peer.NodeID, enrolledDevice.Peer.PublicKey).Scan(&activeEnsureCount); err != nil || activeEnsureCount != 1 {
+		t.Fatalf("active peer.ensure retries=%d err=%v, want exactly one", activeEnsureCount, err)
+	}
+
+	retryCommand, err := store.LeaseNodeCommand(ctx, enrolledDevice.Peer.NodeID, 45*time.Second)
+	if err != nil || retryCommand.Type != "peer.ensure" || retryCommand.ID == leasedEnsure.ID {
+		t.Fatalf("new peer.ensure retry command was not leased: command=%+v err=%v", retryCommand, err)
+	}
+	var retryPayload struct {
+		PublicKey string `json:"public_key"`
+		IPv4      string `json:"ipv4"`
+		IPv6      string `json:"ipv6"`
+	}
+	if err := json.Unmarshal(retryCommand.Payload, &retryPayload); err != nil ||
+		retryPayload.PublicKey != enrolledDevice.Peer.PublicKey ||
+		retryPayload.IPv4 != enrolledDevice.Peer.AssignedIPv4 ||
+		retryPayload.IPv6 != enrolledDevice.Peer.AssignedIPv6 {
+		t.Fatalf("retry command changed the original peer identity or addresses: payload=%s err=%v",
+			retryCommand.Payload, err)
+	}
+	if err := store.AcknowledgeNodeCommand(ctx, enrolledDevice.Peer.NodeID, retryCommand.ID, "succeeded", ""); err != nil {
+		t.Fatalf("acknowledge retried peer.ensure: %v", err)
+	}
+	activeDevice, err := store.GetCustomerVPNDevice(ctx, enrollmentUserID, enrolledDevice.ID)
+	if err != nil || activeDevice.Status != "active" || activeDevice.Peer.Status != "active" {
+		t.Fatalf("successful retry did not activate the device: device=%+v err=%v", activeDevice, err)
+	}
+
+	// A failed peer.remove must never be converted into peer.ensure by this endpoint.
+	removePayload, err := json.Marshal(map[string]string{"public_key": enrolledDevice.Peer.PublicKey})
+	if err != nil {
+		t.Fatal(err)
+	}
+	removeHash := sha256.Sum256(removePayload)
+	if _, err := store.pool.Exec(ctx, `
+		INSERT INTO node_commands
+			(node_id, created_by_operator_id, command_type, payload, request_hash, idempotency_key,
+			 status, last_error, completed_at)
+		VALUES ($1::uuid, NULL, 'peer.remove', $2::jsonb, $3, $4,
+		        'failed', 'wg_remove_failed', now())
+	`, enrolledDevice.Peer.NodeID, string(removePayload), removeHash[:], newRequestID()); err != nil {
+		t.Fatalf("insert failed peer.remove fixture: %v", err)
+	}
+	if _, err := store.pool.Exec(ctx, `
+		UPDATE wireguard_peers SET status = 'error' WHERE id = $1::uuid;
+		UPDATE vpn_devices SET status = 'error', last_error = 'wg_remove_failed' WHERE id = $2::uuid;
+	`, enrolledDevice.Peer.ID, enrolledDevice.ID); err != nil {
+		t.Fatalf("set failed removal fixture: %v", err)
+	}
+	unsafeRetry := httptest.NewRequest(http.MethodPost, "/v1/client/devices/"+enrolledDevice.ID+"/retry", nil)
+	unsafeRetry.Header.Set("Authorization", "EnrollmentCode "+enrollmentCode.Code)
+	unsafeRetryResponse := httptest.NewRecorder()
+	handler.ServeHTTP(unsafeRetryResponse, unsafeRetry)
+	if unsafeRetryResponse.Code != http.StatusConflict ||
+		!bytes.Contains(unsafeRetryResponse.Body.Bytes(), []byte("device_retry_not_allowed")) {
+		t.Fatalf("failed peer.remove must not be retried as peer.ensure: status=%d body=%s",
+			unsafeRetryResponse.Code, unsafeRetryResponse.Body.String())
+	}
+
 	if _, err := store.pool.Exec(ctx, `
 		UPDATE vpn_user_enrollment_codes
 		SET consumed_at = now() - interval '25 hours'

@@ -59,6 +59,9 @@ class ClientEnrollmentRepository(
 
     fun hasPendingEnrollment(): Boolean = encryptedStore.hasPendingEnrollment()
 
+    fun hasPendingInviteEnrollment(): Boolean =
+        loadPendingEnrollment()?.activationCode?.isNotBlank() == true
+
     suspend fun enroll(
         activationCode: String,
         deviceName: String = Build.MODEL.orEmpty(),

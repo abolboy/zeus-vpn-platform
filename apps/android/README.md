@@ -14,6 +14,14 @@ The default build intentionally leaves the Control Plane and OIDC provider endpo
 
 The redirect URI defaults to com.zeusvpn.app:/oauth2redirect and must be registered exactly as a public native-app redirect. Use Authorization Code + PKCE. Never embed a client secret in the APK. The identity provider must issue verified email claims and allow self-sign-up if public registration is desired.
 
+For CI-built staging APKs, configure these three GitHub Actions repository **variables** under **Settings → Secrets and variables → Actions → Variables**:
+
+- `ZEUS_API_BASE_URL`: the deployed Control Plane HTTPS base URL.
+- `ZEUS_OIDC_ISSUER`: the exact issuer URL from the identity provider.
+- `ZEUS_OIDC_CLIENT_ID`: the public native-app client ID.
+
+Set all three together or leave all three empty. The workflow rejects a partial configuration. These are public application identifiers/endpoints, not client secrets; do not put an OIDC client secret in GitHub variables or the Android app. Re-run **ZEUS CI** with `workflow_dispatch` after setting them to produce a configured staging APK. The repository does not currently have a verified deployed customer identity/API endpoint, so do not substitute example URLs.
+
 ## Device enrollment and key handling
 
 1. Preferred: the user signs in or signs up through the configured OIDC provider in the system browser using Authorization Code + PKCE. Existing owner/admin one-time activation codes remain a fallback.

@@ -3,6 +3,7 @@ name: ZEUS CI
 on:
   push:
   pull_request:
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -84,7 +85,26 @@ jobs:
           java-version: '17'
           cache: gradle
       - name: Build Android app and run unit tests
-        run: ./gradlew --no-daemon :apps:android:assembleDebug :apps:android:testDebugUnitTest
+        env:
+          ZEUS_API_BASE_URL: ${{ vars.ZEUS_API_BASE_URL }}
+          ZEUS_OIDC_ISSUER: ${{ vars.ZEUS_OIDC_ISSUER }}
+          ZEUS_OIDC_CLIENT_ID: ${{ vars.ZEUS_OIDC_CLIENT_ID }}
+        run: |
+          build_args=()
+          if [[ -n "$ZEUS_API_BASE_URL" ]]; then build_args+=("-PZEUS_API_BASE_URL=$ZEUS_API_BASE_URL"); fi
+          if [[ -n "$ZEUS_OIDC_ISSUER" ]]; then build_args+=("-PZEUS_OIDC_ISSUER=$ZEUS_OIDC_ISSUER"); fi
+          if [[ -n "$ZEUS_OIDC_CLIENT_ID" ]]; then build_args+=("-PZEUS_OIDC_CLIENT_ID=$ZEUS_OIDC_CLIENT_ID"); fi
+
+          configured_count=0
+          for value in "$ZEUS_API_BASE_URL" "$ZEUS_OIDC_ISSUER" "$ZEUS_OIDC_CLIENT_ID"; do
+            [[ -n "$value" ]] && ((configured_count += 1))
+          done
+          if [[ "$configured_count" -ne 0 && "$configured_count" -ne 3 ]]; then
+            echo "Set all three ZEUS GitHub repository variables together, or leave all three empty."
+            exit 1
+          fi
+
+          ./gradlew --no-daemon :apps:android:assembleDebug :apps:android:testDebugUnitTest "${build_args[@]}"
       - name: Upload debug APK and unit-test report
         if: success()
         uses: actions/upload-artifact@v4

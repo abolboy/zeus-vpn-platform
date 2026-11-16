@@ -107,6 +107,10 @@ class WireGuardEngine private constructor(context: Context) {
 
     suspend fun connect() = withContext(Dispatchers.IO) {
         operationMutex.withLock {
+            val actualState = runCatching { syncBackendStateLocked() }
+                .getOrDefault(mutableState.value)
+            if (actualState == WireGuardState.ENGINE_UP) return@withLock
+
             val profileBytes = profileStore.read() ?: throw MissingWireGuardProfileException()
             val config = try {
                 WireGuardProfileValidator.parse(profileBytes)

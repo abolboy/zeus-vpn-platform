@@ -40,8 +40,8 @@ data class SplitTunnelPolicy(
 /**
  * Rewrites only the Android-specific IncludedApplications / ExcludedApplications
  * directives inside [Interface]. The WireGuard parser validates the result
- * before the backend receives it. Existing routing directives are always removed
- * first so a user change cannot leave conflicting allow/deny lists behind.
+ * before the backend receives it. Existing directives are removed first, so
+ * changing modes cannot leave conflicting allow/deny lists behind.
  */
 object SplitTunnelProfilePolicy {
     private val routingDirective = Regex("^\\s*(IncludedApplications|ExcludedApplications)\\s*=.*$", RegexOption.IGNORE_CASE)
@@ -55,6 +55,11 @@ object SplitTunnelProfilePolicy {
         val interfaceIndex = lines.indexOfFirst { it.trim().equals("[Interface]", ignoreCase = true) }
         require(interfaceIndex >= 0) { "WireGuard profile has no Interface section." }
 
+        var interfaceEnd = interfaceIndex + 1
+        while (interfaceEnd < lines.size && !sectionHeader.matches(lines[interfaceEnd])) {
+            interfaceEnd++
+        }
+
         val directives = when (policy.mode) {
             SplitTunnelMode.ALL -> emptyList()
             SplitTunnelMode.INCLUDE_SELECTED -> listOf(
@@ -67,33 +72,14 @@ object SplitTunnelProfilePolicy {
             }
         }
 
-        return buildString(profileText.length + directives.sumOf { it.length + 1 }) {
-            var inInterface = false
-            var inserted = false
-            lines.forEach { line ->
-                if (line.trim().equals("[Interface]", ignoreCase = true)) {
-                    inInterface = true
-                } else if (inInterface && sectionHeader.matches(line)) {
-                    directives.forEach { append(it).append('\n') }
-                    inserted = true
-                    inInterface = false
-                }
+        val interfaceLines = lines.subList(interfaceIndex + 1, interfaceEnd)
+            .filterNot { routingDirective.matches(it) }
 
-                if (!(inInterface && routingDirective.matches(line))) {
-                    append(line).append('\n')
-                }
-            }
-            if (inInterface && !inserted) {
-                directives.forEach { append(it).append('\n') }
-            }
-            if (!profileText.endsWith('\n')) {
-                val result = toString()
-                if (result.endsWith("\n\n")) {
-                    // Preserve the original single-line ending behavior without adding blank lines.
-                }
-            }
-        }.let { output ->
-            if (profileText.endsWith('\n')) output else output.removeSuffix("\n")
-        }
+        return buildList {
+            addAll(lines.subList(0, interfaceIndex + 1))
+            addAll(interfaceLines)
+            addAll(directives)
+            addAll(lines.subList(interfaceEnd, lines.size))
+        }.joinToString("\n")
     }
 }

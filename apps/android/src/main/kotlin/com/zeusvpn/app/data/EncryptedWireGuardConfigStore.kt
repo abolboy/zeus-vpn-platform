@@ -95,9 +95,15 @@ class EncryptedWireGuardConfigStore(context: android.content.Context) {
         deleteKey(PENDING_KEY_ALIAS)
     }
 
-    fun clear() {
+    /** Deletes only the active tunnel profile, preserving account and pending enrollment. */
+    fun clearProfile() {
         profileFile.delete()
         deleteKey(PROFILE_KEY_ALIAS)
+    }
+
+    /** Full local wipe; callers must explicitly intend to remove every encrypted record. */
+    fun clear() {
+        clearProfile()
         clearPendingEnrollment()
         clearCustomerSession()
     }

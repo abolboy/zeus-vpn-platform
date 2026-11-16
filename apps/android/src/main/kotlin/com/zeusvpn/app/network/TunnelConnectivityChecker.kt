@@ -13,6 +13,24 @@ import java.net.URL
 import java.net.UnknownHostException
 import javax.net.ssl.SSLException
 
+
+/**
+ * A running local WireGuard engine is not proof of a working VPN connection.
+ * Require a fresh peer handshake and a successful HTTPS probe made while the
+ * engine is active before reporting the tunnel as verified.
+ */
+internal fun isTunnelConnectionVerified(
+    engineRunning: Boolean,
+    latestHandshakeEpochMillis: Long,
+    nowEpochMillis: Long,
+    httpsProbeSucceeded: Boolean,
+    maxHandshakeAgeMillis: Long = 180_000L,
+): Boolean {
+    if (!engineRunning || !httpsProbeSucceeded || latestHandshakeEpochMillis <= 0L) return false
+    if (nowEpochMillis < latestHandshakeEpochMillis || maxHandshakeAgeMillis < 0L) return false
+    return nowEpochMillis - latestHandshakeEpochMillis <= maxHandshakeAgeMillis
+}
+
 enum class TunnelProbeStatus { IDLE, CHECKING, REACHABLE, UNREACHABLE }
 
 /** A non-sensitive failure category suitable for showing to the user. */

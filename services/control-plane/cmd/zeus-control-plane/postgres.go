@@ -418,16 +418,19 @@ func (s *PostgresStore) RetryVPNDeviceProvisioning(
 		       p.id::text, p.node_id::text, p.public_key, host(p.assigned_ipv4),
 		       COALESCE(host(p.assigned_ipv6), ''), n.public_key, n.endpoint_host,
 		       n.endpoint_port, p.status,
-		       (n.status = 'online' AND n.last_seen_at > now() - interval '90 seconds'
-		        AND n.client_ipv4_pool IS NOT NULL AND n.client_ipv6_pool IS NOT NULL
-		        AND n.interface_ipv4 IS NOT NULL AND n.interface_ipv6 IS NOT NULL
-		        AND EXISTS (
-		            SELECT 1 FROM vpn_node_agent_certificates ac
-		            WHERE ac.node_id = n.id
-		              AND ac.revoked_at IS NULL
-		              AND ac.not_before <= now()
-		              AND ac.not_after > now()
-		        ))
+		       COALESCE(
+		           n.status = 'online' AND n.last_seen_at > now() - interval '90 seconds'
+		           AND n.client_ipv4_pool IS NOT NULL AND n.client_ipv6_pool IS NOT NULL
+		           AND n.interface_ipv4 IS NOT NULL AND n.interface_ipv6 IS NOT NULL
+		           AND EXISTS (
+		               SELECT 1 FROM vpn_node_agent_certificates ac
+		               WHERE ac.node_id = n.id
+		                 AND ac.revoked_at IS NULL
+		                 AND ac.not_before <= now()
+		                 AND ac.not_after > now()
+		           ),
+		           false
+		       )
 		FROM vpn_devices d
 		JOIN wireguard_peers p ON p.device_id = d.id
 		JOIN vpn_nodes n ON n.id = p.node_id

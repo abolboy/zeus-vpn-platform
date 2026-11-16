@@ -30,6 +30,11 @@ grep -Fq 'UserPoolTier: ESSENTIALS' infra/aws-cognito/zeus-customer-user-pool.ya
 grep -Fq 'Type: AWS::Cognito::ManagedLoginBranding' infra/aws-cognito/zeus-customer-user-pool.yaml
 grep -Fq 'UseCognitoProvidedValues: true' infra/aws-cognito/zeus-customer-user-pool.yaml
 grep -Fq 'Feature: ENABLED' infra/aws-cognito/zeus-customer-user-pool.yaml
+grep -Fq 'ALLOW_USER_SRP_AUTH' infra/aws-cognito/zeus-customer-user-pool.yaml
+if grep -Fq 'ALLOW_REFRESH_TOKEN_AUTH' infra/aws-cognito/zeus-customer-user-pool.yaml; then
+  echo "FAIL: REFRESH_TOKEN_AUTH is incompatible with Cognito refresh-token rotation"
+  exit 1
+fi
 if grep -Fq 'AdvancedSecurityMode:' infra/aws-cognito/zeus-customer-user-pool.yaml; then
   echo "FAIL: do not enable Plus-tier Cognito threat protection implicitly"
   exit 1

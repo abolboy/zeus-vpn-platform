@@ -482,6 +482,10 @@ tbody tr:hover { background: rgba(var(--accent-rgb),.045); }
 .node-certificate-form textarea { width:100%; min-height:120px; resize:vertical; border:1px solid rgba(255,255,255,.13); border-radius:8px; padding:10px; color:#b9f2e4; background:rgba(2,7,15,.82); font:10px/1.6 ui-monospace,SFMono-Regular,Menlo,monospace; outline:none; }
 .node-certificate-form textarea:focus { border-color:rgba(var(--accent-rgb),.65); box-shadow:0 0 0 2px rgba(var(--accent-rgb),.08); }
 .node-certificate-help { color:#8191aa; font-size:9px; line-height:1.8; }
+.node-certificate-alert { padding:9px 11px; border:1px solid rgba(255,255,255,.1); border-radius:9px; font-size:9px; line-height:1.9; }
+.node-certificate-alert.expired { color:#ff9bad; border-color:rgba(255,113,141,.28); background:rgba(80,18,35,.24); }
+.node-certificate-alert.expiring { color:#ffd08c; border-color:rgba(255,189,117,.28); background:rgba(83,53,20,.2); }
+.node-certificate-alert.not-yet-valid { color:#b7c5dc; border-color:rgba(151,168,195,.24); background:rgba(35,49,70,.22); }
 .node-certificate-list { display:grid; gap:8px; }
 .node-certificate-card { display:grid; grid-template-columns:minmax(0,1fr) auto auto; align-items:center; gap:12px; padding:12px; border:1px solid rgba(255,255,255,.075); border-radius:10px; background:rgba(8,14,27,.55); }
 .node-certificate-card b,.node-certificate-card small,.node-certificate-card code { display:block; }
@@ -490,6 +494,8 @@ tbody tr:hover { background: rgba(var(--accent-rgb),.045); }
 .node-certificate-card small { margin-top:5px; color:#8090a9; font-size:8px; }
 .status.revoked i,.status.offline i,.status.expired i { background:#ff718d; }
 .status.degraded i { background:#ffbd75; }
+.status.expiring i { background:#ffbd75; box-shadow:0 0 7px #ffbd75; }
+.status.not_yet_valid i,.status.unknown i { background:#97a8c3; }
 @media(max-width:760px) {
   .node-certificate-card { grid-template-columns:1fr auto; }
   .node-certificate-card .mini-action { grid-column:1 / -1; justify-self:start; }

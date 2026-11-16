@@ -96,6 +96,19 @@ func newTestAPI(t *testing.T, store ControlStore, origins ...string) http.Handle
 	return api.Handler()
 }
 
+func TestCustomerEnrollmentRequiresConfiguredOIDC(t *testing.T) {
+	handler := newTestAPI(t, nil)
+	body := []byte(`{"device_ref":"customer-device-ref-0001","device_name":"Android","platform":"android","public_key":"BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc="}`)
+	request := httptest.NewRequest(http.MethodPost, "/v1/client/enroll", bytes.NewReader(body))
+	request.Header.Set("Authorization", "Bearer not-a-real-token")
+	request.Header.Set("Idempotency-Key", "customer-request-key-0001")
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusServiceUnavailable || !bytes.Contains(response.Body.Bytes(), []byte("customer_identity_not_configured")) {
+		t.Fatalf("unconfigured customer enrollment status=%d body=%s", response.Code, response.Body.String())
+	}
+}
+
 func TestHealthReadinessAndSecurityHeaders(t *testing.T) {
 	handler := newTestAPI(t, nil)
 	health := httptest.NewRecorder()
@@ -817,6 +830,14 @@ func TestPostgresStoreIntegration(t *testing.T) {
 		t.Fatalf("invalid one-time enrollment response: %+v", enrollmentCode)
 	}
 
+	activationStatusHash, validStatusCode := activationCodeTokenHash(enrollmentCode.Code)
+	if !validStatusCode {
+		t.Fatal("server generated an activation code that cannot be parsed as a status capability")
+	}
+	if _, statusErr := store.GetEnrolledVPNDeviceStatus(ctx, replacementDevice.ID, activationStatusHash[:]); !errors.Is(statusErr, ErrDeviceNotFound) {
+		t.Fatalf("unconsumed activation code must not authorize device status: err=%v", statusErr)
+	}
+
 	enrollmentInput := ClientEnrollmentInput{
 		ActivationCode: enrollmentCode.Code,
 		DeviceRef: "ci-enrollment-device-0001",
@@ -843,6 +864,38 @@ func TestPostgresStoreIntegration(t *testing.T) {
 	if enrolledDevice.UserID != enrollmentUserID || enrolledDevice.Status != "provisioning" ||
 		enrolledDevice.Peer.Status != "pending" || enrolledDevice.Peer.PublicKey != enrollmentInput.PublicKey {
 		t.Fatalf("unexpected client enrollment result: %+v", enrolledDevice)
+	}
+
+	// Customers can poll only their own device's asynchronous node provisioning state.
+	statusDevice, statusErr := store.GetCustomerVPNDevice(ctx, enrollmentUserID, enrolledDevice.ID)
+	if statusErr != nil || statusDevice.Status != "provisioning" || statusDevice.Peer.Status != "pending" {
+		t.Fatalf("customer device status lookup failed: device=%+v err=%v", statusDevice, statusErr)
+	}
+	if _, statusErr := store.GetCustomerVPNDevice(ctx, deviceUserID, enrolledDevice.ID); !errors.Is(statusErr, ErrDeviceNotFound) {
+		t.Fatalf("customer device lookup leaked another user's device: err=%v", statusErr)
+	}
+
+	// The consumed invite code grants read-only status access to exactly its enrolled device,
+	// even when customer OIDC is not configured on this test API.
+	inviteStatusRequest := httptest.NewRequest(http.MethodGet, "/v1/client/devices/"+enrolledDevice.ID, nil)
+	inviteStatusRequest.Header.Set("Authorization", "EnrollmentCode "+enrollmentCode.Code)
+	inviteStatusResponse := httptest.NewRecorder()
+	handler.ServeHTTP(inviteStatusResponse, inviteStatusRequest)
+	var inviteStatusDevice VPNDevice
+	if inviteStatusResponse.Code != http.StatusOK ||
+		json.Unmarshal(inviteStatusResponse.Body.Bytes(), &inviteStatusDevice) != nil ||
+		inviteStatusDevice.ID != enrolledDevice.ID ||
+		inviteStatusDevice.Status != "provisioning" ||
+		inviteStatusDevice.Peer.Status != "pending" {
+		t.Fatalf("invite-code status polling failed: status=%d body=%s", inviteStatusResponse.Code, inviteStatusResponse.Body.String())
+	}
+
+	wrongInviteStatusRequest := httptest.NewRequest(http.MethodGet, "/v1/client/devices/"+replacementDevice.ID, nil)
+	wrongInviteStatusRequest.Header.Set("Authorization", "EnrollmentCode "+enrollmentCode.Code)
+	wrongInviteStatusResponse := httptest.NewRecorder()
+	handler.ServeHTTP(wrongInviteStatusResponse, wrongInviteStatusRequest)
+	if wrongInviteStatusResponse.Code != http.StatusNotFound {
+		t.Fatalf("invite code exposed a different device: status=%d body=%s", wrongInviteStatusResponse.Code, wrongInviteStatusResponse.Body.String())
 	}
 
 	// Lost-response retry with the same key is idempotent.
@@ -885,6 +938,152 @@ func TestPostgresStoreIntegration(t *testing.T) {
 	if secondClientEnrollResponse.Code != http.StatusConflict ||
 		!bytes.Contains(secondClientEnrollResponse.Body.Bytes(), []byte("activation_code_used")) {
 		t.Fatalf("consumed activation code status=%d body=%s, want 409 activation_code_used", secondClientEnrollResponse.Code, secondClientEnrollResponse.Body.String())
+	}
+
+	// A failed peer.ensure can be retried by the owner without changing its
+	// WireGuard key, assigned addresses, or original node.
+	var ensureCommandID string
+	if err := store.pool.QueryRow(ctx, `
+		SELECT id::text
+		FROM node_commands
+		WHERE node_id = $1::uuid AND command_type = 'peer.ensure'
+		  AND payload->>'public_key' = $2 AND status = 'queued'
+		ORDER BY created_at DESC, id DESC
+		LIMIT 1
+	`, enrolledDevice.Peer.NodeID, enrolledDevice.Peer.PublicKey).Scan(&ensureCommandID); err != nil {
+		t.Fatalf("find enrolled device peer.ensure command: %v", err)
+	}
+	var leasedEnsure NodeCommand
+	for attempts := 0; attempts < 10; attempts++ {
+		command, leaseErr := store.LeaseNodeCommand(ctx, enrolledDevice.Peer.NodeID, 45*time.Second)
+		if leaseErr != nil {
+			t.Fatalf("lease command while locating enrolled peer.ensure: %v", leaseErr)
+		}
+		if command.ID == ensureCommandID {
+			leasedEnsure = command
+			break
+		}
+		if command.Type != "peer.ensure" {
+			t.Fatalf("unexpected command before enrolled peer.ensure: %+v", command)
+		}
+		if err := store.AcknowledgeNodeCommand(ctx, enrolledDevice.Peer.NodeID, command.ID, "succeeded", ""); err != nil {
+			t.Fatalf("acknowledge prior peer.ensure command %s: %v", command.ID, err)
+		}
+	}
+	if leasedEnsure.ID != ensureCommandID {
+		t.Fatalf("could not lease the expected peer.ensure command %s", ensureCommandID)
+	}
+	if err := store.AcknowledgeNodeCommand(ctx, enrolledDevice.Peer.NodeID, leasedEnsure.ID, "failed", "wg_apply_failed"); err != nil {
+		t.Fatalf("record failed peer.ensure: %v", err)
+	}
+	failedDevice, err := store.GetCustomerVPNDevice(ctx, enrollmentUserID, enrolledDevice.ID)
+	if err != nil || failedDevice.Status != "error" || failedDevice.Peer.Status != "error" ||
+		failedDevice.LastError != "wg_apply_failed" {
+		t.Fatalf("failed provisioning state was not recorded: device=%+v err=%v", failedDevice, err)
+	}
+
+	// The consumed invite code authorizes retry only for its bound device.
+	retryRequest := httptest.NewRequest(http.MethodPost, "/v1/client/devices/"+enrolledDevice.ID+"/retry", nil)
+	retryRequest.Header.Set("Authorization", "EnrollmentCode "+enrollmentCode.Code)
+	retryResponse := httptest.NewRecorder()
+	handler.ServeHTTP(retryResponse, retryRequest)
+	var retriedDevice VPNDevice
+	if retryResponse.Code != http.StatusAccepted || retryResponse.Header().Get("Retry-Queued") != "true" ||
+		json.Unmarshal(retryResponse.Body.Bytes(), &retriedDevice) != nil ||
+		retriedDevice.ID != enrolledDevice.ID || retriedDevice.Status != "provisioning" ||
+		retriedDevice.Peer.Status != "pending" || retriedDevice.Peer.PublicKey != enrolledDevice.Peer.PublicKey ||
+		retriedDevice.Peer.AssignedIPv4 != enrolledDevice.Peer.AssignedIPv4 ||
+		retriedDevice.Peer.AssignedIPv6 != enrolledDevice.Peer.AssignedIPv6 {
+		t.Fatalf("owner retry did not safely requeue the same peer: status=%d body=%s device=%+v",
+			retryResponse.Code, retryResponse.Body.String(), retriedDevice)
+	}
+
+	// A duplicate tap while the retry is queued must not create another command.
+	duplicateRetry := httptest.NewRequest(http.MethodPost, "/v1/client/devices/"+enrolledDevice.ID+"/retry", nil)
+	duplicateRetry.Header.Set("Authorization", "EnrollmentCode "+enrollmentCode.Code)
+	duplicateRetryResponse := httptest.NewRecorder()
+	handler.ServeHTTP(duplicateRetryResponse, duplicateRetry)
+	if duplicateRetryResponse.Code != http.StatusAccepted || duplicateRetryResponse.Header().Get("Retry-Queued") != "" {
+		t.Fatalf("duplicate retry should return the existing provisioning state: status=%d body=%s",
+			duplicateRetryResponse.Code, duplicateRetryResponse.Body.String())
+	}
+	var activeEnsureCount int
+	if err := store.pool.QueryRow(ctx, `
+		SELECT count(*) FROM node_commands
+		WHERE node_id = $1::uuid AND command_type = 'peer.ensure'
+		  AND payload->>'public_key' = $2 AND status IN ('queued', 'leased')
+	`, enrolledDevice.Peer.NodeID, enrolledDevice.Peer.PublicKey).Scan(&activeEnsureCount); err != nil || activeEnsureCount != 1 {
+		t.Fatalf("active peer.ensure retries=%d err=%v, want exactly one", activeEnsureCount, err)
+	}
+
+	retryCommand, err := store.LeaseNodeCommand(ctx, enrolledDevice.Peer.NodeID, 45*time.Second)
+	if err != nil || retryCommand.Type != "peer.ensure" || retryCommand.ID == leasedEnsure.ID {
+		t.Fatalf("new peer.ensure retry command was not leased: command=%+v err=%v", retryCommand, err)
+	}
+	var retryPayload struct {
+		PublicKey string `json:"public_key"`
+		IPv4      string `json:"ipv4"`
+		IPv6      string `json:"ipv6"`
+	}
+	if err := json.Unmarshal(retryCommand.Payload, &retryPayload); err != nil ||
+		retryPayload.PublicKey != enrolledDevice.Peer.PublicKey ||
+		retryPayload.IPv4 != enrolledDevice.Peer.AssignedIPv4 ||
+		retryPayload.IPv6 != enrolledDevice.Peer.AssignedIPv6 {
+		t.Fatalf("retry command changed the original peer identity or addresses: payload=%s err=%v",
+			retryCommand.Payload, err)
+	}
+	if err := store.AcknowledgeNodeCommand(ctx, enrolledDevice.Peer.NodeID, retryCommand.ID, "succeeded", ""); err != nil {
+		t.Fatalf("acknowledge retried peer.ensure: %v", err)
+	}
+	activeDevice, err := store.GetCustomerVPNDevice(ctx, enrollmentUserID, enrolledDevice.ID)
+	if err != nil || activeDevice.Status != "active" || activeDevice.Peer.Status != "active" {
+		t.Fatalf("successful retry did not activate the device: device=%+v err=%v", activeDevice, err)
+	}
+
+	// A failed peer.remove must never be converted into peer.ensure by this endpoint.
+	removePayload, err := json.Marshal(map[string]string{"public_key": enrolledDevice.Peer.PublicKey})
+	if err != nil {
+		t.Fatal(err)
+	}
+	removeHash := sha256.Sum256(removePayload)
+	if _, err := store.pool.Exec(ctx, `
+		INSERT INTO node_commands
+			(node_id, created_by_operator_id, command_type, payload, request_hash, idempotency_key,
+			 status, last_error, completed_at)
+		VALUES ($1::uuid, NULL, 'peer.remove', $2::jsonb, $3, $4,
+		        'failed', 'wg_remove_failed', now())
+	`, enrolledDevice.Peer.NodeID, string(removePayload), removeHash[:], newRequestID()); err != nil {
+		t.Fatalf("insert failed peer.remove fixture: %v", err)
+	}
+	if _, err := store.pool.Exec(ctx, `
+		UPDATE wireguard_peers SET status = 'error' WHERE id = $1::uuid
+	`, enrolledDevice.Peer.ID); err != nil {
+		t.Fatalf("set failed removal peer fixture: %v", err)
+	}
+	if _, err := store.pool.Exec(ctx, `
+		UPDATE vpn_devices SET status = 'error', last_error = 'wg_remove_failed' WHERE id = $1::uuid
+	`, enrolledDevice.ID); err != nil {
+		t.Fatalf("set failed removal device fixture: %v", err)
+	}
+	unsafeRetry := httptest.NewRequest(http.MethodPost, "/v1/client/devices/"+enrolledDevice.ID+"/retry", nil)
+	unsafeRetry.Header.Set("Authorization", "EnrollmentCode "+enrollmentCode.Code)
+	unsafeRetryResponse := httptest.NewRecorder()
+	handler.ServeHTTP(unsafeRetryResponse, unsafeRetry)
+	if unsafeRetryResponse.Code != http.StatusConflict ||
+		!bytes.Contains(unsafeRetryResponse.Body.Bytes(), []byte("device_retry_not_allowed")) {
+		t.Fatalf("failed peer.remove must not be retried as peer.ensure: status=%d body=%s",
+			unsafeRetryResponse.Code, unsafeRetryResponse.Body.String())
+	}
+
+	if _, err := store.pool.Exec(ctx, `
+		UPDATE vpn_user_enrollment_codes
+		SET consumed_at = now() - interval '25 hours'
+		WHERE token_hash = $1
+	`, activationStatusHash[:]); err != nil {
+		t.Fatal(err)
+	}
+	if _, statusErr := store.GetEnrolledVPNDeviceStatus(ctx, enrolledDevice.ID, activationStatusHash[:]); !errors.Is(statusErr, ErrDeviceNotFound) {
+		t.Fatalf("invite-code status capability must expire after 24 hours: err=%v", statusErr)
 	}
 
 }

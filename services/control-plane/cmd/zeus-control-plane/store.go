@@ -8,6 +8,7 @@ import (
 )
 
 var (
+	ErrCustomerIdentityNotVerified = errors.New("customer identity is not verified")
 	ErrIdempotencyConflict     = errors.New("idempotency key was already used with a different request")
 	ErrVPNUserNotFound         = errors.New("VPN user not found")
 	ErrNodeNotFound            = errors.New("VPN node not found")
@@ -16,6 +17,7 @@ var (
 	ErrNodeCommandConflict     = errors.New("node command is not in an acknowledgeable state")
 	ErrNodeCommandLeaseExpired = errors.New("node command lease expired")
 	ErrDeviceNotFound          = errors.New("VPN device not found")
+	ErrDeviceRetryNotAllowed   = errors.New("VPN device provisioning cannot be retried in its current state")
 	ErrDeviceConflict          = errors.New("VPN device already exists or is not in a mutable state")
 	ErrUserNotActive           = errors.New("VPN user is not active")
 	ErrDeviceLimitReached      = errors.New("VPN user has reached the device limit")
@@ -144,6 +146,20 @@ type DeviceMutationStore interface {
 	EnrollVPNDevice(context.Context, []byte, string, []byte, CreateDeviceInput, string, *string) (VPNDevice, bool, error)
 	CreateVPNDevice(context.Context, string, string, string, string, []byte, CreateDeviceInput, string, *string) (VPNDevice, bool, error)
 	RevokeVPNDevice(context.Context, string, string, string, string, string, []byte, string, *string) (VPNDevice, bool, error)
+}
+
+type CustomerSelfServiceStore interface {
+	EnsureExternalVPNUser(context.Context, string, string) (VPNUser, error)
+	EnrollCustomerVPNDevice(context.Context, string, string, []byte, CreateDeviceInput, string, *string) (VPNDevice, bool, error)
+	GetCustomerVPNDevice(context.Context, string, string) (VPNDevice, error)
+}
+
+type EnrollmentStatusStore interface {
+	GetEnrolledVPNDeviceStatus(context.Context, string, []byte) (VPNDevice, error)
+}
+
+type ClientDeviceRetryStore interface {
+	RetryVPNDeviceProvisioning(context.Context, string, string, string, *string) (VPNDevice, bool, error)
 }
 
 type NodeAgentStore interface {

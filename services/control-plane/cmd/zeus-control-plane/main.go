@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/signal"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 )
@@ -102,6 +103,24 @@ func main() {
 		logger.Error("API initialization failed", "error", err)
 		os.Exit(1)
 	}
+	oidcIssuer := strings.TrimSpace(os.Getenv("ZEUS_OIDC_ISSUER"))
+	oidcClientID := strings.TrimSpace(os.Getenv("ZEUS_OIDC_CLIENT_ID"))
+	if oidcIssuer != "" || oidcClientID != "" {
+		if oidcIssuer == "" || oidcClientID == "" {
+			logger.Error("ZEUS_OIDC_ISSUER and ZEUS_OIDC_CLIENT_ID must be configured together")
+			os.Exit(1)
+		}
+		oidcCtx, oidcCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		err = api.ConfigureCustomerOIDC(oidcCtx, oidcIssuer, oidcClientID)
+		oidcCancel()
+		if err != nil {
+			logger.Error("customer OIDC initialization failed", "error", err)
+			os.Exit(1)
+		}
+		logger.Info("customer OIDC self-service enrollment enabled", "issuer", oidcIssuer)
+	} else {
+		logger.Warn("customer OIDC not configured; client self-registration remains disabled")
+	}
 	server := &http.Server{
 		Addr: address, Handler: api.Handler(),
 		ReadHeaderTimeout: 5 * time.Second,
@@ -151,6 +170,17 @@ func main() {
 		logger.Info("node-agent mTLS listener configured", "address", nodeAddress)
 	}
 
+	maintenanceCtx, stopMaintenance := context.WithCancel(context.Background())
+	defer stopMaintenance()
+	var maintenanceWG sync.WaitGroup
+	if postgres != nil {
+		maintenanceWG.Add(1)
+		go func() {
+			defer maintenanceWG.Done()
+			runSessionCleanup(maintenanceCtx, postgres, logger)
+		}()
+	}
+
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, os.Interrupt, syscall.SIGTERM)
 	errorsCh := make(chan error, 2)
@@ -173,6 +203,9 @@ func main() {
 	case err := <-errorsCh:
 		logger.Error("HTTP server stopped unexpectedly", "error", err)
 	}
+
+	stopMaintenance()
+	maintenanceWG.Wait()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()

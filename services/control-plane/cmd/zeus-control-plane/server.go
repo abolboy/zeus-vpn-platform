@@ -21,6 +21,7 @@ import (
 
 	"crypto/x509"
 
+	"github.com/coreos/go-oidc/v3/oidc"
 	"github.com/jackc/pgx/v5"
 )
 
@@ -30,10 +31,13 @@ type API struct {
 	logger       *slog.Logger
 	limiter      *loginLimiter
 	enrollmentLimiter *loginLimiter
+	customerStatusLimiter *loginLimiter
 	hashSlots    chan struct{}
 	dummyHash    string
 	allowedOrigin map[string]struct{}
 	nodeClientCAs *x509.CertPool
+	customerVerifier *oidc.IDTokenVerifier
+	customerIssuer string
 }
 
 type contextKey string
@@ -83,6 +87,25 @@ var uuidPattern = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-
 var idempotencyKeyPattern = regexp.MustCompile(`^[A-Za-z0-9._~-]{16,128}$`)
 var deviceRefPattern = regexp.MustCompile(`^[A-Za-z0-9._~-]{16,128}$`)
 
+func activationCodeTokenHash(code string) ([32]byte, bool) {
+	if len(code) != 43 {
+		return [32]byte{}, false
+	}
+	rawCode, err := base64.RawURLEncoding.DecodeString(code)
+	if err != nil || len(rawCode) != 32 || base64.RawURLEncoding.EncodeToString(rawCode) != code {
+		for index := range rawCode {
+			rawCode[index] = 0
+		}
+		return [32]byte{}, false
+	}
+	hash := sha256.Sum256(rawCode)
+	for index := range rawCode {
+		rawCode[index] = 0
+	}
+	return hash, true
+}
+
+
 func NewAPI(version string, store ControlStore, logger *slog.Logger, allowedOrigins []string) (*API, error) {
 	if logger == nil {
 		logger = slog.Default()
@@ -104,7 +127,8 @@ func NewAPI(version string, store ControlStore, logger *slog.Logger, allowedOrig
 	}
 	return &API{
 		version: version, store: store, logger: logger,
-		limiter: newLoginLimiter(), enrollmentLimiter: newLoginLimiter(), hashSlots: make(chan struct{}, 2),
+		limiter: newLoginLimiter(), enrollmentLimiter: newLoginLimiter(),
+		customerStatusLimiter: newLoginLimiter(), hashSlots: make(chan struct{}, 2),
 		dummyHash: dummyHash, allowedOrigin: origins,
 	}, nil
 }
@@ -125,6 +149,8 @@ func (a *API) Handler() http.Handler {
 	mux.HandleFunc("POST /v1/users/{userID}/devices", a.handleCreateDevice)
 	mux.HandleFunc("POST /v1/users/{userID}/enrollment-code", a.handleCreateEnrollmentCode)
 	mux.HandleFunc("POST /v1/client/enroll", a.handleClientEnrollment)
+	mux.HandleFunc("GET /v1/client/devices/{deviceID}", a.handleCustomerDeviceStatus)
+	mux.HandleFunc("POST /v1/client/devices/{deviceID}/retry", a.handleCustomerDeviceRetry)
 	mux.HandleFunc("POST /v1/users/{userID}/devices/{deviceID}/revoke", a.handleRevokeDevice)
 	mux.HandleFunc("GET /v1/nodes", a.handleListNodes)
 	mux.HandleFunc("POST /v1/nodes", a.handleCreateNode)
@@ -728,6 +754,10 @@ func (a *API) handleCreateEnrollmentCode(w http.ResponseWriter, r *http.Request)
 }
 
 func (a *API) handleClientEnrollment(w http.ResponseWriter, r *http.Request) {
+	if strings.TrimSpace(r.Header.Get("Authorization")) != "" {
+		a.handleCustomerClientEnrollment(w, r)
+		return
+	}
 	ip := remoteIP(r.RemoteAddr)
 	limiterKey := "unknown"
 	if ip != nil {
@@ -754,14 +784,10 @@ func (a *API) handleClientEnrollment(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid_activation_code", "کد فعال‌سازی معتبر نیست", requestIDFrom(r))
 		return
 	}
-	rawCode, err := base64.RawURLEncoding.DecodeString(input.ActivationCode)
-	if err != nil || len(rawCode) != 32 || base64.RawURLEncoding.EncodeToString(rawCode) != input.ActivationCode {
+	tokenHash, validActivationCode := activationCodeTokenHash(input.ActivationCode)
+	if !validActivationCode {
 		writeError(w, http.StatusBadRequest, "invalid_activation_code", "کد فعال‌سازی معتبر نیست", requestIDFrom(r))
 		return
-	}
-	tokenHash := sha256.Sum256(rawCode)
-	for index := range rawCode {
-		rawCode[index] = 0
 	}
 
 	deviceInput := CreateDeviceInput{

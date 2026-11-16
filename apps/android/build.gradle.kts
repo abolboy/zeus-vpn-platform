@@ -4,6 +4,9 @@ plugins {
 }
 
 val zeusApiBaseUrl = providers.gradleProperty("ZEUS_API_BASE_URL").orElse("").get()
+val zeusOidcIssuer = providers.gradleProperty("ZEUS_OIDC_ISSUER").orElse("").get()
+val zeusOidcClientId = providers.gradleProperty("ZEUS_OIDC_CLIENT_ID").orElse("").get()
+val zeusOidcRedirectUri = providers.gradleProperty("ZEUS_OIDC_REDIRECT_URI").orElse("com.zeusvpn.app:/oauth2redirect").get()
 
 android {
     namespace = "com.zeusvpn.app"
@@ -14,11 +17,16 @@ android {
         targetSdk = 36
         versionCode = 1
         versionName = "0.1.0"
+        manifestPlaceholders["appAuthRedirectScheme"] = "com.zeusvpn.app"
         buildConfigField("String", "ZEUS_API_BASE_URL", "\"$zeusApiBaseUrl\"")
+        buildConfigField("String", "ZEUS_OIDC_ISSUER", "\"$zeusOidcIssuer\"")
+        buildConfigField("String", "ZEUS_OIDC_CLIENT_ID", "\"$zeusOidcClientId\"")
+        buildConfigField("String", "ZEUS_OIDC_REDIRECT_URI", "\"$zeusOidcRedirectUri\"")
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
     buildTypes {
-        debug { applicationIdSuffix = ".debug"; versionNameSuffix = "-dev" }
+        // Keep this diagnostics APK installable beside an earlier .debug build.
+        debug { applicationIdSuffix = ".diagnostics"; versionNameSuffix = "-diagnostics" }
         release {
             isMinifyEnabled = true
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
@@ -41,6 +49,8 @@ dependencies {
     implementation(composeBom)
     androidTestImplementation(composeBom)
     implementation("androidx.activity:activity-compose:1.13.0")
+    implementation("net.openid:appauth:0.11.1")
+    implementation("androidx.compose.material:material-icons-extended")
     // Official embeddable WireGuard userspace tunnel backend.
     implementation("com.wireguard.android:tunnel:1.0.20260102")
     coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.0.3")

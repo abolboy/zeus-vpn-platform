@@ -6,18 +6,18 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.graphics.Color
 
 private val ZeusColors = darkColorScheme(
-    primary = Color(0xFF62E6C2),
-    onPrimary = Color(0xFF071321),
-    secondary = Color(0xFF9D85FF),
-    onSecondary = Color(0xFF111126),
-    tertiary = Color(0xFF7BD9F8),
-    background = Color(0xFF070D19),
-    onBackground = Color(0xFFF3F7FC),
-    surface = Color(0xFF111D31),
-    onSurface = Color(0xFFF3F7FC),
-    surfaceVariant = Color(0xFF1B2A40),
-    onSurfaceVariant = Color(0xFFB1C0D4),
-    outline = Color(0xFF34445D),
+    primary = Color(0xFF4E9DDB),
+    onPrimary = Color(0xFFFFFFFF),
+    secondary = Color(0xFF42C69A),
+    onSecondary = Color(0xFF071A16),
+    tertiary = Color(0xFFE6B566),
+    background = Color(0xFF0B1220),
+    onBackground = Color(0xFFF2F5F9),
+    surface = Color(0xFF151F30),
+    onSurface = Color(0xFFF2F5F9),
+    surfaceVariant = Color(0xFF1B293D),
+    onSurfaceVariant = Color(0xFFA7B5C8),
+    outline = Color(0xFF2A394E),
 )
 
 @Composable

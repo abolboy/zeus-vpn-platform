@@ -55,11 +55,14 @@ Optional WireGuard settings:
     ZEUS_WG_INTERFACE=wg0
     ZEUS_WG_CONFIG_PATH=/etc/wireguard/wg0.conf
     ZEUS_WG_BINARY=/usr/bin/wg
+    ZEUS_IP_BINARY=/usr/sbin/ip
     ZEUS_WG_IPV4_POOL=10.77.77.0/24
     ZEUS_WG_IPV6_POOL=fd77:77:77::/64
     ZEUS_NODE_POLL_INTERVAL=5s
 
-The process defaults to dry-run. It validates commands and reports mutation_disabled without writing the WireGuard file or executing wg.
+The process defaults to dry-run. It validates commands and previews the required WireGuard peer and per-address kernel-route operations without changing the WireGuard file, routes, or runtime.
+
+When mutations are explicitly enabled, each peer.ensure also verifies/installs exact IPv4 /32 and IPv6 /128 routes through the configured WireGuard interface. Existing exact routes through another interface are rejected rather than overwritten. Routes already covered by the WireGuard interface are left unchanged.
 
 Real changes require both:
 - ZEUS_NODE_ALLOW_MUTATIONS=true

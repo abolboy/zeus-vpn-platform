@@ -21,7 +21,7 @@ A tunnel still requires a usable network route to a reachable endpoint. No app c
     cd ../vpn-node && go test -race ./... && go vet ./...
     bash scripts/verify-repository.sh
 
-See docs/phase-1-plan.md, docs/offline-and-network-resilience.md, docs/phase-2-plan.md, and docs/node-agent-protocol.md.
+See docs/phase-1-plan.md, docs/offline-and-network-resilience.md, docs/phase-2-plan.md, docs/node-agent-protocol.md, and docs/staging-deployment.md for the isolated staging runbook. Hardened systemd units and non-secret environment templates are under deploy/.
 
 ## Production boundary
 

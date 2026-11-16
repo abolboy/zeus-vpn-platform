@@ -1,11 +1,13 @@
 package com.zeusvpn.app.network
 
 import android.os.Build
+import android.os.SystemClock
 import com.wireguard.crypto.KeyPair
 import com.zeusvpn.app.BuildConfig
 import com.zeusvpn.app.data.EncryptedWireGuardConfigStore
 import com.zeusvpn.app.vpn.WireGuardProfileBuilder
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
 import java.io.ByteArrayOutputStream
@@ -29,6 +31,26 @@ class PendingEnrollmentExistsException : Exception(
     "An unfinished enrollment is stored securely on this device. Retry it before starting another one."
 )
 
+private val pendingEnrollmentClearErrorCodes = setOf(
+    "activation_code_invalid",
+    "activation_code_expired",
+    "activation_code_used",
+    "device_conflict",
+    "device_not_found",
+    "enrollment_status_invalid",
+    "device_retry_not_allowed",
+    "device_state_invalid",
+)
+
+internal fun shouldClearPendingEnrollment(errorCode: String): Boolean =
+    errorCode in pendingEnrollmentClearErrorCodes
+
+internal fun shouldRetryProvisioning(
+    deviceStatus: String,
+    peerStatus: String,
+    retryAlreadyRequested: Boolean,
+): Boolean = !retryAlreadyRequested && deviceStatus == "error" && peerStatus == "error"
+
 /**
  * Client-side activation. The private key is generated locally and remains inside
  * the encrypted pending record/profile store; only its public key is sent to the API.
@@ -45,60 +67,188 @@ class ClientEnrollmentRepository(
 
     fun hasPendingEnrollment(): Boolean = encryptedStore.hasPendingEnrollment()
 
+    fun hasPendingInviteEnrollment(): Boolean =
+        loadPendingEnrollment()?.activationCode?.isNotBlank() == true
+
     suspend fun enroll(
         activationCode: String,
         deviceName: String = Build.MODEL.orEmpty(),
+        idToken: String? = null,
     ): ClientEnrollmentResult = withContext(Dispatchers.IO) {
         val safeDeviceName = deviceName.trim().ifBlank { "Android device" }.take(80)
+        val cleanActivationCode = activationCode.trim()
+        val cleanIdToken = idToken?.trim()?.takeIf { it.isNotEmpty() }
         val pending = loadPendingEnrollment() ?: createPendingEnrollment(
-            activationCode = activationCode.trim(),
+            activationCode = cleanActivationCode,
             deviceName = safeDeviceName,
+            hasCustomerIdentity = cleanIdToken != null,
         )
 
-        if (activationCode.isNotBlank() && activationCode.trim() != pending.activationCode) {
-            throw PendingEnrollmentExistsException()
-        }
+        try {
+            if (cleanActivationCode.isNotBlank() && cleanActivationCode != pending.activationCode) {
+                throw PendingEnrollmentExistsException()
+            }
 
-        val response = try {
-            postEnrollment(pending)
+            val response = postEnrollment(pending, cleanIdToken)
+            var device = response.getJSONObject("device")
+            val statusAuthorization = if (pending.activationCode.isNotBlank()) {
+                "EnrollmentCode ${pending.activationCode}"
+            } else {
+                val identityToken = cleanIdToken
+                    ?: throw ClientEnrollmentException("customer_identity_required", "برای ادامهٔ ثبت دستگاه دوباره وارد حساب شوید.")
+                "Bearer $identityToken"
+            }
+            device = awaitDeviceActive(device, statusAuthorization)
+            val peer = device.getJSONObject("peer")
+            val profile = WireGuardProfileBuilder.build(
+                clientPrivateKey = pending.privateKey,
+                clientIPv4 = peer.getString("assigned_ipv4"),
+                clientIPv6 = peer.getString("assigned_ipv6"),
+                serverPublicKey = peer.getString("server_public_key"),
+                endpointHost = peer.getString("endpoint_host"),
+                endpointPort = peer.getInt("endpoint_port"),
+            )
+            ClientEnrollmentResult(
+                profileText = profile,
+                deviceID = device.getString("id"),
+            )
         } catch (error: ClientEnrollmentException) {
-            if (error.errorCode in setOf(
-                    "activation_code_invalid",
-                    "activation_code_expired",
-                    "activation_code_used",
-                    "device_conflict",
-                )
-            ) {
+            if (shouldClearPendingEnrollment(error.errorCode)) {
                 encryptedStore.clearPendingEnrollment()
             }
             throw error
         }
-        val device = response.getJSONObject("device")
-        val peer = device.getJSONObject("peer")
-        val profile = WireGuardProfileBuilder.build(
-            clientPrivateKey = pending.privateKey,
-            clientIPv4 = peer.getString("assigned_ipv4"),
-            clientIPv6 = peer.getString("assigned_ipv6"),
-            serverPublicKey = peer.getString("server_public_key"),
-            endpointHost = peer.getString("endpoint_host"),
-            endpointPort = peer.getInt("endpoint_port"),
-        )
-        ClientEnrollmentResult(
-            profileText = profile,
-            deviceID = device.getString("id"),
-        )
     }
 
     fun completeEnrollment() {
         encryptedStore.clearPendingEnrollment()
     }
 
+    private suspend fun awaitDeviceActive(initial: JSONObject, authorization: String): JSONObject {
+        val deviceID = initial.getString("id")
+        require(deviceID.matches(Regex("^[0-9a-fA-F-]{36}$"))) {
+            "The ZEUS API returned an invalid device identifier."
+        }
+        var current = initial
+        var retryRequested = false
+        var deadline = SystemClock.elapsedRealtime() + PROVISIONING_TIMEOUT_MS
+
+        while (true) {
+            val deviceStatus = current.optString("status")
+            val peerStatus = current.optJSONObject("peer")?.optString("status").orEmpty()
+            if (deviceStatus == "active" && peerStatus == "active") return current
+            if (deviceStatus in setOf("revoking", "revoked") || peerStatus in setOf("revoking", "revoked")) {
+                val code = current.optString("last_error").ifBlank { "device_state_invalid" }
+                throw ClientEnrollmentException(
+                    code,
+                    "وضعیت دستگاه اجازه فعال‌سازی مجدد نمی‌دهد؛ وضعیت دستگاه باید در پنل بررسی شود.",
+                )
+            }
+            if (shouldRetryProvisioning(deviceStatus, peerStatus, retryRequested)) {
+                retryRequested = true
+                current = retryDeviceProvisioning(deviceID, authorization)
+                deadline = SystemClock.elapsedRealtime() + PROVISIONING_TIMEOUT_MS
+                continue
+            }
+            if (deviceStatus == "error" || peerStatus == "error") {
+                if (deviceStatus != "error" || peerStatus != "error") {
+                    throw ClientEnrollmentException(
+                        "provisioning_state_inconsistent",
+                        "وضعیت دستگاه و Peer در سرور با هم سازگار نیست؛ ثبت امن حفظ شده و باید وضعیت Node و Control Plane بررسی شود.",
+                    )
+                }
+                val code = current.optString("last_error").ifBlank { "peer_provision_failed" }
+                throw ClientEnrollmentException(
+                    code,
+                    "سرور نتوانست دستگاه را فعال کند. وضعیت نود یا ظرفیت سرور باید بررسی شود.",
+                )
+            }
+            if (SystemClock.elapsedRealtime() >= deadline) {
+                throw ClientEnrollmentException(
+                    "peer_provision_timeout",
+                    "درخواست ثبت شد اما نود هنوز اعمال کلید را تأیید نکرده است. همین صفحه را بعداً دوباره امتحان کنید.",
+                )
+            }
+            delay(PROVISIONING_POLL_INTERVAL_MS)
+            current = fetchDeviceStatus(deviceID, authorization)
+        }
+    }
+
+    private suspend fun fetchDeviceStatus(deviceID: String, authorization: String): JSONObject =
+        withContext(Dispatchers.IO) {
+            val endpoint = URI(configuredBaseUrl + "/v1/client/devices/" + deviceID).toURL()
+            val connection = endpoint.openConnection() as HttpsURLConnection
+            try {
+                connection.requestMethod = "GET"
+                connection.connectTimeout = CONNECT_TIMEOUT_MS
+                connection.readTimeout = READ_TIMEOUT_MS
+                connection.instanceFollowRedirects = false
+                connection.setRequestProperty("Accept", "application/json")
+                connection.setRequestProperty("Authorization", authorization)
+
+                val status = connection.responseCode
+                val stream = if (status in 200..299) connection.inputStream else connection.errorStream
+                val responseText = stream?.use { it.readUtf8Limited(MAX_RESPONSE_BYTES) }.orEmpty()
+                val json = runCatching { JSONObject(responseText) }.getOrElse {
+                    throw IOException("The ZEUS API returned an invalid device status response.")
+                }
+                if (status !in 200..299) {
+                    val error = json.optJSONObject("error")
+                    throw ClientEnrollmentException(
+                        error?.optString("code").orEmpty().ifBlank { "http_$status" },
+                        error?.optString("message").orEmpty().ifBlank { "بررسی وضعیت ثبت دستگاه انجام نشد." },
+                    )
+                }
+                json
+            } finally {
+                connection.disconnect()
+            }
+        }
+
+    private suspend fun retryDeviceProvisioning(deviceID: String, authorization: String): JSONObject =
+        withContext(Dispatchers.IO) {
+            val endpoint = URI(configuredBaseUrl + "/v1/client/devices/" + deviceID + "/retry").toURL()
+            val connection = endpoint.openConnection() as HttpsURLConnection
+            try {
+                connection.requestMethod = "POST"
+                connection.connectTimeout = CONNECT_TIMEOUT_MS
+                connection.readTimeout = READ_TIMEOUT_MS
+                connection.instanceFollowRedirects = false
+                connection.setRequestProperty("Accept", "application/json")
+                connection.setRequestProperty("Authorization", authorization)
+
+                val status = connection.responseCode
+                val stream = if (status in 200..299) connection.inputStream else connection.errorStream
+                val responseText = stream?.use { it.readUtf8Limited(MAX_RESPONSE_BYTES) }.orEmpty()
+                val json = runCatching { JSONObject(responseText) }.getOrElse {
+                    throw IOException("The ZEUS API returned an invalid retry response.")
+                }
+                if (status !in 200..299) {
+                    val error = json.optJSONObject("error")
+                    throw ClientEnrollmentException(
+                        error?.optString("code").orEmpty().ifBlank { "http_$status" },
+                        error?.optString("message").orEmpty().ifBlank { "تلاش مجدد برای فعال‌سازی دستگاه انجام نشد." },
+                    )
+                }
+                if (status != 200 && status != 202) {
+                    throw IOException("The ZEUS API returned an unexpected retry status.")
+                }
+                json
+            } finally {
+                connection.disconnect()
+            }
+        }
+
     private fun createPendingEnrollment(
         activationCode: String,
         deviceName: String,
+        hasCustomerIdentity: Boolean,
     ): PendingEnrollment {
-        require(isActivationCodeShapeValid(activationCode)) {
-            "Activation code must be copied in full."
+        require(
+            (activationCode.isNotBlank() && isActivationCodeShapeValid(activationCode)) ||
+                (activationCode.isBlank() && hasCustomerIdentity)
+        ) {
+            "A valid one-time activation code or verified customer session is required."
         }
         require(deviceName.isNotBlank() && deviceName.length <= 80) {
             "Device name is invalid."
@@ -154,16 +304,21 @@ class ClientEnrollmentRepository(
         }
     }
 
-    private fun postEnrollment(pending: PendingEnrollment): JSONObject {
+    private fun postEnrollment(pending: PendingEnrollment, idToken: String?): JSONObject {
         val body = JSONObject()
-            .put("activation_code", pending.activationCode)
             .put("device_ref", pending.deviceRef)
             .put("device_name", pending.deviceName)
             .put("platform", pending.platform)
             .put("public_key", pending.publicKey)
+            .apply {
+                if (pending.activationCode.isNotBlank()) put("activation_code", pending.activationCode)
+            }
             .toString()
             .toByteArray(Charsets.UTF_8)
 
+        require(pending.activationCode.isNotBlank() || !idToken.isNullOrBlank()) {
+            "A fresh customer identity token is required to continue this enrollment."
+        }
         val connection = enrollmentEndpoint().openConnection() as HttpsURLConnection
         try {
             connection.requestMethod = "POST"
@@ -175,6 +330,9 @@ class ClientEnrollmentRepository(
             connection.setRequestProperty("Accept", "application/json")
             connection.setRequestProperty("Content-Type", "application/json; charset=utf-8")
             connection.setRequestProperty("Idempotency-Key", pending.idempotencyKey)
+            if (pending.activationCode.isBlank() && !idToken.isNullOrBlank()) {
+                connection.setRequestProperty("Authorization", "Bearer $idToken")
+            }
             connection.outputStream.use { it.write(body) }
 
             val status = connection.responseCode
@@ -239,6 +397,8 @@ class ClientEnrollmentRepository(
         const val ACTIVATION_CODE_LENGTH = 43
         const val CONNECT_TIMEOUT_MS = 10_000
         const val READ_TIMEOUT_MS = 20_000
+        const val PROVISIONING_TIMEOUT_MS = 90_000L
+        const val PROVISIONING_POLL_INTERVAL_MS = 3_000L
         const val MAX_RESPONSE_BYTES = 32 * 1024
     }
 }

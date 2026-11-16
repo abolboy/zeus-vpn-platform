@@ -395,6 +395,142 @@ func (s *PostgresStore) GetCustomerVPNDevice(ctx context.Context, userID, device
 	return device, nil
 }
 
+func (s *PostgresStore) RetryVPNDeviceProvisioning(
+	ctx context.Context,
+	userID, deviceID, requestID string,
+	sourceIP *string,
+) (VPNDevice, bool, error) {
+	if !uuidPattern.MatchString(userID) || !uuidPattern.MatchString(deviceID) {
+		return VPNDevice{}, false, ErrDeviceNotFound
+	}
+
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return VPNDevice{}, false, err
+	}
+	defer tx.Rollback(ctx)
+
+	var device VPNDevice
+	var nodeReady bool
+	err = tx.QueryRow(ctx, `
+		SELECT d.id::text, d.user_id::text, d.device_ref, d.device_name, d.platform,
+		       d.status, d.created_at, COALESCE(d.last_error, ''),
+		       p.id::text, p.node_id::text, p.public_key, host(p.assigned_ipv4),
+		       COALESCE(host(p.assigned_ipv6), ''), n.public_key, n.endpoint_host,
+		       n.endpoint_port, p.status,
+		       (n.status = 'online' AND n.last_seen_at > now() - interval '90 seconds'
+		        AND n.client_ipv4_pool IS NOT NULL AND n.client_ipv6_pool IS NOT NULL
+		        AND n.interface_ipv4 IS NOT NULL AND n.interface_ipv6 IS NOT NULL
+		        AND EXISTS (
+		            SELECT 1 FROM vpn_node_agent_certificates ac
+		            WHERE ac.node_id = n.id
+		              AND ac.revoked_at IS NULL
+		              AND ac.not_before <= now()
+		              AND ac.not_after > now()
+		        ))
+		FROM vpn_devices d
+		JOIN wireguard_peers p ON p.device_id = d.id
+		JOIN vpn_nodes n ON n.id = p.node_id
+		WHERE d.id = $1::uuid AND d.user_id = $2::uuid
+		FOR UPDATE OF d, p
+	`, deviceID, userID).Scan(
+		&device.ID, &device.UserID, &device.DeviceRef, &device.DeviceName,
+		&device.Platform, &device.Status, &device.CreatedAt, &device.LastError,
+		&device.Peer.ID, &device.Peer.NodeID, &device.Peer.PublicKey,
+		&device.Peer.AssignedIPv4, &device.Peer.AssignedIPv6,
+		&device.Peer.ServerPublicKey, &device.Peer.EndpointHost,
+		&device.Peer.EndpointPort, &device.Peer.Status, &nodeReady,
+	)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return VPNDevice{}, false, ErrDeviceNotFound
+	}
+	if err != nil {
+		return VPNDevice{}, false, err
+	}
+
+	// Make retries safe under duplicate taps and concurrent HTTP requests.
+	if device.Status == "active" ||
+		(device.Status == "provisioning" && device.Peer.Status == "pending") {
+		if err := tx.Commit(ctx); err != nil {
+			return VPNDevice{}, false, err
+		}
+		return device, false, nil
+	}
+	if device.Status != "error" || device.Peer.Status != "error" {
+		return VPNDevice{}, false, ErrDeviceRetryNotAllowed
+	}
+
+	// Only a failed/expired peer.ensure can be retried here. In particular,
+	// never turn a failed peer.remove into a peer.ensure and resurrect a revoked device.
+	var latestCommandType, latestCommandStatus string
+	err = tx.QueryRow(ctx, `
+		SELECT command_type, status
+		FROM node_commands
+		WHERE node_id = $1::uuid AND payload->>'public_key' = $2
+		ORDER BY created_at DESC, id DESC
+		LIMIT 1
+	`, device.Peer.NodeID, device.Peer.PublicKey).Scan(&latestCommandType, &latestCommandStatus)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return VPNDevice{}, false, ErrDeviceRetryNotAllowed
+		}
+		return VPNDevice{}, false, err
+	}
+	if latestCommandType != "peer.ensure" ||
+		(latestCommandStatus != "failed" && latestCommandStatus != "expired") {
+		return VPNDevice{}, false, ErrDeviceRetryNotAllowed
+	}
+	if !nodeReady {
+		return VPNDevice{}, false, ErrNoProvisioningNode
+	}
+
+	payload, err := json.Marshal(map[string]string{
+		"public_key": device.Peer.PublicKey,
+		"ipv4":       device.Peer.AssignedIPv4,
+		"ipv6":       device.Peer.AssignedIPv6,
+	})
+	if err != nil {
+		return VPNDevice{}, false, err
+	}
+	commandHash := sha256.Sum256(payload)
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO node_commands
+			(node_id, created_by_operator_id, command_type, payload, request_hash, idempotency_key)
+		VALUES ($1::uuid, NULL, 'peer.ensure', $2::jsonb, $3, $4)
+	`, device.Peer.NodeID, string(payload), commandHash[:], newRequestID()); err != nil {
+		return VPNDevice{}, false, err
+	}
+	if _, err := tx.Exec(ctx, `
+		UPDATE wireguard_peers
+		SET status = 'pending'
+		WHERE id = $1::uuid AND node_id = $2::uuid AND status = 'error'
+	`, device.Peer.ID, device.Peer.NodeID); err != nil {
+		return VPNDevice{}, false, err
+	}
+	if _, err := tx.Exec(ctx, `
+		UPDATE vpn_devices
+		SET status = 'provisioning', last_error = NULL, updated_at = now()
+		WHERE id = $1::uuid AND user_id = $2::uuid AND status = 'error'
+	`, device.ID, userID); err != nil {
+		return VPNDevice{}, false, err
+	}
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO audit_events
+			(actor_operator_id, subject_user_id, action, outcome, request_id, source_ip, metadata)
+		VALUES (NULL, $1::uuid, 'device.provisioning.retry', 'success', $2, $3::inet, '{"source":"client"}'::jsonb)
+	`, userID, requestID, sourceIP); err != nil {
+		return VPNDevice{}, false, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return VPNDevice{}, false, err
+	}
+
+	device.Status = "provisioning"
+	device.LastError = ""
+	device.Peer.Status = "pending"
+	return device, true, nil
+}
+
 func (s *PostgresStore) GetEnrolledVPNDeviceStatus(ctx context.Context, deviceID string, tokenHash []byte) (VPNDevice, error) {
 	if !uuidPattern.MatchString(deviceID) || len(tokenHash) != sha256.Size {
 		return VPNDevice{}, ErrDeviceNotFound

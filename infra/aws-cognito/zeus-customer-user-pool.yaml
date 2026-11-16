@@ -34,8 +34,9 @@ Resources:
       MfaConfiguration: OPTIONAL
       EnabledMfas:
         - SOFTWARE_TOKEN_MFA
-      UserPoolAddOns:
-        AdvancedSecurityMode: AUDIT
+      # Managed login requires Essentials or Plus. Keep Plus-only threat protection
+      # disabled here so a staging stack does not silently opt into the higher tier.
+      UserPoolTier: ESSENTIALS
       Schema:
         - Name: email
           AttributeDataType: String
@@ -84,10 +85,25 @@ Resources:
       AccessTokenValidity: 60
       IdTokenValidity: 60
       RefreshTokenValidity: 30
+      # AppAuth refreshes through Cognito's OAuth token endpoint and persists
+      # rotated tokens inside the encrypted AuthState.
+      RefreshTokenRotation:
+        Feature: ENABLED
+        RetryGracePeriodSeconds: 15
       TokenValidityUnits:
         AccessToken: minutes
         IdToken: minutes
         RefreshToken: days
+
+  ZeusAndroidManagedLoginBranding:
+    Type: AWS::Cognito::ManagedLoginBranding
+    DependsOn:
+      - ZeusCustomerUserPoolDomain
+      - ZeusAndroidPublicClient
+    Properties:
+      UserPoolId: !Ref ZeusCustomerUserPool
+      ClientId: !Ref ZeusAndroidPublicClient
+      UseCognitoProvidedValues: true
 
 Outputs:
   UserPoolId:

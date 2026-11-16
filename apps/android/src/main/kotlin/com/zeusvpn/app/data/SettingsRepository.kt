@@ -16,8 +16,9 @@ class SettingsRepository(context: Context) {
     val autoReconnectEnabled: Flow<Boolean> = store.data.map { it[AUTO_RECONNECT] ?: true }
 
     /**
-     * Records explicit user intent to keep the tunnel active.
-     * A saved profile alone never starts the VPN automatically.
+     * Records an explicit request to connect and remain connected.
+     * A saved profile alone never starts the VPN automatically; reconnect only
+     * follows a user-initiated connection intent.
      */
     val tunnelDesired: Flow<Boolean> = store.data.map { it[TUNNEL_DESIRED] ?: false }
 

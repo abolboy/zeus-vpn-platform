@@ -24,6 +24,7 @@ Errors use a stable envelope with `error.code`, `error.message`, and `error.requ
 - `POST /v1/users/{userID}/devices/{deviceID}/revoke`: enqueue peer removal for one device.
 - `POST /v1/client/enroll`: public, rate-limited client registration using a one-time activation code and a client-generated WireGuard public key.
 - `GET /v1/client/devices/{deviceID}`: read the device's asynchronous provisioning state using either a verified OIDC Bearer token or `Authorization: EnrollmentCode <activation-code>`. The latter is read-only, bound to the single device created by that consumed code, and valid for up to 24 hours after consumption.
+- `POST /v1/client/devices/{deviceID}/retry`: owner-authenticated recovery for a failed `peer.ensure`, using the same OIDC identity or the consumed invite code bound to that exact device. It requeues the same public key and assigned addresses on the original node only when that node is healthy; it never retries a failed `peer.remove` or changes the device's owner/address allocation.
 
 All operator endpoints require a bearer session. `owner` and `admin` may create/update users and register/revoke devices. `support` and `read_only` may read users and device lists but cannot mutate. Authorization is enforced by the API, not just by hiding UI controls.
 
@@ -57,6 +58,7 @@ Request body:
 - Revoke is asynchronous. The API moves the device and peer to `revoking` and enqueues a `peer.remove` command in the same transaction.
 - Only a successful node acknowledgement marks the peer and device `revoked` and releases the assigned addresses for reuse.
 - A failed or expired removal sets the device to `error`; its address remains reserved because the peer may still exist on the node.
+- A failed/expired `peer.ensure` may be retried by the owning client while the original node is online and its certificate is valid. Retry atomically creates a new command and changes the device/peer from `error` to `provisioning`/`pending`; duplicate requests while retry is queued do not enqueue duplicates. Only a failed/expired latest `peer.ensure` is eligible.
 - Repeating the same request with the same idempotency key returns the original result. A different request using an already-consumed key returns `409 idempotency_conflict`.
 
 ## Mutation safety

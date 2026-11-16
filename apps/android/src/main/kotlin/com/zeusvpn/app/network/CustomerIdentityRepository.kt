@@ -24,6 +24,9 @@ import kotlin.coroutines.resumeWithException
  * AppAuth uses the system browser/Custom Tab. AuthState (including refresh credentials)
  * is encrypted with an AES-GCM key protected by Android Keystore.
  */
+internal fun isCustomerSessionRecoverable(isAuthorized: Boolean, refreshToken: String?): Boolean =
+    isAuthorized && !refreshToken.isNullOrBlank()
+
 class CustomerIdentityRepository(context: Context) {
     private val appContext = context.applicationContext
     private val encryptedStore = EncryptedWireGuardConfigStore(appContext)
@@ -39,7 +42,8 @@ class CustomerIdentityRepository(context: Context) {
     fun hasStoredSession(): Boolean = runCatching {
         val payload = encryptedStore.readCustomerSession() ?: return false
         try {
-            AuthState.jsonDeserialize(String(payload, Charsets.UTF_8)).isAuthorized
+            val authState = AuthState.jsonDeserialize(String(payload, Charsets.UTF_8))
+            isCustomerSessionRecoverable(authState.isAuthorized, authState.refreshToken)
         } finally {
             payload.fill(0)
         }
@@ -109,6 +113,14 @@ class CustomerIdentityRepository(context: Context) {
         } finally {
             payload.fill(0)
         }
+        if (authState.refreshToken.isNullOrBlank()) {
+            signOutLocally()
+            throw IOException("Sign in again to continue.")
+        }
+        // An access token may still be valid while the ID token used by the Control
+        // Plane is stale. Force an OIDC refresh so enrollment never reuses an old ID token.
+        authState.setNeedsTokenRefresh(true)
+
         val service = AuthorizationService(appContext)
         try {
             val idToken = suspendCancellableCoroutine { continuation ->
@@ -116,6 +128,7 @@ class CustomerIdentityRepository(context: Context) {
                 authState.performActionWithFreshTokens(service) { _, token, tokenError ->
                     if (!completed.compareAndSet(false, true)) return@performActionWithFreshTokens
                     if (tokenError != null || token.isNullOrBlank()) {
+                        if (tokenError?.error == "invalid_grant") signOutLocally()
                         continuation.resumeWithException(IOException("Sign in again to continue."))
                     } else {
                         try {

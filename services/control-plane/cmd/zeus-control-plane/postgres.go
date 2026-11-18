@@ -766,11 +766,12 @@ func (s *PostgresStore) createVPNDeviceTx(ctx context.Context, tx pgx.Tx, actorI
 		}
 		usedIPv4 := map[netip.Addr]struct{}{node.interfaceIPv4: {}}
 		usedIPv6 := map[netip.Addr]struct{}{node.interfaceIPv6: {}}
+		// The database UNIQUE constraints reserve peer addresses globally,
+		// including revoked peers; allocation must use the same reservation scope.
 		rows, err := tx.Query(ctx, `
 			SELECT host(assigned_ipv4), COALESCE(host(assigned_ipv6), '')
 			FROM wireguard_peers
-			WHERE node_id = $1::uuid AND status <> 'revoked'
-		`, node.id)
+		`)
 		if err != nil {
 			return VPNDevice{}, err
 		}

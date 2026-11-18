@@ -23,7 +23,13 @@ SELECT has_schema_privilege(current_user, 'public', 'USAGE')
       AND acl.privilege_type = 'CREATE'
   )
   AND NOT pg_has_role(current_user, 'zeus_migrator', 'MEMBER')
-  AND NOT (SELECT rolsuper OR rolcreatedb OR rolcreaterole FROM pg_roles WHERE rolname = current_user)
+  AND NOT (SELECT rolsuper OR rolcreatedb OR rolcreaterole OR rolreplication OR rolbypassrls OR rolinherit FROM pg_roles WHERE rolname = current_user)
+  AND NOT has_database_privilege(current_user, current_database(), 'CREATE')
+  AND NOT EXISTS (
+    SELECT 1 FROM pg_auth_members m
+    JOIN pg_roles member ON member.oid = m.member
+    WHERE member.rolname IN ('zeus_app', 'zeus_migrator')
+  )
   AND NOT EXISTS (
     SELECT 1 FROM pg_tables t WHERE t.schemaname = 'public'
       AND NOT (
@@ -52,7 +58,17 @@ if psql "$runtime_url" --no-psqlrc --set=ON_ERROR_STOP=1 --command='CREATE TABLE
 fi
 migrate_identity="$(psql "$migrate_url" --no-psqlrc --set=ON_ERROR_STOP=1 --tuples-only --no-align --command='SELECT current_user')"
 [[ "$migrate_identity" == "zeus_migrator" ]] || die "migration connection did not authenticate as zeus_migrator"
-migrate_privileges="$(psql "$migrate_url" --no-psqlrc --set=ON_ERROR_STOP=1 --tuples-only --no-align --command="SELECT has_schema_privilege(current_user, 'public', 'USAGE') AND has_schema_privilege(current_user, 'public', 'CREATE')")"
+migrate_privileges="$(psql "$migrate_url" --no-psqlrc --set=ON_ERROR_STOP=1 --tuples-only --no-align --command="
+SELECT has_schema_privilege(current_user, 'public', 'USAGE')
+  AND has_schema_privilege(current_user, 'public', 'CREATE')
+  AND NOT (SELECT rolsuper OR rolcreatedb OR rolcreaterole OR rolreplication OR rolbypassrls OR rolinherit FROM pg_roles WHERE rolname = current_user)
+  AND NOT has_database_privilege(current_user, current_database(), 'CREATE')
+  AND NOT EXISTS (
+    SELECT 1 FROM pg_auth_members m
+    JOIN pg_roles member ON member.oid = m.member
+    WHERE member.rolname IN ('zeus_app', 'zeus_migrator')
+  )
+")"
 [[ "$migrate_privileges" == "t" ]] || die "migration role cannot create schema objects"
 psql "$migrate_url" --no-psqlrc --set=ON_ERROR_STOP=1 --command='BEGIN; CREATE TABLE public.zeus_migrator_privilege_probe (id integer); ROLLBACK' >/dev/null
 printf '%s\n' "PASS: zeus_app has runtime privileges and cannot create tables" "PASS: zeus_migrator can create schema objects" "PASS: runtime and migration credentials are distinct"

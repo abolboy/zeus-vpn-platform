@@ -66,7 +66,7 @@ REVOKE CREATE ON SCHEMA public FROM PUBLIC;
 GRANT USAGE ON SCHEMA public TO zeus_app;
 REVOKE CREATE ON SCHEMA public FROM zeus_app;
 GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO zeus_app;
-GRANT USAGE, SELECT, UPDATE ON ALL SEQUENCES IN SCHEMA public TO zeus_app;
+GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO zeus_app;
 GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA public TO zeus_app;
 ALTER ROLE zeus_migrator SET search_path = public;
 ALTER ROLE zeus_app SET search_path = public;
@@ -76,7 +76,7 @@ SQL
 PGPASSWORD="$migrator_password" psql --no-psqlrc --set=ON_ERROR_STOP=1 --quiet \
   "host=$db_host port=5432 dbname=zeus_staging user=zeus_migrator sslmode=verify-full sslrootcert=$ca_file connect_timeout=10" <<'SQL'
 ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO zeus_app;
-ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT USAGE, SELECT, UPDATE ON SEQUENCES TO zeus_app;
+ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT USAGE, SELECT ON SEQUENCES TO zeus_app;
 ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT EXECUTE ON FUNCTIONS TO zeus_app;
 SQL
 

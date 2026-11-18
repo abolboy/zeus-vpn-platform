@@ -117,7 +117,7 @@ func TestNodeAgentRoutesRequireVerifiedClientCertificate(t *testing.T) {
 		t.Fatalf("ack response status=%d calls=%d status=%s", ackResponse.StatusCode, store.ackCalls, store.ackStatus)
 	}
 
-	invalidRequest, err := http.NewRequest(http.MethodPost, server.URL+"/agent/v1/commands/8e09c3da-fbac-4b34-9ad0-090e1f8d4c47/ack", bytes.NewBufferString("{\"status\":\"failed\",\"error_code\":\"run arbitrary shell\"}"))
+	invalidRequest, err := http.NewRequest(http.MethodPost, server.URL+"/agent/v1/commands/8e09c3da-fbac-4b34-9ad0-090e1f8d4c47/ack", bytes.NewBufferString("{\"attempt\":1,\"status\":\"failed\",\"error_code\":\"run arbitrary shell\"}"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -128,6 +128,23 @@ func TestNodeAgentRoutesRequireVerifiedClientCertificate(t *testing.T) {
 	invalidResponse.Body.Close()
 	if invalidResponse.StatusCode != http.StatusBadRequest || store.ackCalls != 1 {
 		t.Fatalf("invalid error code response=%d store calls=%d", invalidResponse.StatusCode, store.ackCalls)
+	}
+
+	invalidAttemptRequest, err := http.NewRequest(
+		http.MethodPost,
+		server.URL+"/agent/v1/commands/8e09c3da-fbac-4b34-9ad0-090e1f8d4c47/ack",
+		bytes.NewBufferString("{\"attempt\":0,\"status\":\"succeeded\"}"),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	invalidAttemptResponse, err := client.Do(invalidAttemptRequest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	invalidAttemptResponse.Body.Close()
+	if invalidAttemptResponse.StatusCode != http.StatusBadRequest || store.ackCalls != 1 {
+		t.Fatalf("invalid attempt response=%d store calls=%d", invalidAttemptResponse.StatusCode, store.ackCalls)
 	}
 
 	noCertificateClient := &http.Client{Transport: &http.Transport{TLSClientConfig: &tls.Config{

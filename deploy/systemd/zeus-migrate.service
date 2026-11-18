@@ -7,8 +7,8 @@ After=network-online.target
 Type=oneshot
 User=zeus
 Group=zeus
-EnvironmentFile=/etc/zeus/control-plane.env
-EnvironmentFile=-/etc/zeus/database.env
+Environment=ZEUS_ENV=production
+EnvironmentFile=/etc/zeus/database-migrate.env
 ExecStart=/opt/zeus/bin/zeus-migrate
 TimeoutStartSec=5min
 UMask=0077

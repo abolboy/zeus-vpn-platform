@@ -12,8 +12,9 @@ import (
 )
 
 type fakeClient struct {
-	command *controlplaneclient.Command
-	acks    []ackRecord
+	command        *controlplaneclient.Command
+	acks           []ackRecord
+	ackContextErr  error
 }
 
 type ackRecord struct {
@@ -26,29 +27,42 @@ func (f *fakeClient) Poll(context.Context) (*controlplaneclient.Command, error) 
 	return f.command, nil
 }
 
-func (f *fakeClient) Acknowledge(_ context.Context, id, status, code string) error {
+func (f *fakeClient) Acknowledge(ctx context.Context, id, status, code string) error {
+	f.ackContextErr = ctx.Err()
 	f.acks = append(f.acks, ackRecord{id: id, status: status, code: code})
 	return nil
 }
 
 type fakeManager struct {
-	ensureCalls int
-	removeCalls int
-	peer        wireguard.PeerSpec
-	publicKey   string
-	result      wireguard.Result
-	err         error
+	ensureCalls        int
+	removeCalls        int
+	peer               wireguard.PeerSpec
+	publicKey          string
+	result             wireguard.Result
+	err                error
+	waitForCancellation bool
+	operationDeadline  time.Time
 }
 
-func (f *fakeManager) EnsurePeer(_ context.Context, peer wireguard.PeerSpec) (wireguard.Result, error) {
+func (f *fakeManager) EnsurePeer(ctx context.Context, peer wireguard.PeerSpec) (wireguard.Result, error) {
 	f.ensureCalls++
 	f.peer = peer
+	f.operationDeadline, _ = ctx.Deadline()
+	if f.waitForCancellation {
+		<-ctx.Done()
+		return f.result, ctx.Err()
+	}
 	return f.result, f.err
 }
 
-func (f *fakeManager) RemovePeer(_ context.Context, publicKey string) (wireguard.Result, error) {
+func (f *fakeManager) RemovePeer(ctx context.Context, publicKey string) (wireguard.Result, error) {
 	f.removeCalls++
 	f.publicKey = publicKey
+	f.operationDeadline, _ = ctx.Deadline()
+	if f.waitForCancellation {
+		<-ctx.Done()
+		return f.result, ctx.Err()
+	}
 	return f.result, f.err
 }
 
@@ -87,6 +101,35 @@ func TestEnsurePeerCommandAppliesAndAcknowledges(t *testing.T) {
 	}
 	if len(client.acks) != 1 || client.acks[0].status != "succeeded" {
 		t.Fatalf("unexpected acknowledgement: %+v", client.acks)
+	}
+}
+
+func TestPeerCommandExecutionHasBoundedTimeoutAndAcknowledges(t *testing.T) {
+	payload := []byte("{\\"public_key\\":\\"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=\\",\\"ipv4\\":\\"10.77.77.3\\",\\"ipv6\\":\\"fd77:77:77::3\\"}")
+	command := &controlplaneclient.Command{
+		ID:        "8e09c3da-fbac-4b34-9ad0-090e1f8d4c47",
+		Type:      "peer.ensure",
+		Payload:   payload,
+		ExpiresAt: time.Now().Add(time.Minute),
+	}
+	client := &fakeClient{command: command}
+	manager := &fakeManager{waitForCancellation: true}
+	w, err := New(client, manager, Config{PollInterval: time.Second, CommandTimeout: time.Second})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := w.process(context.Background(), command); err != nil {
+		t.Fatal(err)
+	}
+	if manager.ensureCalls != 1 || manager.operationDeadline.IsZero() {
+		t.Fatalf("peer executor did not receive a bounded context: manager=%+v", manager)
+	}
+	if len(client.acks) != 1 || client.acks[0].status != "failed" || client.acks[0].code != "wg_apply_failed" {
+		t.Fatalf("timed-out command was not reported as failed: %+v", client.acks)
+	}
+	if client.ackContextErr != nil {
+		t.Fatalf("acknowledgement inherited the expired operation context: %v", client.ackContextErr)
 	}
 }
 

@@ -12,9 +12,9 @@ import (
 )
 
 type fakeClient struct {
-	command        *controlplaneclient.Command
-	acks           []ackRecord
-	ackContextErr  error
+	command       *controlplaneclient.Command
+	acks          []ackRecord
+	ackContextErr error
 }
 
 type ackRecord struct {
@@ -34,14 +34,14 @@ func (f *fakeClient) Acknowledge(ctx context.Context, id, status, code string) e
 }
 
 type fakeManager struct {
-	ensureCalls        int
-	removeCalls        int
-	peer               wireguard.PeerSpec
-	publicKey          string
-	result             wireguard.Result
-	err                error
+	ensureCalls         int
+	removeCalls         int
+	peer                wireguard.PeerSpec
+	publicKey           string
+	result              wireguard.Result
+	err                 error
 	waitForCancellation bool
-	operationDeadline  time.Time
+	operationDeadline   time.Time
 }
 
 func (f *fakeManager) EnsurePeer(ctx context.Context, peer wireguard.PeerSpec) (wireguard.Result, error) {

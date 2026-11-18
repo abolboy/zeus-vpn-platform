@@ -982,6 +982,27 @@ func TestPostgresStoreIntegration(t *testing.T) {
 		t.Fatalf("failed provisioning state was not recorded: device=%+v err=%v", failedDevice, err)
 	}
 
+	// A consumed enrollment code must not bypass a later customer suspension.
+	if _, err := store.pool.Exec(ctx, `
+		UPDATE vpn_users SET status = 'suspended' WHERE id = $1::uuid
+	`, enrollmentUserID); err != nil {
+		t.Fatalf("suspend enrolled customer fixture: %v", err)
+	}
+	suspendedRetry := httptest.NewRequest(http.MethodPost, "/v1/client/devices/"+enrolledDevice.ID+"/retry", nil)
+	suspendedRetry.Header.Set("Authorization", "EnrollmentCode "+enrollmentCode.Code)
+	suspendedRetryResponse := httptest.NewRecorder()
+	handler.ServeHTTP(suspendedRetryResponse, suspendedRetry)
+	if suspendedRetryResponse.Code != http.StatusForbidden ||
+		!bytes.Contains(suspendedRetryResponse.Body.Bytes(), []byte("customer_account_inactive")) {
+		t.Fatalf("suspended customer retry status=%d body=%s, want 403 customer_account_inactive",
+			suspendedRetryResponse.Code, suspendedRetryResponse.Body.String())
+	}
+	if _, err := store.pool.Exec(ctx, `
+		UPDATE vpn_users SET status = 'active' WHERE id = $1::uuid
+	`, enrollmentUserID); err != nil {
+		t.Fatalf("restore enrolled customer fixture: %v", err)
+	}
+
 	// The consumed invite code authorizes retry only for its bound device.
 	retryRequest := httptest.NewRequest(http.MethodPost, "/v1/client/devices/"+enrolledDevice.ID+"/retry", nil)
 	retryRequest.Header.Set("Authorization", "EnrollmentCode "+enrollmentCode.Code)

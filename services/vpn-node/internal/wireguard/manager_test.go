@@ -110,6 +110,28 @@ func (f contextCheckingRunner) Run(ctx context.Context, binary string, args ...s
 	return f.fakeRunner.Run(ctx, binary, args...)
 }
 
+type routeAddThenCancelRunner struct {
+	*fakeRunner
+}
+
+func (f routeAddThenCancelRunner) Run(ctx context.Context, binary string, args ...string) error {
+	if strings.Contains(binary, "ip") && len(args) >= 6 && args[1] == "route" && args[2] == "add" {
+		if err := f.fakeRunner.Run(context.Background(), binary, args...); err != nil {
+			return err
+		}
+		<-ctx.Done()
+		return ctx.Err()
+	}
+	return f.fakeRunner.Run(ctx, binary, args...)
+}
+
+func (f routeAddThenCancelRunner) Output(ctx context.Context, binary string, args ...string) ([]byte, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	return f.fakeRunner.Output(ctx, binary, args...)
+}
+
 func testConfig(t *testing.T, allowMutations bool) (Config, string) {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "wg0.conf")
@@ -142,6 +164,37 @@ func testPeer() PeerSpec {
 		PublicKey: testKey,
 		IPv4:      netip.MustParseAddr("10.77.77.3"),
 		IPv6:      netip.MustParseAddr("fd77:77:77::3"),
+	}
+}
+
+func TestEnsurePeerRollsBackRouteInstalledAsTimeoutFires(t *testing.T) {
+	config, original := testConfig(t, true)
+	config.IPv4Pool = netip.MustParsePrefix("10.88.0.0/24")
+	config.IPv6Pool = netip.MustParsePrefix("fd88:88:88::/64")
+	baseRunner := newFakeRunner()
+	runner := routeAddThenCancelRunner{fakeRunner: baseRunner}
+	manager, err := NewManager(config, runner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	peer := testPeer()
+	peer.IPv4 = netip.MustParseAddr("10.88.0.3")
+	peer.IPv6 = netip.MustParseAddr("fd88:88:88::3")
+
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	if _, err := manager.EnsurePeer(ctx, peer); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("EnsurePeer error = %v, want context deadline exceeded", err)
+	}
+	if _, exists := baseRunner.routes["10.88.0.3/32"]; exists {
+		t.Fatal("route installed as timeout fired was not rolled back")
+	}
+	got, err := os.ReadFile(config.ConfigPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != original {
+		t.Fatal("WireGuard config was not restored after route timeout")
 	}
 }
 

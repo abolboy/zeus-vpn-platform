@@ -56,10 +56,10 @@ func New(client CommandClient, manager PeerManager, config Config) (*Worker, err
 		return nil, errors.New("node poll interval must be between 1 and 60 seconds")
 	}
 	if config.CommandTimeout == 0 {
-		config.CommandTimeout = 25 * time.Second
+		config.CommandTimeout = 10 * time.Second
 	}
-	if config.CommandTimeout < 100*time.Millisecond || config.CommandTimeout > 25*time.Second {
-		return nil, errors.New("node command timeout must be between 100ms and 25 seconds")
+	if config.CommandTimeout < 100*time.Millisecond || config.CommandTimeout > 10*time.Second {
+		return nil, errors.New("node command timeout must be between 100ms and 10 seconds")
 	}
 	return &Worker{client: client, manager: manager, config: config}, nil
 }

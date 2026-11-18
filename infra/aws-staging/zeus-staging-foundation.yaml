@@ -222,7 +222,9 @@ Resources:
 
   NatGateway:
     Type: AWS::EC2::NatGateway
-    DependsOn: PublicSubnet1RouteAssociation
+    DependsOn:
+      - PublicDefaultRoute
+      - PublicSubnet1RouteAssociation
     Properties:
       AllocationId: !GetAtt NatEip.AllocationId
       SubnetId: !Ref PublicSubnet1
@@ -347,6 +349,10 @@ Resources:
 
   StagingAlb:
     Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    DependsOn:
+      - PublicDefaultRoute
+      - PublicSubnet1RouteAssociation
+      - PublicSubnet2RouteAssociation
     Properties:
       Name: !Sub "${EnvironmentName}-alb"
       Scheme: internet-facing

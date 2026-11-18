@@ -165,7 +165,7 @@ type ClientDeviceRetryStore interface {
 type NodeAgentStore interface {
 	FindNodeByCertFingerprint(context.Context, []byte) (NodeIdentity, error)
 	LeaseNodeCommand(context.Context, string, time.Duration) (NodeCommand, error)
-	AcknowledgeNodeCommand(context.Context, string, string, string, string) error
+	AcknowledgeNodeCommand(context.Context, string, string, int, string, string) error
 }
 
 type NodeAgentCertificate struct {

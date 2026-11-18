@@ -19,7 +19,7 @@ func (s *PostgresStore) ListNodeAgentCertificates(ctx context.Context, nodeID st
 	}
 	rows, err := s.pool.Query(ctx, `
 		SELECT id::text, node_id::text, encode(fingerprint_sha256, 'hex'),
-		       not_before, not_after, revoked_at, created_at
+		       not_before, CASE WHEN isfinite(not_after) THEN not_after ELSE NULL END, revoked_at, created_at
 		FROM vpn_node_agent_certificates
 		WHERE node_id = $1::uuid
 		ORDER BY created_at DESC, id DESC
@@ -69,7 +69,7 @@ func (s *PostgresStore) RegisterNodeAgentCertificate(ctx context.Context, actorI
 		VALUES ($1::uuid, $2, $3, $4)
 		ON CONFLICT (fingerprint_sha256) DO NOTHING
 		RETURNING id::text, node_id::text, encode(fingerprint_sha256, 'hex'),
-		          not_before, not_after, revoked_at, created_at
+		          not_before, CASE WHEN isfinite(not_after) THEN not_after ELSE NULL END, revoked_at, created_at
 	`, nodeID, fingerprint, notBefore, notAfter).Scan(
 		&certificate.ID, &certificate.NodeID, &certificate.FingerprintSHA256,
 		&certificate.NotBefore, &certificate.NotAfter, &certificate.RevokedAt, &certificate.CreatedAt,
@@ -78,7 +78,7 @@ func (s *PostgresStore) RegisterNodeAgentCertificate(ctx context.Context, actorI
 	if errors.Is(err, pgx.ErrNoRows) {
 		err = tx.QueryRow(ctx, `
 			SELECT id::text, node_id::text, encode(fingerprint_sha256, 'hex'),
-			       not_before, not_after, revoked_at, created_at
+			       not_before, CASE WHEN isfinite(not_after) THEN not_after ELSE NULL END, revoked_at, created_at
 			FROM vpn_node_agent_certificates
 			WHERE fingerprint_sha256 = $1
 			FOR UPDATE
@@ -90,7 +90,7 @@ func (s *PostgresStore) RegisterNodeAgentCertificate(ctx context.Context, actorI
 			return NodeAgentCertificate{}, false, err
 		}
 		if certificate.NodeID != nodeID || certificate.RevokedAt != nil ||
-			!certificate.NotBefore.Equal(notBefore) || !certificate.NotAfter.Equal(notAfter) {
+			!certificate.NotBefore.Equal(notBefore) || certificate.NotAfter == nil || !certificate.NotAfter.Equal(notAfter) {
 			return NodeAgentCertificate{}, false, ErrNodeCertificateConflict
 		}
 		replayed = true
@@ -132,7 +132,7 @@ func (s *PostgresStore) RevokeNodeAgentCertificate(ctx context.Context, actorID,
 	var certificate NodeAgentCertificate
 	err = tx.QueryRow(ctx, `
 		SELECT id::text, node_id::text, encode(fingerprint_sha256, 'hex'),
-		       not_before, not_after, revoked_at, created_at
+		       not_before, CASE WHEN isfinite(not_after) THEN not_after ELSE NULL END, revoked_at, created_at
 		FROM vpn_node_agent_certificates
 		WHERE id = $1::uuid AND node_id = $2::uuid
 		FOR UPDATE

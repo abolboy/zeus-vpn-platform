@@ -32,12 +32,12 @@ func (f *fakeClient) Acknowledge(_ context.Context, id, status, code string) err
 }
 
 type fakeManager struct {
-	ensureCalls int
-	removeCalls int
-	peer        wireguard.PeerSpec
-	publicKey   string
-	result      wireguard.Result
-	err         error
+	ensureCalls    int
+	removeCalls    int
+	peer           wireguard.PeerSpec
+	publicKey      string
+	result         wireguard.Result
+	err            error
 	waitForContext bool
 }
 

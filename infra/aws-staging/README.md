@@ -12,7 +12,7 @@ This CloudFormation template creates an isolated staging network and compute/dat
 - Separate SSM-enabled IAM roles for Control Plane and VPN node. Only the Control Plane role can read the RDS-managed database secret.
 - Private Route 53 hosted zone for the node-to-Control-Plane mTLS name.
 
-The template defaults to Ubuntu Server 24.04 LTS amd64. It uses a small EC2 baseline and a Multi-AZ PostgreSQL instance by default. Instance classes, database storage, and Multi-AZ behavior are parameters.
+The template defaults to Ubuntu Server 24.04 LTS amd64. It uses a small EC2 baseline and a Multi-AZ PostgreSQL 16.15 instance by default. The engine minor version is pinned to 16.15 to match the PostgreSQL 16 test baseline; confirm regional availability before creating the stack. Instance classes, database storage, and Multi-AZ behavior are parameters.
 
 ## Mandatory preflight
 
@@ -26,7 +26,7 @@ Do not create the stack until all checks below are complete:
 6. Review the change set for every resource and estimate. This design intentionally includes recurring NAT Gateway, ALB, RDS Multi-AZ, EC2, EIP, storage, and data-transfer charges.
 7. Keep the staging account/VPC separate from production. Do not add VPC peering, shared subnets, cross-environment routes, or production database/Cognito references.
 
-The template has no defaults for the public hostname or ACM certificate ARN. The certificate must be in the same region and cover `PublicApiHostname`.
+The template has no defaults for the public hostname or ACM certificate ARN. It pins RDS to PostgreSQL 16.15, the latest 16.x minor listed in the AWS RDS release notes retrieved on 2026-11-18; confirm that exact minor is offered in the selected region before stack creation. The certificate must be in the same region and cover `PublicApiHostname`.
 
 ## Create a reviewable change set
 

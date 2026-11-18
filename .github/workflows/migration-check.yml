@@ -87,8 +87,19 @@ jobs:
             SELECT has_schema_privilege(current_user, 'public', 'USAGE')
               AND NOT has_schema_privilege(current_user, 'public', 'CREATE')
               AND NOT pg_has_role(current_user, 'zeus_migrator', 'MEMBER')
-              AND NOT (SELECT rolsuper OR rolcreatedb OR rolcreaterole OR rolreplication OR rolbypassrls
+              AND NOT (SELECT rolsuper OR rolcreatedb OR rolcreaterole OR rolreplication OR rolbypassrls OR rolinherit
                        FROM pg_roles WHERE rolname = current_user)
+              AND NOT has_database_privilege(current_user, current_database(), 'CREATE')
+              AND NOT EXISTS (
+                SELECT 1 FROM pg_roles
+                WHERE rolname = 'zeus_migrator'
+                  AND (rolsuper OR rolcreatedb OR rolcreaterole OR rolreplication OR rolbypassrls OR rolinherit)
+              )
+              AND NOT EXISTS (
+                SELECT 1 FROM pg_auth_members m
+                JOIN pg_roles member ON member.oid = m.member
+                WHERE member.rolname IN ('zeus_app', 'zeus_migrator')
+              )
               AND NOT EXISTS (
                 SELECT 1 FROM pg_namespace n,
                      LATERAL aclexplode(COALESCE(n.nspacl, acldefault('n', n.nspowner))) acl

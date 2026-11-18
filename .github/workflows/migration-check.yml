@@ -63,7 +63,7 @@ jobs:
           ALTER DEFAULT PRIVILEGES FOR ROLE zeus_migrator IN SCHEMA public
             GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO zeus_app;
           ALTER DEFAULT PRIVILEGES FOR ROLE zeus_migrator IN SCHEMA public
-            GRANT USAGE, SELECT, UPDATE ON SEQUENCES TO zeus_app;
+            GRANT USAGE, SELECT ON SEQUENCES TO zeus_app;
           ALTER DEFAULT PRIVILEGES FOR ROLE zeus_migrator IN SCHEMA public
             GRANT EXECUTE ON FUNCTIONS TO zeus_app;
           SQL

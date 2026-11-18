@@ -44,6 +44,8 @@ sudo install -d -o root -g zeus -m 0750 /etc/zeus
 sudo install -d -o root -g zeus -m 0750 /etc/zeus/node-listener
 ```
 
+The service units block both EC2 metadata endpoints with systemd `IPAddressDeny`. This requires unified cgroup v2 support; before enabling the units, verify that `stat -fc %T /sys/fs/cgroup` returns `cgroup2fs`. If it does not, do not rely on this process-level IMDS restriction. It reduces credential exposure from service processes but does not isolate host root or other services.
+
 Install the Control Plane and migration binaries under `/opt/zeus/bin`. Install `deploy/systemd/zeus-control-plane.service` as `/etc/systemd/system/zeus-control-plane.service` and `deploy/systemd/zeus-migrate.service` as `/etc/systemd/system/zeus-migrate.service`.
 
 Copy `deploy/examples/control-plane.env.example` to `/etc/zeus/control-plane.env`, replace all placeholders, and use mode `0600` owned by root. Keep it unreadable by ordinary users; the database URL is generated separately in `/etc/zeus/database-runtime.env`.

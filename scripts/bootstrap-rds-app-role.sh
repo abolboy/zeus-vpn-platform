@@ -52,18 +52,17 @@ PGPASSWORD="$master_password" psql --no-psqlrc --set=ON_ERROR_STOP=1 --quiet \
   "host=$db_host port=5432 dbname=zeus_staging user=$master_username sslmode=verify-full sslrootcert=$ca_file connect_timeout=10" <<SQL
 SELECT format('CREATE ROLE zeus_migrator LOGIN PASSWORD %L NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT', '$migrator_password')
 WHERE NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'zeus_migrator')
-\gexec
+\\gexec
 SELECT format('ALTER ROLE zeus_migrator WITH LOGIN PASSWORD %L NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT', '$migrator_password')
-\gexec
+\\gexec
 SELECT format('CREATE ROLE zeus_app LOGIN PASSWORD %L NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT', '$app_password')
 WHERE NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'zeus_app')
-\gexec
+\\gexec
 SELECT format('ALTER ROLE zeus_app WITH LOGIN PASSWORD %L NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT', '$app_password')
-\gexec
+\\gexec
 GRANT CONNECT ON DATABASE zeus_staging TO zeus_migrator, zeus_app;
 GRANT USAGE, CREATE ON SCHEMA public TO zeus_migrator;
 GRANT USAGE ON SCHEMA public TO zeus_app;
-REVOKE CREATE ON SCHEMA public FROM PUBLIC;
 REVOKE CREATE ON SCHEMA public FROM zeus_app;
 GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO zeus_app;
 GRANT USAGE, SELECT, UPDATE ON ALL SEQUENCES IN SCHEMA public TO zeus_app;

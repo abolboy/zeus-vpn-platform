@@ -24,6 +24,7 @@ SELECT has_schema_privilege(current_user, 'public', 'USAGE')
         AND has_table_privilege(current_user, format('%I.%I', t.schemaname, t.tablename), 'UPDATE')
         AND has_table_privilege(current_user, format('%I.%I', t.schemaname, t.tablename), 'DELETE')
       )
+  )
   AND NOT EXISTS (
     SELECT 1 FROM pg_sequences s WHERE s.schemaname = 'public'
       AND NOT (

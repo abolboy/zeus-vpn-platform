@@ -67,7 +67,7 @@ func TestListNodeAgentCertificatesSupportsLegacyInfinityExpiry(t *testing.T) {
 		t.Fatal("legacy certificate was not returned")
 	}
 	if legacy.NotAfter != nil {
-		t.Fatalf("legacy expiry should be unknown, got %s", legacy.NotAfter)
+		t.Fatalf("legacy expiry should be unknown, got %v", legacy.NotAfter)
 	}
 
 	finite, ok := byFingerprint[hex.EncodeToString(finiteFingerprint[:])]

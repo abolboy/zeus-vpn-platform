@@ -199,7 +199,6 @@ fun ZeusDashboard() {
                 wireGuardMessage = missingProfileMessage
             } catch (error: Exception) {
                 if (error is CancellationException) throw error
-                if (error is CancellationException) throw error
                 settings.setTunnelDesired(false)
                 wireGuardMessage = connectionFailedMessage
             }
@@ -240,7 +239,6 @@ fun ZeusDashboard() {
                             throw cancelled
                         } catch (error: Exception) {
                             if (error is CancellationException) throw error
-                            if (error is CancellationException) throw error
                             failedAttempts += 1
                             wireGuardMessage = "اتصال مجدد انجام نشد؛ تلاش بعدی با فاصلهٔ کنترل‌شده انجام می‌شود."
                             delay(TunnelReconnectPolicy.delayAfterFailure(failedAttempts - 1))
@@ -271,7 +269,6 @@ fun ZeusDashboard() {
                 wireGuardMessage = disconnectedMessage
             } catch (error: Exception) {
                 if (error is CancellationException) throw error
-                if (error is CancellationException) throw error
                 wireGuardMessage = connectionFailedMessage
             }
         }
@@ -289,7 +286,6 @@ fun ZeusDashboard() {
                 wireGuardMessage = invalidProfileMessage
             } catch (error: Exception) {
                 if (error is CancellationException) throw error
-                if (error is CancellationException) throw error
                 wireGuardMessage = invalidProfileMessage
             }
         }
@@ -304,7 +300,6 @@ fun ZeusDashboard() {
                 profileDraft = ""
                 profileSetupMessage = profileDeletedMessage
             } catch (error: Exception) {
-                if (error is CancellationException) throw error
                 if (error is CancellationException) throw error
                 wireGuardMessage = connectionFailedMessage
             }
@@ -516,7 +511,6 @@ fun ZeusDashboard() {
                 } catch (_: InvalidWireGuardProfileException) {
                     wireGuardMessage = invalidProfileMessage
                 } catch (error: Exception) {
-                    if (error is CancellationException) throw error
                     if (error is CancellationException) throw error
                     wireGuardMessage = "فایل انتخاب‌شده قابل خواندن یا معتبر نیست."
                 } finally {

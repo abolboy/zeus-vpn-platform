@@ -101,7 +101,7 @@ func TestEnsurePeerCommandAppliesAndAcknowledges(t *testing.T) {
 	if manager.peer.IPv4 != netip.MustParseAddr("10.77.77.3") || manager.peer.IPv6 != netip.MustParseAddr("fd77:77:77::3") {
 		t.Fatalf("unexpected peer addresses: %+v", manager.peer)
 	}
-	if len(client.acks) != 1 || client.acks[0].status != "succeeded" {
+	if len(client.acks) != 1 || client.acks[0].attempt != 1 || client.acks[0].status != "succeeded" {
 		t.Fatalf("unexpected acknowledgement: %+v", client.acks)
 	}
 }
@@ -128,7 +128,7 @@ func TestPeerCommandExecutionHasBoundedTimeoutAndAcknowledges(t *testing.T) {
 	if manager.ensureCalls != 1 || manager.operationDeadline.IsZero() {
 		t.Fatalf("peer executor did not receive a bounded context: manager=%+v", manager)
 	}
-	if len(client.acks) != 1 || client.acks[0].status != "failed" || client.acks[0].code != "wg_apply_failed" {
+	if len(client.acks) != 1 || client.acks[0].attempt != 1 || client.acks[0].status != "failed" || client.acks[0].code != "wg_apply_failed" {
 		t.Fatalf("timed-out command was not reported as failed: %+v", client.acks)
 	}
 	if client.ackContextErr != nil {
@@ -178,7 +178,7 @@ func TestDryRunDoesNotReportMutationSuccess(t *testing.T) {
 	if err := w.process(context.Background(), command); err != nil {
 		t.Fatal(err)
 	}
-	if manager.ensureCalls != 1 || len(client.acks) != 1 || client.acks[0].status != "failed" || client.acks[0].code != "mutation_disabled" {
+	if manager.ensureCalls != 1 || len(client.acks) != 1 || client.acks[0].attempt != 1 || client.acks[0].status != "failed" || client.acks[0].code != "mutation_disabled" {
 		t.Fatalf("dry-run must not be acknowledged as success: calls=%d acks=%+v", manager.ensureCalls, client.acks)
 	}
 }
@@ -191,17 +191,17 @@ func TestExpiredAndInvalidCommandsAreRejectedBeforeExecution(t *testing.T) {
 	}{
 		{
 			name:         "expired",
-			command:      &controlplaneclient.Command{ID: "8e09c3da-fbac-4b34-9ad0-090e1f8d4c47", Type: "peer.remove", Payload: []byte("{\"public_key\":\"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=\"}"), ExpiresAt: time.Now().Add(-time.Second)},
+			command:      &controlplaneclient.Command{ID: "8e09c3da-fbac-4b34-9ad0-090e1f8d4c47", Attempt: 1, Type: "peer.remove", Payload: []byte("{\"public_key\":\"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=\"}"), ExpiresAt: time.Now().Add(-time.Second)},
 			expectedCode: "command_expired",
 		},
 		{
 			name:         "unknown command",
-			command:      &controlplaneclient.Command{ID: "8e09c3da-fbac-4b34-9ad0-090e1f8d4c47", Type: "shell.exec", Payload: []byte("{}"), ExpiresAt: time.Now().Add(time.Minute)},
+			command:      &controlplaneclient.Command{ID: "8e09c3da-fbac-4b34-9ad0-090e1f8d4c47", Attempt: 1, Type: "shell.exec", Payload: []byte("{}"), ExpiresAt: time.Now().Add(time.Minute)},
 			expectedCode: "validation_failed",
 		},
 		{
 			name:         "extra payload field",
-			command:      &controlplaneclient.Command{ID: "8e09c3da-fbac-4b34-9ad0-090e1f8d4c47", Type: "peer.remove", Payload: []byte("{\"public_key\":\"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=\",\"command\":\"id\"}"), ExpiresAt: time.Now().Add(time.Minute)},
+			command:      &controlplaneclient.Command{ID: "8e09c3da-fbac-4b34-9ad0-090e1f8d4c47", Attempt: 1, Type: "peer.remove", Payload: []byte("{\"public_key\":\"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=\",\"command\":\"id\"}"), ExpiresAt: time.Now().Add(time.Minute)},
 			expectedCode: "validation_failed",
 		},
 	} {
@@ -213,7 +213,7 @@ func TestExpiredAndInvalidCommandsAreRejectedBeforeExecution(t *testing.T) {
 			if manager.ensureCalls+manager.removeCalls != 0 {
 				t.Fatal("invalid command reached WireGuard executor")
 			}
-			if len(client.acks) != 1 || client.acks[0].status != "failed" || client.acks[0].code != tc.expectedCode {
+			if len(client.acks) != 1 || client.acks[0].attempt != 1 || client.acks[0].status != "failed" || client.acks[0].code != tc.expectedCode {
 				t.Fatalf("unexpected acknowledgement: %+v", client.acks)
 			}
 		})

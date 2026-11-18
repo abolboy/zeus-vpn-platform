@@ -12,7 +12,7 @@ This CloudFormation template creates an isolated staging network and compute/dat
 - Separate SSM-enabled IAM roles for Control Plane and VPN node. The Control Plane role can read the RDS-managed master secret and generated `zeus_app` runtime and `zeus_migrator` migration secrets; the VPN node role cannot read database secrets.
 - Private Route 53 hosted zone for the node-to-Control-Plane mTLS name.
 
-The template defaults to Ubuntu Server 24.04 LTS amd64. It uses a small EC2 baseline and a Multi-AZ PostgreSQL 16.15 instance by default. The engine minor version is pinned to 16.15 to match the PostgreSQL 16 test baseline; confirm regional availability before creating the stack. Instance classes, database storage, and Multi-AZ behavior are parameters.
+The template defaults to Ubuntu Server 24.04 LTS amd64, a `db.t4g.small` Single-AZ PostgreSQL 16.15 instance, and 20 GiB of database storage to reduce staging cost. Multi-AZ remains an explicit opt-in. The engine minor version is pinned to 16.15 to match the PostgreSQL 16 test baseline; confirm regional availability before creating the stack. Instance classes, database storage, and Multi-AZ behavior are parameters. These defaults are not a cost guarantee: obtain a current estimate for the target region and review NAT Gateway, ALB, EC2, RDS, EIP, storage, and data-transfer charges before creating a change set.
 
 ## Mandatory preflight
 
@@ -23,7 +23,7 @@ Do not create the stack until all checks below are complete:
 3. Obtain a public DNS name that you control for the staging API. Request/validate an ACM certificate for that exact hostname in the same AWS region.
 4. Confirm the AWS account has the service quotas needed for two EC2 instances, RDS PostgreSQL, an ALB, NAT Gateway, EIP, and the selected Availability Zones.
 5. Confirm the account is verified and CloudFormation can create resources. CloudShell is not required; the template can be reviewed and a change set can be created through the Console.
-6. Review the change set for every resource and estimate. This design intentionally includes recurring NAT Gateway, ALB, RDS Multi-AZ, EC2, EIP, storage, and data-transfer charges.
+6. Review the change set for every resource and estimate. This design still includes recurring NAT Gateway, ALB, RDS, EC2, EIP, storage, and data-transfer charges; do not assume the available AWS credits will cover the full staging lifetime.
 7. Keep the staging account/VPC separate from production. Do not add VPC peering, shared subnets, cross-environment routes, or production database/Cognito references.
 
 The template has no defaults for the public hostname or ACM certificate ARN. It pins RDS to PostgreSQL 16.15, the latest 16.x minor listed in the AWS RDS release notes retrieved on 2026-11-18; confirm that exact minor is offered in the selected region before stack creation. The certificate must be in the same region and cover `PublicApiHostname`.
@@ -85,7 +85,7 @@ The private mTLS listener must be configured on the Control Plane's private inte
 - The VPN node has `SourceDestCheck=false`, but forwarding sysctls, nftables/iptables forwarding, NAT, WireGuard interface configuration, and peer pools still require a separate reviewed configuration.
 - The RDS master secret is generated and managed by RDS. Separate Secrets Manager secrets generate the `zeus_app` runtime and `zeus_migrator` migration passwords. The Control Plane instance role can read all three secrets for bootstrap; the Node role receives SSM permissions only. This is a host-level trust boundary, not IAM isolation between processes on the Control Plane instance.
 - SSM is the intended administrative channel. No inbound SSH rule is created.
-- The Control Plane private subnet uses one NAT Gateway in AZ A for outbound access and SSM. Loss of that AZ interrupts private-subnet egress until recovery. The ALB spans two AZs; RDS is Multi-AZ by default, but the `DatabaseMultiAZ` parameter can disable that behavior.
+- The Control Plane private subnet uses one NAT Gateway in AZ A for outbound access and SSM. Loss of that AZ interrupts private-subnet egress until recovery. The ALB spans two AZs; RDS is Single-AZ by default to control cost, and `DatabaseMultiAZ=true` is an explicit resilience/cost opt-in.
 - RDS deletion protection is enabled and the resource has a snapshot deletion policy. Teardown requires an explicit reviewed update to disable deletion protection, a verified final snapshot, and a second explicit operator approval.
 - Do not point staging at production Cognito, database, certificates, node registry, or WireGuard interfaces.
 

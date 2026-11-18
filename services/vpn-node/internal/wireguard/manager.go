@@ -275,11 +275,13 @@ func (m *Manager) ensurePeerRoutes(ctx context.Context, peer PeerSpec) ([]routeS
 	return added, nil
 }
 
-func (m *Manager) rollbackRoutes(ctx context.Context, routes []routeSpec) error {
+func (m *Manager) rollbackRoutes(_ context.Context, routes []routeSpec) error {
+	cleanupCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
 	var failures []error
 	for index := len(routes) - 1; index >= 0; index-- {
 		spec := routes[index]
-		err := m.runner.Run(ctx, m.config.IPBinary, spec.family, "route", "del", spec.prefix.String(), "dev", m.config.Interface)
+		err := m.runner.Run(cleanupCtx, m.config.IPBinary, spec.family, "route", "del", spec.prefix.String(), "dev", m.config.Interface)
 		if err != nil {
 			failures = append(failures, fmt.Errorf("remove route %s: %w", spec.prefix, err))
 		}
@@ -397,6 +399,7 @@ func isIPv4Broadcast(address netip.Addr, prefix netip.Prefix) bool {
 	}
 	return raw == (networkRaw | hostMask)
 }
+
 func acquireFileLock(ctx context.Context, fd int) error {
 	for {
 		if err := ctx.Err(); err != nil {

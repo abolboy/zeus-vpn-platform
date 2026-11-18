@@ -326,21 +326,36 @@ func TestPostgresStoreIntegration(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	login := "ci-" + newRequestID()
-	if err := store.EnsureBootstrapOperator(ctx, login, "ci-owner-password-123"); err != nil {
-		t.Fatal(err)
-	}
-	operator, err := store.FindOperatorByLogin(ctx, login)
+	hasOwner, err := store.HasActiveOwner(ctx)
 	if err != nil {
 		t.Fatal(err)
+	}
+	var operator Operator
+	if !hasOwner {
+		login := "ci-" + newRequestID()
+		if err := store.EnsureBootstrapOperator(ctx, login, "ci-owner-password-123"); err != nil {
+			t.Fatal(err)
+		}
+		operator, err = store.FindOperatorByLogin(ctx, login)
+		if err != nil {
+			t.Fatal(err)
+		}
+	} else {
+		err = store.pool.QueryRow(ctx, `
+			SELECT id::text, login, role, status, password_hash
+			FROM operators
+			WHERE role = 'owner' AND status = 'active'
+			ORDER BY created_at, id
+			LIMIT 1
+		`).Scan(&operator.ID, &operator.Login, &operator.Role, &operator.Status, &operator.PasswordHash)
+		if err != nil {
+			t.Fatal(err)
+		}
 	}
 	if operator.Role != "owner" || operator.Status != "active" {
 		t.Fatalf("unexpected seeded operator: %+v", operator)
 	}
-	hasOwner, err := store.HasActiveOwner(ctx)
-	if err != nil || !hasOwner {
-		t.Fatalf("active owner check failed: hasOwner=%v err=%v", hasOwner, err)
-	}
+	originalPasswordHash := operator.PasswordHash
 
 	// Bootstrap must never create another owner after the first active owner exists.
 	secondLogin := "ci-second-owner-" + newRequestID()
@@ -350,16 +365,16 @@ func TestPostgresStoreIntegration(t *testing.T) {
 	if _, err := store.FindOperatorByLogin(ctx, secondLogin); !errors.Is(err, pgx.ErrNoRows) {
 		t.Fatalf("one-time bootstrap created a second owner: lookup error=%v", err)
 	}
-	// Re-running bootstrap for the original login must not replace its password.
-	if err := store.EnsureBootstrapOperator(ctx, login, "ci-replacement-password-789"); err != nil {
+	// Re-running bootstrap for an existing owner must not replace its password.
+	if err := store.EnsureBootstrapOperator(ctx, operator.Login, "ci-replacement-password-789"); err != nil {
 		t.Fatal(err)
 	}
-	originalOperator, err := store.FindOperatorByLogin(ctx, login)
+	unchangedOperator, err := store.FindOperatorByLogin(ctx, operator.Login)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if ok, err := verifyPassword(originalOperator.PasswordHash, "ci-owner-password-123"); err != nil || !ok {
-		t.Fatalf("bootstrap unexpectedly changed the original owner password: ok=%v err=%v", ok, err)
+	if unchangedOperator.PasswordHash != originalPasswordHash {
+		t.Fatal("bootstrap unexpectedly changed the existing owner password hash")
 	}
 	_, tokenHash, err := generateSessionToken()
 	if err != nil {

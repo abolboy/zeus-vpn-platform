@@ -22,7 +22,6 @@ grep -Fqx 'ProtectSystem=strict' deploy/systemd/zeus-control-plane.service
 grep -Fqx 'Type=oneshot' deploy/systemd/zeus-migrate.service
 bash -n scripts/bootstrap-rds-app-role.sh
 grep -Fqx 'EnvironmentFile=-/etc/zeus/database-runtime.env' deploy/systemd/zeus-control-plane.service
-grep -Fqx 'EnvironmentFile=-/etc/zeus/database-migrate.env' deploy/systemd/zeus-migrate.service
 grep -Fqx 'Environment=ZEUS_ENV=production' deploy/systemd/zeus-migrate.service
 grep -Fqx 'EnvironmentFile=/etc/zeus/database-migrate.env' deploy/systemd/zeus-migrate.service
 if grep -Fq 'EnvironmentFile=/etc/zeus/control-plane.env' deploy/systemd/zeus-migrate.service; then

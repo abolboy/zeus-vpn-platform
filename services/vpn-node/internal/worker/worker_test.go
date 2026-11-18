@@ -157,8 +157,8 @@ func TestRemovePeerExecutionHasBoundedTimeoutAndAcknowledges(t *testing.T) {
 	if manager.removeCalls != 1 || manager.operationDeadline.IsZero() {
 		t.Fatalf("peer removal did not receive a bounded context: manager=%+v", manager)
 	}
-	if len(client.acks) != 1 || client.acks[0].status != "failed" || client.acks[0].code != "wg_apply_failed" {
-		t.Fatalf("timed-out removal was not reported as failed: %+v", client.acks)
+	if len(client.acks) != 1 || client.acks[0].attempt != command.Attempt || client.acks[0].status != "failed" || client.acks[0].code != "wg_apply_failed" {
+		t.Fatalf("timed-out removal was not reported with the leased attempt: %+v", client.acks)
 	}
 	if client.ackContextErr != nil {
 		t.Fatalf("removal acknowledgement inherited the expired operation context: %v", client.ackContextErr)

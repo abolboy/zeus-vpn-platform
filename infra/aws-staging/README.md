@@ -80,7 +80,7 @@ The private mTLS listener must be configured on the Control Plane's private inte
 
 ## Operational caveats
 
-- This stack does not deploy the ZEUS applications or run database migrations. Do not expect the ALB target to become healthy until the Control Plane binary, schema, service configuration, and listener are installed.
+- This stack does not deploy the ZEUS applications or run database migrations. The ALB target health check uses `/readyz`, which verifies the Control Plane can reach PostgreSQL; expect it to remain unhealthy until the binary, schema, service configuration, listener, and database connectivity are ready.
 - The node security group allows the WireGuard UDP port from the Internet. Restrict the source CIDR to known test-client addresses if those addresses are stable; otherwise retain the minimum required UDP exposure and monitor it.
 - The VPN node has `SourceDestCheck=false`, but forwarding sysctls, nftables/iptables forwarding, NAT, WireGuard interface configuration, and peer pools still require a separate reviewed configuration.
 - The RDS master secret is generated and managed by RDS. The template grants read access to that secret only to the Control Plane instance role; the Node role receives SSM permissions only.

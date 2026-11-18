@@ -628,13 +628,13 @@ func TestPostgresStoreIntegration(t *testing.T) {
 	if _, err := store.LeaseNodeCommand(ctx, nodeID, 45*time.Second); !errors.Is(err, ErrNoNodeCommand) {
 		t.Fatalf("second poll error=%v, want ErrNoNodeCommand while lease is active", err)
 	}
-	if err := store.AcknowledgeNodeCommand(ctx, nodeID, commandID, "succeeded", ""); err != nil {
+	if err := store.AcknowledgeNodeCommand(ctx, nodeID, commandID, command.Attempt, "succeeded", ""); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.AcknowledgeNodeCommand(ctx, nodeID, commandID, "succeeded", ""); err != nil {
+	if err := store.AcknowledgeNodeCommand(ctx, nodeID, commandID, command.Attempt, "succeeded", ""); err != nil {
 		t.Fatalf("replayed acknowledgement should be idempotent: %v", err)
 	}
-	if err := store.AcknowledgeNodeCommand(ctx, nodeID, commandID, "failed", "wg_apply_failed"); !errors.Is(err, ErrNodeCommandConflict) {
+	if err := store.AcknowledgeNodeCommand(ctx, nodeID, commandID, command.Attempt, "failed", "wg_apply_failed"); !errors.Is(err, ErrNodeCommandConflict) {
 		t.Fatalf("conflicting acknowledgement error=%v, want ErrNodeCommandConflict", err)
 	}
 	var commandStatus string
@@ -643,6 +643,40 @@ func TestPostgresStoreIntegration(t *testing.T) {
 	}
 	if commandStatus != "succeeded" {
 		t.Fatalf("node command status=%s, want succeeded", commandStatus)
+	}
+
+	// Acknowledgements from an expired lease must not alter a later attempt.
+	var staleCommandID string
+	if err := store.pool.QueryRow(ctx, `
+		INSERT INTO node_commands (node_id, created_by_operator_id, command_type, payload, request_hash, idempotency_key, expires_at)
+		VALUES ($1::uuid, $2::uuid, 'peer.ensure', $3::jsonb, $4, $5, now() + interval '5 minutes')
+		RETURNING id::text
+	`, nodeID, operator.ID, string(commandPayload), commandHash[:], newRequestID()).Scan(&staleCommandID); err != nil {
+		t.Fatal(err)
+	}
+	firstLease, err := store.LeaseNodeCommand(ctx, nodeID, 45*time.Second)
+	if err != nil || firstLease.ID != staleCommandID || firstLease.Attempt != 1 {
+		t.Fatalf("first test lease=%+v err=%v", firstLease, err)
+	}
+	if _, err := store.pool.Exec(ctx, `
+		UPDATE node_commands
+		SET lease_expires_at = now() - interval '1 second'
+		WHERE id = $1::uuid AND status = 'leased'
+	`, staleCommandID); err != nil {
+		t.Fatal(err)
+	}
+	secondLease, err := store.LeaseNodeCommand(ctx, nodeID, 45*time.Second)
+	if err != nil || secondLease.ID != staleCommandID || secondLease.Attempt != 2 {
+		t.Fatalf("second test lease=%+v err=%v", secondLease, err)
+	}
+	if err := store.AcknowledgeNodeCommand(ctx, nodeID, staleCommandID, firstLease.Attempt, "succeeded", ""); !errors.Is(err, ErrNodeCommandConflict) {
+		t.Fatalf("stale attempt acknowledgement error=%v, want ErrNodeCommandConflict", err)
+	}
+	if err := store.AcknowledgeNodeCommand(ctx, nodeID, staleCommandID, secondLease.Attempt, "succeeded", ""); err != nil {
+		t.Fatalf("current attempt acknowledgement failed: %v", err)
+	}
+	if err := store.AcknowledgeNodeCommand(ctx, nodeID, staleCommandID, secondLease.Attempt, "succeeded", ""); err != nil {
+		t.Fatalf("current attempt replay should be idempotent: %v", err)
 	}
 
 	var deviceUserID string
@@ -746,7 +780,7 @@ func TestPostgresStoreIntegration(t *testing.T) {
 	if err != nil || deviceCommand.Type != "peer.ensure" {
 		t.Fatalf("device peer.ensure command lease failed: command=%+v err=%v", deviceCommand, err)
 	}
-	if err := store.AcknowledgeNodeCommand(ctx, nodeID, deviceCommand.ID, "succeeded", ""); err != nil {
+	if err := store.AcknowledgeNodeCommand(ctx, nodeID, deviceCommand.ID, deviceCommand.Attempt, "succeeded", ""); err != nil {
 		t.Fatal(err)
 	}
 	devices, err = store.ListVPNDevices(ctx, deviceUserID)
@@ -778,7 +812,7 @@ func TestPostgresStoreIntegration(t *testing.T) {
 	if err != nil || removeCommand.Type != "peer.remove" {
 		t.Fatalf("device peer.remove command lease failed: command=%+v err=%v", removeCommand, err)
 	}
-	if err := store.AcknowledgeNodeCommand(ctx, nodeID, removeCommand.ID, "succeeded", ""); err != nil {
+	if err := store.AcknowledgeNodeCommand(ctx, nodeID, removeCommand.ID, removeCommand.Attempt, "succeeded", ""); err != nil {
 		t.Fatal(err)
 	}
 	devices, err = store.ListVPNDevices(ctx, deviceUserID)
@@ -966,14 +1000,14 @@ func TestPostgresStoreIntegration(t *testing.T) {
 		if command.Type != "peer.ensure" {
 			t.Fatalf("unexpected command before enrolled peer.ensure: %+v", command)
 		}
-		if err := store.AcknowledgeNodeCommand(ctx, enrolledDevice.Peer.NodeID, command.ID, "succeeded", ""); err != nil {
+		if err := store.AcknowledgeNodeCommand(ctx, enrolledDevice.Peer.NodeID, command.ID, command.Attempt, "succeeded", ""); err != nil {
 			t.Fatalf("acknowledge prior peer.ensure command %s: %v", command.ID, err)
 		}
 	}
 	if leasedEnsure.ID != ensureCommandID {
 		t.Fatalf("could not lease the expected peer.ensure command %s", ensureCommandID)
 	}
-	if err := store.AcknowledgeNodeCommand(ctx, enrolledDevice.Peer.NodeID, leasedEnsure.ID, "failed", "wg_apply_failed"); err != nil {
+	if err := store.AcknowledgeNodeCommand(ctx, enrolledDevice.Peer.NodeID, leasedEnsure.ID, leasedEnsure.Attempt, "failed", "wg_apply_failed"); err != nil {
 		t.Fatalf("record failed peer.ensure: %v", err)
 	}
 	failedDevice, err := store.GetCustomerVPNDevice(ctx, enrollmentUserID, enrolledDevice.ID)
@@ -1032,7 +1066,7 @@ func TestPostgresStoreIntegration(t *testing.T) {
 		t.Fatalf("retry command changed the original peer identity or addresses: payload=%s err=%v",
 			retryCommand.Payload, err)
 	}
-	if err := store.AcknowledgeNodeCommand(ctx, enrolledDevice.Peer.NodeID, retryCommand.ID, "succeeded", ""); err != nil {
+	if err := store.AcknowledgeNodeCommand(ctx, enrolledDevice.Peer.NodeID, retryCommand.ID, retryCommand.Attempt, "succeeded", ""); err != nil {
 		t.Fatalf("acknowledge retried peer.ensure: %v", err)
 	}
 	activeDevice, err := store.GetCustomerVPNDevice(ctx, enrollmentUserID, enrolledDevice.ID)

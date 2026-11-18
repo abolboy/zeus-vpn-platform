@@ -9,7 +9,9 @@ import (
 	"path/filepath"
 	"reflect"
 	"strings"
+	"syscall"
 	"testing"
+	"time"
 )
 
 const (
@@ -97,6 +99,39 @@ func (f *fakeRunner) Output(_ context.Context, _ string, args ...string) ([]byte
 	}
 }
 
+type contextCheckingRunner struct {
+	*fakeRunner
+}
+
+func (f contextCheckingRunner) Run(ctx context.Context, binary string, args ...string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	return f.fakeRunner.Run(ctx, binary, args...)
+}
+
+type routeAddThenCancelRunner struct {
+	*fakeRunner
+}
+
+func (f routeAddThenCancelRunner) Run(ctx context.Context, binary string, args ...string) error {
+	if strings.Contains(binary, "ip") && len(args) >= 6 && args[1] == "route" && args[2] == "add" {
+		if err := f.fakeRunner.Run(context.Background(), binary, args...); err != nil {
+			return err
+		}
+		<-ctx.Done()
+		return ctx.Err()
+	}
+	return f.fakeRunner.Run(ctx, binary, args...)
+}
+
+func (f routeAddThenCancelRunner) Output(ctx context.Context, binary string, args ...string) ([]byte, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	return f.fakeRunner.Output(ctx, binary, args...)
+}
+
 func testConfig(t *testing.T, allowMutations bool) (Config, string) {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "wg0.conf")
@@ -129,6 +164,91 @@ func testPeer() PeerSpec {
 		PublicKey: testKey,
 		IPv4:      netip.MustParseAddr("10.77.77.3"),
 		IPv6:      netip.MustParseAddr("fd77:77:77::3"),
+	}
+}
+
+func TestEnsurePeerRollsBackRouteInstalledAsTimeoutFires(t *testing.T) {
+	config, original := testConfig(t, true)
+	config.IPv4Pool = netip.MustParsePrefix("10.88.0.0/24")
+	config.IPv6Pool = netip.MustParsePrefix("fd88:88:88::/64")
+	baseRunner := newFakeRunner()
+	runner := routeAddThenCancelRunner{fakeRunner: baseRunner}
+	manager, err := NewManager(config, runner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	peer := testPeer()
+	peer.IPv4 = netip.MustParseAddr("10.88.0.3")
+	peer.IPv6 = netip.MustParseAddr("fd88:88:88::3")
+
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	if _, err := manager.EnsurePeer(ctx, peer); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("EnsurePeer error = %v, want context deadline exceeded", err)
+	}
+	if _, exists := baseRunner.routes["10.88.0.3/32"]; exists {
+		t.Fatal("route installed as timeout fired was not rolled back")
+	}
+	got, err := os.ReadFile(config.ConfigPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != original {
+		t.Fatal("WireGuard config was not restored after route timeout")
+	}
+}
+
+func TestEnsurePeerHonorsContextWhileLocalLockIsHeld(t *testing.T) {
+	config, original := testConfig(t, true)
+	runner := newFakeRunner()
+	manager, err := NewManager(config, runner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager.lock <- struct{}{}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	if _, err := manager.EnsurePeer(ctx, testPeer()); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("local lock wait error = %v, want context deadline exceeded", err)
+	}
+	got, err := os.ReadFile(config.ConfigPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != original || len(runner.calls) != 0 {
+		t.Fatal("operation mutated WireGuard state while local lock was unavailable")
+	}
+}
+
+func TestEnsurePeerHonorsContextWhileFileLockIsHeld(t *testing.T) {
+	config, original := testConfig(t, true)
+	runner := newFakeRunner()
+	manager, err := NewManager(config, runner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lockFile, err := os.OpenFile(config.ConfigPath+".zeus.lock", os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer lockFile.Close()
+	if err := syscall.Flock(int(lockFile.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		t.Fatal(err)
+	}
+	defer syscall.Flock(int(lockFile.Fd()), syscall.LOCK_UN)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	if _, err := manager.EnsurePeer(ctx, testPeer()); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("file lock wait error = %v, want context deadline exceeded", err)
+	}
+	got, err := os.ReadFile(config.ConfigPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != original || len(runner.calls) != 0 {
+		t.Fatal("operation mutated WireGuard state while file lock was unavailable")
 	}
 }
 
@@ -341,6 +461,28 @@ func TestEnsurePeerAddsHostRoutesWhenClientPoolIsOutsideInterfaceSubnet(t *testi
 	}
 	if len(runner.calls) != 3 {
 		t.Fatalf("expected two route additions and one wg set, got %#v", runner.calls)
+	}
+}
+
+func TestRollbackRoutesUsesIndependentContextAfterCancellation(t *testing.T) {
+	config, _ := testConfig(t, true)
+	baseRunner := newFakeRunner()
+	runner := contextCheckingRunner{fakeRunner: baseRunner}
+	manager, err := NewManager(config, runner)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	prefix := netip.MustParsePrefix("10.88.0.3/32")
+	baseRunner.routes[prefix.String()] = "wg0"
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	if err := manager.rollbackRoutes(ctx, []routeSpec{{family: "-4", prefix: prefix}}); err != nil {
+		t.Fatalf("route rollback failed after operation cancellation: %v", err)
+	}
+	if _, exists := baseRunner.routes[prefix.String()]; exists {
+		t.Fatalf("route %s remained after rollback", prefix)
 	}
 }
 

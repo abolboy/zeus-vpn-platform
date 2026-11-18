@@ -77,8 +77,9 @@ Never enable this on the live AWS node until a staging node has passed peer add/
 - Responses are size-limited and decoded strictly.
 - Only peer.ensure and peer.remove commands are accepted.
 - Payloads reject unknown fields and are validated by the local executor.
-- Commands are checked for expiry before execution.
-- The worker acknowledges only after the local executor returns. If the acknowledgement is lost, the lease queue may redeliver; executor operations are designed to be idempotent.
+- Commands are checked for expiry before execution, and each peer operation is bounded to 20 seconds so a stalled `wg` or `ip` subprocess cannot hold the worker indefinitely.
+- Every acknowledgement includes the exact attempt number from the leased command; the Control Plane rejects acknowledgements from stale lease attempts.
+- The worker acknowledges only after the local executor returns; acknowledgement uses the separate bounded HTTP client timeout. If the acknowledgement is lost, the lease queue may redeliver; executor operations are designed to be idempotent.
 - Private keys are never included in a command, parsed into a peer payload, or logged.
 
 ## Tests

@@ -1140,3 +1140,31 @@ func makeBoundNodeClientCertificate(t *testing.T, nodeID string) ([]byte, []byte
 	leafPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: leafDER})
 	return caPEM, leafPEM
 }
+
+
+func TestRateLimitClientIPTrustsOnlyConfiguredProxyChain(t *testing.T) {
+	t.Setenv("ZEUS_TRUSTED_PROXY_CIDRS", "127.0.0.1/32,10.0.0.0/8")
+	api, err := NewAPI("test", nil, nil, nil)
+	if err != nil { t.Fatal(err) }
+
+	untrusted := httptest.NewRequest(http.MethodPost, "/v1/auth/login", nil)
+	untrusted.RemoteAddr = "198.51.100.20:41000"
+	untrusted.Header.Set("X-Forwarded-For", "203.0.113.99")
+	if got := api.rateLimitClientIP(untrusted); got == nil || *got != "198.51.100.20" {
+		t.Fatalf("untrusted forwarded header changed client IP: got %v", got)
+	}
+
+	proxied := httptest.NewRequest(http.MethodPost, "/v1/auth/login", nil)
+	proxied.RemoteAddr = "127.0.0.1:8080"
+	proxied.Header.Set("X-Forwarded-For", "203.0.113.77")
+	if got := api.rateLimitClientIP(proxied); got == nil || *got != "203.0.113.77" {
+		t.Fatalf("trusted proxy client IP = %v, want 203.0.113.77", got)
+	}
+
+	multiHop := httptest.NewRequest(http.MethodPost, "/v1/auth/login", nil)
+	multiHop.RemoteAddr = "127.0.0.1:8080"
+	multiHop.Header.Set("X-Forwarded-For", "192.0.2.44, 10.1.2.3")
+	if got := api.rateLimitClientIP(multiHop); got == nil || *got != "192.0.2.44" {
+		t.Fatalf("trusted proxy chain client IP = %v, want 192.0.2.44", got)
+	}
+}

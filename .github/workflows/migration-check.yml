@@ -47,11 +47,73 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install --yes postgresql-client
-      - name: Apply embedded migrations twice
+      - name: Create isolated least-privilege database roles
+        run: |
+          psql "$ZEUS_DATABASE_URL" --no-psqlrc --set=ON_ERROR_STOP=1 <<'SQL'
+          CREATE ROLE zeus_migrator LOGIN PASSWORD 'zeus_ci_migrator_password'
+            NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS NOINHERIT;
+          CREATE ROLE zeus_app LOGIN PASSWORD 'zeus_ci_app_password'
+            NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS NOINHERIT;
+          GRANT CONNECT ON DATABASE zeus_test TO zeus_migrator, zeus_app;
+          REVOKE CREATE ON SCHEMA public FROM PUBLIC;
+          GRANT USAGE, CREATE ON SCHEMA public TO zeus_migrator;
+          GRANT USAGE ON SCHEMA public TO zeus_app;
+          ALTER ROLE zeus_migrator SET search_path = public;
+          ALTER ROLE zeus_app SET search_path = public;
+          ALTER DEFAULT PRIVILEGES FOR ROLE zeus_migrator IN SCHEMA public
+            GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO zeus_app;
+          ALTER DEFAULT PRIVILEGES FOR ROLE zeus_migrator IN SCHEMA public
+            GRANT USAGE, SELECT, UPDATE ON SEQUENCES TO zeus_app;
+          ALTER DEFAULT PRIVILEGES FOR ROLE zeus_migrator IN SCHEMA public
+            GRANT EXECUTE ON FUNCTIONS TO zeus_app;
+          SQL
+      - name: Apply embedded migrations twice as the dedicated migration role
         working-directory: services/control-plane
+        env:
+          ZEUS_DATABASE_URL: postgres://zeus_migrator:zeus_ci_migrator_password@127.0.0.1:5432/zeus_test?sslmode=disable
+          PGPASSWORD: zeus_ci_migrator_password
         run: |
           go run ./cmd/zeus-migrate
           go run ./cmd/zeus-migrate
+      - name: Verify runtime least privilege and migration ownership
+        run: |
+          runtime_url='postgres://zeus_app:zeus_ci_app_password@127.0.0.1:5432/zeus_test?sslmode=disable'
+          migrator_url='postgres://zeus_migrator:zeus_ci_migrator_password@127.0.0.1:5432/zeus_test?sslmode=disable'
+
+          identity="$(psql "$runtime_url" --no-psqlrc --set=ON_ERROR_STOP=1 --tuples-only --no-align --command='SELECT current_user')"
+          test "$identity" = "zeus_app"
+
+          privileges="$(psql "$runtime_url" --no-psqlrc --set=ON_ERROR_STOP=1 --tuples-only --no-align --command="
+            SELECT has_schema_privilege(current_user, 'public', 'USAGE')
+              AND NOT has_schema_privilege(current_user, 'public', 'CREATE')
+              AND NOT pg_has_role(current_user, 'zeus_migrator', 'MEMBER')
+              AND NOT (SELECT rolsuper OR rolcreatedb OR rolcreaterole OR rolreplication OR rolbypassrls
+                       FROM pg_roles WHERE rolname = current_user)
+              AND NOT EXISTS (
+                SELECT 1 FROM pg_namespace n,
+                     LATERAL aclexplode(COALESCE(n.nspacl, acldefault('n', n.nspowner))) acl
+                WHERE n.nspname = 'public' AND acl.grantee = 0 AND acl.privilege_type = 'CREATE'
+              )
+              AND NOT EXISTS (
+                SELECT 1 FROM pg_tables t WHERE t.schemaname = 'public' AND t.tableowner <> 'zeus_migrator'
+              )
+          ")"
+          test "$privileges" = "t"
+
+          if psql "$runtime_url" --no-psqlrc --set=ON_ERROR_STOP=1 --command='CREATE TABLE public.zeus_runtime_forbidden (id integer)' >/dev/null 2>&1; then
+            psql "$migrator_url" --no-psqlrc --command='DROP TABLE IF EXISTS public.zeus_runtime_forbidden' >/dev/null 2>&1 || true
+            echo "zeus_app unexpectedly created a table"
+            exit 1
+          fi
+
+          psql "$migrator_url" --no-psqlrc --set=ON_ERROR_STOP=1 --command='CREATE TABLE public.zeus_role_privilege_probe (id BIGSERIAL PRIMARY KEY, note TEXT NOT NULL)'
+          psql "$runtime_url" --no-psqlrc --set=ON_ERROR_STOP=1 --command="INSERT INTO public.zeus_role_privilege_probe (note) VALUES ('runtime grant verified')"
+          psql "$runtime_url" --no-psqlrc --set=ON_ERROR_STOP=1 --command='SELECT count(*) FROM public.zeus_role_privilege_probe'
+          psql "$migrator_url" --no-psqlrc --set=ON_ERROR_STOP=1 --command='DROP TABLE public.zeus_role_privilege_probe'
+
+          echo "PASS: migrations run as zeus_migrator and are repeatable"
+          echo "PASS: zeus_app cannot create schema objects"
+          echo "PASS: zeus_app can use migration-created tables and sequences"
       - name: Verify all migrations, tables, constraints, and indexes
         run: |
           migrations="$(psql --host 127.0.0.1 --username zeus_test --dbname zeus_test --tuples-only --no-align --command "SELECT count(*) FROM schema_migrations WHERE version IN ('0001_initial.sql', '0002_idempotency_records.sql', '0003_node_agent_commands.sql', '0004_device_lifecycle.sql', '0005_client_enrollment_codes.sql', '0006_node_agent_certificates.sql', '0007_customer_self_service.sql');")"

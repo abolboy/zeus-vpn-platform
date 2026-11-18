@@ -137,7 +137,6 @@ func testPeer() PeerSpec {
 	}
 }
 
-
 func TestFileLockAcquisitionHonorsContextDeadline(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "wg.lock")
 	first, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o600)

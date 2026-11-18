@@ -130,6 +130,28 @@ func TestCommandExecutionTimeoutStillAcknowledgesFailure(t *testing.T) {
 		t.Fatalf("timeout was not acknowledged with the current lease attempt: %+v", client.acks)
 	}
 }
+
+func TestCommandExpiryBoundsExecutionTimeout(t *testing.T) {
+	command := &controlplaneclient.Command{
+		ID:        "8e09c3da-fbac-4b34-9ad0-090e1f8d4c47",
+		Attempt:   2,
+		Type:      "peer.remove",
+		Payload:   []byte("{\"public_key\":\"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=\"}"),
+		ExpiresAt: time.Now().Add(100 * time.Millisecond),
+	}
+	client := &fakeClient{command: command}
+	manager := &fakeManager{waitForContext: true}
+	w, err := New(client, manager, Config{PollInterval: time.Second, CommandTimeout: 5 * time.Second})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := w.process(context.Background(), command); err != nil {
+		t.Fatal(err)
+	}
+	if len(client.acks) != 1 || client.acks[0].attempt != 2 || client.acks[0].status != "failed" || client.acks[0].code != "wg_apply_failed" {
+		t.Fatalf("expired operation was not acknowledged with its lease attempt: %+v", client.acks)
+	}
+}
 func TestDryRunDoesNotReportMutationSuccess(t *testing.T) {
 	payload := []byte("{\"public_key\":\"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=\",\"ipv4\":\"10.77.77.3\",\"ipv6\":\"fd77:77:77::3\"}")
 	command := &controlplaneclient.Command{

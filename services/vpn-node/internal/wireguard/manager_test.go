@@ -34,7 +34,10 @@ func newFakeRunner() *fakeRunner {
 	}}
 }
 
-func (f *fakeRunner) Run(_ context.Context, binary string, args ...string) error {
+func (f *fakeRunner) Run(ctx context.Context, binary string, args ...string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	call := append([]string{binary}, args...)
 	f.calls = append(f.calls, call)
 	if f.fail {
@@ -134,7 +137,6 @@ func testPeer() PeerSpec {
 	}
 }
 
-
 func TestFileLockAcquisitionHonorsContextDeadline(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "wg.lock")
 	first, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o600)
@@ -162,6 +164,24 @@ func TestFileLockAcquisitionHonorsContextDeadline(t *testing.T) {
 		t.Fatalf("lock acquisition ignored context deadline: %s", elapsed)
 	}
 }
+func TestRouteRollbackUsesIndependentCleanupContext(t *testing.T) {
+	runner := newFakeRunner()
+	prefix := netip.MustParsePrefix("10.77.77.3/32")
+	runner.routes[prefix.String()] = "wg0"
+	manager := &Manager{
+		config: Config{Interface: "wg0", IPBinary: "/usr/sbin/ip"},
+		runner: runner,
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := manager.rollbackRoutes(ctx, []routeSpec{{family: "-4", prefix: prefix}}); err != nil {
+		t.Fatalf("rollback failed after parent context cancellation: %v", err)
+	}
+	if _, exists := runner.routes[prefix.String()]; exists {
+		t.Fatal("route remained after rollback")
+	}
+}
+
 func TestMutationIsDisabledByDefault(t *testing.T) {
 	config, original := testConfig(t, false)
 	runner := newFakeRunner()

@@ -259,6 +259,21 @@ func (m *Manager) ensurePeerRoutes(ctx context.Context, peer PeerSpec) ([]routeS
 
 		addArgs := []string{spec.family, "route", "add", spec.prefix.String(), "dev", m.config.Interface}
 		if err := m.runner.Run(ctx, m.config.IPBinary, addArgs...); err != nil {
+			if ctx.Err() != nil {
+				cleanupCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+				exactAfter, inspectErr := outputRunner.Output(cleanupCtx, m.config.IPBinary, spec.family, "route", "show", "exact", spec.prefix.String())
+				cancel()
+				if inspectErr != nil {
+					return added, errors.Join(
+						fmt.Errorf("add route %s via %s timed out: %w", spec.prefix, m.config.Interface, err),
+						fmt.Errorf("inspect exact route after timeout: %w", inspectErr),
+					)
+				}
+				if strings.TrimSpace(string(exactAfter)) != "" && routeDevice(exactAfter) == m.config.Interface {
+					return append(added, spec), fmt.Errorf("add route %s via %s timed out after installation: %w", spec.prefix, m.config.Interface, err)
+				}
+				return added, fmt.Errorf("add route %s via %s timed out before installation: %w", spec.prefix, m.config.Interface, err)
+			}
 			after, inspectErr := outputRunner.Output(ctx, m.config.IPBinary, spec.family, "route", "get", spec.prefix.Addr().String())
 			if inspectErr == nil && routeDevice(after) == m.config.Interface {
 				continue

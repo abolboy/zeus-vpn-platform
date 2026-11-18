@@ -50,9 +50,9 @@ export async function getControlPlaneHealth() {
   try {
     const body = await requestJSON('/healthz', { timeoutMs: 5000 })
     if (body?.status !== 'ok') return { state: 'offline', message: 'پاسخ سلامت API معتبر نیست' }
-    return { state: 'online', message: 'سرویس Control Plane پاسخ سلامت معتبر داد' }
+    return { state: 'online', message: 'API پاسخ سلامت معتبر داد؛ آمادگی پایگاه داده و دسترسی مدیریتی جداگانه بررسی می‌شوند' }
   } catch (error) {
-    return { state: 'offline', message: error.message || 'اتصال API برقرار نشد؛ نشانی، شبکه و CORS را بررسی کنید' }
+    return { state: 'offline', message: error.message || 'API پاسخ نداد؛ نشانی، شبکه و CORS را بررسی کنید' }
   }
 }
 

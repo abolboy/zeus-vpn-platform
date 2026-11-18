@@ -16,7 +16,7 @@ import (
 
 type CommandClient interface {
 	Poll(context.Context) (*controlplaneclient.Command, error)
-	Acknowledge(context.Context, string, string, string) error
+	Acknowledge(context.Context, string, int, string, string) error
 }
 
 type PeerManager interface {
@@ -92,19 +92,19 @@ func (w *Worker) process(ctx context.Context, command *controlplaneclient.Comman
 		return nil
 	}
 	if !command.ExpiresAt.After(time.Now().UTC()) {
-		return w.client.Acknowledge(ctx, command.ID, "failed", "command_expired")
+		return w.client.Acknowledge(ctx, command.ID, command.Attempt, "failed", "command_expired")
 	}
 
 	switch command.Type {
 	case "peer.ensure":
 		var payload ensurePeerPayload
 		if err := decodePayload(command.Payload, &payload); err != nil {
-			return w.client.Acknowledge(ctx, command.ID, "failed", "validation_failed")
+			return w.client.Acknowledge(ctx, command.ID, command.Attempt, "failed", "validation_failed")
 		}
 		ipv4, err4 := netip.ParseAddr(payload.IPv4)
 		ipv6, err6 := netip.ParseAddr(payload.IPv6)
 		if err4 != nil || err6 != nil {
-			return w.client.Acknowledge(ctx, command.ID, "failed", "validation_failed")
+			return w.client.Acknowledge(ctx, command.ID, command.Attempt, "failed", "validation_failed")
 		}
 		result, err := w.manager.EnsurePeer(ctx, wireguard.PeerSpec{
 			PublicKey: payload.PublicKey,
@@ -112,27 +112,27 @@ func (w *Worker) process(ctx context.Context, command *controlplaneclient.Comman
 			IPv6:      ipv6,
 		})
 		if err != nil {
-			return w.client.Acknowledge(ctx, command.ID, "failed", "wg_apply_failed")
+			return w.client.Acknowledge(ctx, command.ID, command.Attempt, "failed", "wg_apply_failed")
 		}
 		if result.DryRun {
-			return w.client.Acknowledge(ctx, command.ID, "failed", "mutation_disabled")
+			return w.client.Acknowledge(ctx, command.ID, command.Attempt, "failed", "mutation_disabled")
 		}
-		return w.client.Acknowledge(ctx, command.ID, "succeeded", "")
+		return w.client.Acknowledge(ctx, command.ID, command.Attempt, "succeeded", "")
 	case "peer.remove":
 		var payload removePeerPayload
 		if err := decodePayload(command.Payload, &payload); err != nil {
-			return w.client.Acknowledge(ctx, command.ID, "failed", "validation_failed")
+			return w.client.Acknowledge(ctx, command.ID, command.Attempt, "failed", "validation_failed")
 		}
 		result, err := w.manager.RemovePeer(ctx, payload.PublicKey)
 		if err != nil {
-			return w.client.Acknowledge(ctx, command.ID, "failed", "wg_apply_failed")
+			return w.client.Acknowledge(ctx, command.ID, command.Attempt, "failed", "wg_apply_failed")
 		}
 		if result.DryRun {
-			return w.client.Acknowledge(ctx, command.ID, "failed", "mutation_disabled")
+			return w.client.Acknowledge(ctx, command.ID, command.Attempt, "failed", "mutation_disabled")
 		}
-		return w.client.Acknowledge(ctx, command.ID, "succeeded", "")
+		return w.client.Acknowledge(ctx, command.ID, command.Attempt, "succeeded", "")
 	default:
-		return w.client.Acknowledge(ctx, command.ID, "failed", "validation_failed")
+		return w.client.Acknowledge(ctx, command.ID, command.Attempt, "failed", "validation_failed")
 	}
 }
 

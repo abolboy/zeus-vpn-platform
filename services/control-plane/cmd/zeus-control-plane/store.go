@@ -165,7 +165,7 @@ type ClientDeviceRetryStore interface {
 type NodeAgentStore interface {
 	FindNodeByCertFingerprint(context.Context, []byte) (NodeIdentity, error)
 	LeaseNodeCommand(context.Context, string, time.Duration) (NodeCommand, error)
-	AcknowledgeNodeCommand(context.Context, string, string, string, string) error
+	AcknowledgeNodeCommand(context.Context, string, string, int, string, string) error
 }
 
 type NodeAgentCertificate struct {
@@ -173,7 +173,7 @@ type NodeAgentCertificate struct {
 	NodeID            string     `json:"node_id"`
 	FingerprintSHA256 string     `json:"fingerprint_sha256"`
 	NotBefore         time.Time  `json:"not_before"`
-	NotAfter          time.Time  `json:"not_after"`
+	NotAfter          *time.Time `json:"not_after"`
 	RevokedAt         *time.Time `json:"revoked_at,omitempty"`
 	CreatedAt         time.Time  `json:"created_at"`
 }

@@ -25,7 +25,9 @@ grep -Fqx 'EnvironmentFile=-/etc/zeus/database-runtime.env' deploy/systemd/zeus-
 grep -Fqx 'EnvironmentFile=-/etc/zeus/database-migrate.env' deploy/systemd/zeus-migrate.service
 grep -Fq 'StagingDatabaseMigratorSecret:' infra/aws-staging/zeus-staging-foundation.yaml
 grep -Fq 'DatabaseMigratorSecretArn:' infra/aws-staging/zeus-staging-foundation.yaml
+grep -Fq 'REVOKE CREATE ON SCHEMA public FROM PUBLIC' scripts/bootstrap-rds-app-role.sh
 grep -Fq 'REVOKE CREATE ON SCHEMA public FROM zeus_app' scripts/bootstrap-rds-app-role.sh
+grep -Fq "acl.grantee = 0" scripts/verify-rds-role-separation.sh
 bash -n scripts/verify-rds-role-separation.sh
 if grep -Fq 'ZEUS_DATABASE_URL=' deploy/examples/control-plane.env.example; then
   echo "FAIL: do not put placeholder or master database credentials in the control-plane example"

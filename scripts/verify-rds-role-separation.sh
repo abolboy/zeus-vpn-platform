@@ -14,6 +14,14 @@ runtime_identity="$(psql "$runtime_url" --no-psqlrc --set=ON_ERROR_STOP=1 --tupl
 runtime_privileges="$(psql "$runtime_url" --no-psqlrc --set=ON_ERROR_STOP=1 --tuples-only --no-align --command="
 SELECT has_schema_privilege(current_user, 'public', 'USAGE')
   AND NOT has_schema_privilege(current_user, 'public', 'CREATE')
+  AND NOT EXISTS (
+    SELECT 1
+    FROM pg_namespace n,
+         LATERAL aclexplode(COALESCE(n.nspacl, acldefault('n', n.nspowner))) acl
+    WHERE n.nspname = 'public'
+      AND acl.grantee = 0
+      AND acl.privilege_type = 'CREATE'
+  )
   AND NOT pg_has_role(current_user, 'zeus_migrator', 'MEMBER')
   AND NOT (SELECT rolsuper OR rolcreatedb OR rolcreaterole FROM pg_roles WHERE rolname = current_user)
   AND NOT EXISTS (

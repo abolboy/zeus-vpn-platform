@@ -411,10 +411,11 @@ func (s *PostgresStore) RetryVPNDeviceProvisioning(
 	defer tx.Rollback(ctx)
 
 	var device VPNDevice
+	var userStatus string
 	var nodeReady bool
 	err = tx.QueryRow(ctx, `
 		SELECT d.id::text, d.user_id::text, d.device_ref, d.device_name, d.platform,
-		       d.status, d.created_at, COALESCE(d.last_error, ''),
+		       d.status, u.status, d.created_at, COALESCE(d.last_error, ''),
 		       p.id::text, p.node_id::text, p.public_key, host(p.assigned_ipv4),
 		       COALESCE(host(p.assigned_ipv6), ''), n.public_key, n.endpoint_host,
 		       n.endpoint_port, p.status,
@@ -432,13 +433,14 @@ func (s *PostgresStore) RetryVPNDeviceProvisioning(
 		           false
 		       )
 		FROM vpn_devices d
+		JOIN vpn_users u ON u.id = d.user_id
 		JOIN wireguard_peers p ON p.device_id = d.id
 		JOIN vpn_nodes n ON n.id = p.node_id
 		WHERE d.id = $1::uuid AND d.user_id = $2::uuid
-		FOR UPDATE OF d, p
+		FOR UPDATE OF d, p, u
 	`, deviceID, userID).Scan(
 		&device.ID, &device.UserID, &device.DeviceRef, &device.DeviceName,
-		&device.Platform, &device.Status, &device.CreatedAt, &device.LastError,
+		&device.Platform, &device.Status, &userStatus, &device.CreatedAt, &device.LastError,
 		&device.Peer.ID, &device.Peer.NodeID, &device.Peer.PublicKey,
 		&device.Peer.AssignedIPv4, &device.Peer.AssignedIPv6,
 		&device.Peer.ServerPublicKey, &device.Peer.EndpointHost,
@@ -449,6 +451,9 @@ func (s *PostgresStore) RetryVPNDeviceProvisioning(
 	}
 	if err != nil {
 		return VPNDevice{}, false, err
+	}
+	if userStatus != "active" {
+		return VPNDevice{}, false, ErrUserNotActive
 	}
 
 	// Make retries safe under duplicate taps and concurrent HTTP requests.
@@ -646,6 +651,20 @@ func (s *PostgresStore) EnrollCustomerVPNDevice(
 		return VPNDevice{}, false, err
 	}
 	defer tx.Rollback(ctx)
+
+	// Revalidate account status inside the same transaction before an idempotency
+	// replay can return a previously stored device response.
+	var userStatus string
+	if err := tx.QueryRow(ctx, `
+		SELECT status FROM vpn_users WHERE id = $1::uuid FOR UPDATE
+	`, userID).Scan(&userStatus); errors.Is(err, pgx.ErrNoRows) {
+		return VPNDevice{}, false, ErrVPNUserNotFound
+	} else if err != nil {
+		return VPNDevice{}, false, err
+	}
+	if userStatus != "active" {
+		return VPNDevice{}, false, ErrUserNotActive
+	}
 
 	if _, err := tx.Exec(ctx, `
 		DELETE FROM client_device_idempotency_records

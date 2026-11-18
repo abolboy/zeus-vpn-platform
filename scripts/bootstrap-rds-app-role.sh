@@ -50,15 +50,15 @@ migrator_password="$(jq -er '.password | strings | select(length > 0)' <<<"$migr
 # are validated as alphanumeric before being interpolated into SQL.
 PGPASSWORD="$master_password" psql --no-psqlrc --set=ON_ERROR_STOP=1 --quiet \
   "host=$db_host port=5432 dbname=zeus_staging user=$master_username sslmode=verify-full sslrootcert=$ca_file connect_timeout=10" <<SQL
-SELECT format('CREATE ROLE zeus_migrator LOGIN PASSWORD %L NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT', '$migrator_password')
+SELECT format('CREATE ROLE zeus_migrator LOGIN PASSWORD %L NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS NOINHERIT', '$migrator_password')
 WHERE NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'zeus_migrator')
 \\gexec
-SELECT format('ALTER ROLE zeus_migrator WITH LOGIN PASSWORD %L NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT', '$migrator_password')
+SELECT format('ALTER ROLE zeus_migrator WITH LOGIN PASSWORD %L NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS NOINHERIT', '$migrator_password')
 \\gexec
-SELECT format('CREATE ROLE zeus_app LOGIN PASSWORD %L NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT', '$app_password')
+SELECT format('CREATE ROLE zeus_app LOGIN PASSWORD %L NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS NOINHERIT', '$app_password')
 WHERE NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'zeus_app')
 \\gexec
-SELECT format('ALTER ROLE zeus_app WITH LOGIN PASSWORD %L NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT', '$app_password')
+SELECT format('ALTER ROLE zeus_app WITH LOGIN PASSWORD %L NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS NOINHERIT', '$app_password')
 \\gexec
 GRANT CONNECT ON DATABASE zeus_staging TO zeus_migrator, zeus_app;
 GRANT USAGE, CREATE ON SCHEMA public TO zeus_migrator;

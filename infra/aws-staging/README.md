@@ -85,10 +85,10 @@ The private mTLS listener must be configured on the Control Plane's private inte
 - The VPN node has `SourceDestCheck=false`, but forwarding sysctls, nftables/iptables forwarding, NAT, WireGuard interface configuration, and peer pools still require a separate reviewed configuration.
 - The RDS master secret is generated and managed by RDS. The template grants read access to that secret only to the Control Plane instance role; the Node role receives SSM permissions only.
 - SSM is the intended administrative channel. No inbound SSH rule is created.
-- The Control Plane private subnet uses one NAT Gateway in AZ A for outbound access and SSM. Loss of that AZ interrupts private-subnet egress until recovery; the ALB and database span two AZs.
+- The Control Plane private subnet uses one NAT Gateway in AZ A for outbound access and SSM. Loss of that AZ interrupts private-subnet egress until recovery. The ALB spans two AZs; RDS is Multi-AZ by default, but the `DatabaseMultiAZ` parameter can disable that behavior.
 - RDS deletion protection is enabled and the resource has a snapshot deletion policy. Teardown requires an explicit reviewed update to disable deletion protection, a verified final snapshot, and a second explicit operator approval.
 - Do not point staging at production Cognito, database, certificates, node registry, or WireGuard interfaces.
 
 ## Teardown
 
-There is intentionally no automatic cleanup script. Before teardown, export test evidence, verify a final database snapshot, review all resources tagged `Project=ZEUS` and `Environment=staging`, and confirm the stack contains no production resources. Disable RDS deletion protection only through a separately reviewed CloudFormation update, then take and verify the final snapshot. Delete only this named staging stack after explicit approval.
+There is intentionally no automatic cleanup script. Before teardown, export test evidence, verify a final database snapshot, review all staging resources, using `Project=ZEUS` and `Environment=staging` tags wherever the resource type supports tagging, and confirm the stack contains no production resources. Disable RDS deletion protection only through a separately reviewed CloudFormation update, then take and verify the final snapshot. Delete only this named staging stack after explicit approval.

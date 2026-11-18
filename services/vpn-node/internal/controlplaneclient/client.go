@@ -155,9 +155,12 @@ func (c *Client) Poll(ctx context.Context) (*Command, error) {
 	return &command, nil
 }
 
-func (c *Client) Acknowledge(ctx context.Context, commandID, status, errorCode string) error {
+func (c *Client) Acknowledge(ctx context.Context, commandID string, attempt int, status, errorCode string) error {
 	if !uuidPattern.MatchString(commandID) {
 		return errors.New("invalid node command identifier")
+	}
+	if attempt < 1 || attempt > 10 {
+		return errors.New("invalid node command attempt")
 	}
 	if status != "succeeded" && status != "failed" {
 		return errors.New("invalid node command acknowledgement status")
@@ -167,9 +170,10 @@ func (c *Client) Acknowledge(ctx context.Context, commandID, status, errorCode s
 		return errors.New("invalid node command acknowledgement error code")
 	}
 	payload, err := json.Marshal(struct {
+		Attempt   int    "json:\"attempt\""
 		Status    string "json:\"status\""
 		ErrorCode string "json:\"error_code,omitempty\""
-	}{Status: status, ErrorCode: errorCode})
+	}{Attempt: attempt, Status: status, ErrorCode: errorCode})
 	if err != nil {
 		return errors.New("encode node command acknowledgement failed")
 	}

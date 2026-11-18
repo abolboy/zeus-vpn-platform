@@ -15,6 +15,7 @@ runtime_privileges="$(psql "$runtime_url" --no-psqlrc --set=ON_ERROR_STOP=1 --tu
 SELECT has_schema_privilege(current_user, 'public', 'USAGE')
   AND NOT has_schema_privilege(current_user, 'public', 'CREATE')
   AND NOT pg_has_role(current_user, 'zeus_migrator', 'MEMBER')
+  AND NOT (SELECT rolsuper OR rolcreatedb OR rolcreaterole FROM pg_roles WHERE rolname = current_user)
   AND NOT EXISTS (
     SELECT 1 FROM pg_tables t WHERE t.schemaname = 'public'
       AND NOT (
@@ -23,6 +24,17 @@ SELECT has_schema_privilege(current_user, 'public', 'USAGE')
         AND has_table_privilege(current_user, format('%I.%I', t.schemaname, t.tablename), 'UPDATE')
         AND has_table_privilege(current_user, format('%I.%I', t.schemaname, t.tablename), 'DELETE')
       )
+  AND NOT EXISTS (
+    SELECT 1 FROM pg_sequences s WHERE s.schemaname = 'public'
+      AND NOT (
+        has_sequence_privilege(current_user, format('%I.%I', s.schemaname, s.sequencename), 'USAGE')
+        AND has_sequence_privilege(current_user, format('%I.%I', s.schemaname, s.sequencename), 'SELECT')
+        AND has_sequence_privilege(current_user, format('%I.%I', s.schemaname, s.sequencename), 'UPDATE')
+      )
+  )
+  AND NOT EXISTS (
+    SELECT 1 FROM pg_tables t WHERE t.schemaname = 'public' AND t.tableowner <> 'zeus_migrator'
+  )
 ")"
 [[ "$runtime_privileges" == "t" ]] || die "runtime role has unexpected schema or table privileges"
 if psql "$runtime_url" --no-psqlrc --set=ON_ERROR_STOP=1 --command='CREATE TABLE public.zeus_runtime_privilege_probe (id integer)' >/dev/null 2>&1; then

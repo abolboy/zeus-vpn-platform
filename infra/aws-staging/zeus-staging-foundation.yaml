@@ -418,7 +418,7 @@ Resources:
       Engine: postgres
       EngineVersion: !Ref PostgresEngineVersion
       DBName: zeus_staging
-      MasterUsername: zeus_staging_admin
+      MasterUsername: zeus_stage_admin
       ManageMasterUserPassword: true
       DBInstanceClass: !Ref DatabaseInstanceClass
       AllocatedStorage: !Ref DatabaseAllocatedStorage

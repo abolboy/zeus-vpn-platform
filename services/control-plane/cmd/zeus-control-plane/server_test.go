@@ -806,6 +806,45 @@ func TestPostgresStoreIntegration(t *testing.T) {
 		t.Fatalf("released node addresses were not reused: old=%+v new=%+v", device.Peer, replacementDevice.Peer)
 	}
 
+	// Self-service enrollment idempotency must not bypass a later account suspension.
+	var selfServiceUserID string
+	if err := store.pool.QueryRow(ctx, `
+		INSERT INTO vpn_users (display_name, max_devices)
+		VALUES ('ZEUS Self-Service Idempotency User', 2)
+		RETURNING id::text
+	`).Scan(&selfServiceUserID); err != nil {
+		t.Fatal(err)
+	}
+	selfServiceInput := CreateDeviceInput{
+		DeviceRef: "ci-self-service-device-0001",
+		DeviceName: "Self-Service Android",
+		Platform: "android",
+		PublicKey: "CwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc=",
+	}
+	selfServiceHash := sha256.Sum256([]byte("self-service-idempotency-v1"))
+	selfServiceKey := newRequestID()
+	if _, replayed, err := store.EnrollCustomerVPNDevice(
+		ctx, selfServiceUserID, selfServiceKey, selfServiceHash[:], selfServiceInput, newRequestID(), nil,
+	); err != nil || replayed {
+		t.Fatalf("initial self-service enrollment failed: replayed=%v err=%v", replayed, err)
+	}
+	if _, replayed, err := store.EnrollCustomerVPNDevice(
+		ctx, selfServiceUserID, selfServiceKey, selfServiceHash[:], selfServiceInput, newRequestID(), nil,
+	); err != nil || !replayed {
+		t.Fatalf("active self-service idempotency replay failed: replayed=%v err=%v", replayed, err)
+	}
+	if _, err := store.pool.Exec(ctx, "UPDATE vpn_users SET status='suspended' WHERE id=$1::uuid", selfServiceUserID); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := store.EnrollCustomerVPNDevice(
+		ctx, selfServiceUserID, selfServiceKey, selfServiceHash[:], selfServiceInput, newRequestID(), nil,
+	); !errors.Is(err, ErrUserNotActive) {
+		t.Fatalf("suspended self-service idempotency replay error=%v, want ErrUserNotActive", err)
+	}
+	if _, err := store.pool.Exec(ctx, "UPDATE vpn_users SET status='active' WHERE id=$1::uuid", selfServiceUserID); err != nil {
+		t.Fatal(err)
+	}
+
 	// Issue a one-time enrollment code from the authenticated admin API.
 	var enrollmentUserID string
 	if err := store.pool.QueryRow(ctx, `

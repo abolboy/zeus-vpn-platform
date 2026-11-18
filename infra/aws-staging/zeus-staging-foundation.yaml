@@ -34,10 +34,15 @@ Parameters:
     Default: /aws/service/canonical/ubuntu/server/24.04/stable/current/amd64/hvm/ebs-gp3/ami-id
     Description: Canonical Ubuntu Server 24.04 LTS amd64 public SSM parameter.
 
+  PublicApiHostname:
+    Type: String
+    AllowedPattern: "^(?=.{1,253}$)([a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\\.)+[a-zA-Z]{2,63}$"
+    Description: DNS name you control; its A/ALIAS record must point to the ALB and its ACM certificate must cover this name.
+
   AcmCertificateArn:
     Type: String
     AllowedPattern: "^arn:aws(-us-gov|-cn)?:acm:[a-z0-9-]+:[0-9]{12}:certificate/[a-f0-9-]+$"
-    Description: Existing ACM certificate ARN in this region, valid for the staging API hostname.
+    Description: Existing ACM certificate ARN in this region, valid for PublicApiHostname.
 
   ControlPlaneInstanceType:
     Type: String
@@ -99,6 +104,16 @@ Resources:
     Properties:
       VpcId: !Ref StagingVpc
       InternetGatewayId: !Ref InternetGateway
+
+  StagingPrivateHostedZone:
+    Type: AWS::Route53::HostedZone
+    Properties:
+      Name: !Sub "${EnvironmentName}.internal"
+      VPCs:
+        - VPCId: !Ref StagingVpc
+          VPCRegion: !Ref AWS::Region
+      HostedZoneConfig:
+        Comment: !Sub "Private service discovery for ${EnvironmentName}"
 
   PublicSubnet1:
     Type: AWS::EC2::Subnet
@@ -463,6 +478,16 @@ Resources:
       Roles:
         - !Ref StagingNodeRole
 
+  StagingControlPlanePrivateRecord:
+    Type: AWS::Route53::RecordSet
+    Properties:
+      HostedZoneId: !Ref StagingPrivateHostedZone
+      Name: !Sub "control-plane.${EnvironmentName}.internal."
+      Type: A
+      TTL: "60"
+      ResourceRecords:
+        - !GetAtt StagingControlPlane.PrivateIp
+
   StagingControlPlane:
     Type: AWS::EC2::Instance
     Properties:
@@ -538,9 +563,14 @@ Outputs:
     Value: !Ref StagingControlPlane
   ControlPlanePrivateIp:
     Value: !GetAtt StagingControlPlane.PrivateIp
-  ControlPlaneHttpsUrl:
-    Description: Configure the staging DNS name to resolve to this ALB.
-    Value: !Sub "https://${StagingAlb.DNSName}"
+  LoadBalancerDnsName:
+    Description: Configure PublicApiHostname as an A/ALIAS record pointing to this ALB DNS name.
+    Value: !GetAtt StagingAlb.DNSName
+  PublicApiUrl:
+    Value: !Sub "https://${PublicApiHostname}"
+  ControlPlanePrivateMtlsUrl:
+    Description: Private VPC-only mTLS endpoint for the Node Agent; issue the server certificate for this DNS name.
+    Value: !Sub "https://control-plane.${EnvironmentName}.internal:8443"
   ControlPlaneTargetHealthPath:
     Value: /healthz
   NodeInstanceId:

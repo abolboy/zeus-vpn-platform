@@ -38,6 +38,7 @@ type API struct {
 	nodeClientCAs *x509.CertPool
 	customerVerifier *oidc.IDTokenVerifier
 	customerIssuer string
+	trustedProxyNetworks []*net.IPNet
 }
 
 type contextKey string
@@ -107,6 +108,10 @@ func activationCodeTokenHash(code string) ([32]byte, bool) {
 
 
 func NewAPI(version string, store ControlStore, logger *slog.Logger, allowedOrigins []string) (*API, error) {
+	trustedProxyNetworks, err := parseTrustedProxyCIDRs(os.Getenv("ZEUS_TRUSTED_PROXY_CIDRS"))
+	if err != nil {
+		return nil, fmt.Errorf("parse trusted proxy CIDRs: %w", err)
+	}
 	if logger == nil {
 		logger = slog.Default()
 	}
@@ -129,7 +134,7 @@ func NewAPI(version string, store ControlStore, logger *slog.Logger, allowedOrig
 		version: version, store: store, logger: logger,
 		limiter: newLoginLimiter(), enrollmentLimiter: newLoginLimiter(),
 		customerStatusLimiter: newLoginLimiter(), hashSlots: make(chan struct{}, 2),
-		dummyHash: dummyHash, allowedOrigin: origins,
+		dummyHash: dummyHash, allowedOrigin: origins, trustedProxyNetworks: trustedProxyNetworks,
 	}, nil
 }
 
@@ -242,7 +247,7 @@ func (a *API) handleLogin(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusServiceUnavailable, "not_ready", "احراز هویت هنوز پیکربندی نشده است", requestID)
 		return
 	}
-	ip := remoteIP(r.RemoteAddr)
+	ip := a.rateLimitClientIP(r)
 	limiterKey := "unknown"
 	if ip != nil {
 		limiterKey = *ip
@@ -985,6 +990,41 @@ func requestIDFrom(r *http.Request) string {
 		return value
 	}
 	return "unavailable"
+}
+
+
+func parseTrustedProxyCIDRs(value string) ([]*net.IPNet, error) {
+	var networks []*net.IPNet
+	for _, item := range strings.Split(value, ",") {
+		item = strings.TrimSpace(item)
+		if item == "" { continue }
+		_, network, err := net.ParseCIDR(item)
+		if err != nil { return nil, fmt.Errorf("invalid trusted proxy CIDR %q", item) }
+		networks = append(networks, network)
+	}
+	return networks, nil
+}
+
+func (a *API) rateLimitClientIP(r *http.Request) *string {
+	remote := remoteIP(r.RemoteAddr)
+	if remote == nil { return nil }
+	remoteAddr := net.ParseIP(*remote)
+	trusted := false
+	for _, network := range a.trustedProxyNetworks {
+		if network.Contains(remoteAddr) { trusted = true; break }
+	}
+	if !trusted { return remote }
+	forwarded := strings.Split(r.Header.Get("X-Forwarded-For"), ",")
+	for i := len(forwarded)-1; i >= 0; i-- {
+		candidate := net.ParseIP(strings.TrimSpace(forwarded[i]))
+		if candidate == nil { return remote }
+		isTrusted := false
+		for _, network := range a.trustedProxyNetworks {
+			if network.Contains(candidate) { isTrusted = true; break }
+		}
+		if !isTrusted { value := candidate.String(); return &value }
+	}
+	return remote
 }
 
 func remoteIP(remoteAddress string) *string {

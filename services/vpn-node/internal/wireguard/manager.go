@@ -9,7 +9,6 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
-	"sync"
 	"syscall"
 	"time"
 )
@@ -48,7 +47,7 @@ type CommandOutputRunner interface {
 type Manager struct {
 	config Config
 	runner CommandRunner
-	mu     sync.Mutex
+	lock   chan struct{}
 }
 
 type routeSpec struct {
@@ -94,7 +93,7 @@ func NewManager(config Config, runner CommandRunner) (*Manager, error) {
 			return nil, errors.New("route inspection support is required when WireGuard mutations are enabled")
 		}
 	}
-	return &Manager{config: config, runner: runner}, nil
+	return &Manager{config: config, runner: runner, lock: make(chan struct{}, 1)}, nil
 }
 
 func (m *Manager) EnsurePeer(ctx context.Context, peer PeerSpec) (Result, error) {
@@ -340,22 +339,42 @@ func wrapCompensation(err error) error {
 }
 
 func (m *Manager) withLock(ctx context.Context, operation func() (Result, error)) (Result, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
+	select {
+	case m.lock <- struct{}{}:
+		defer func() { <-m.lock }()
+	case <-ctx.Done():
+		return Result{}, ctx.Err()
+	}
 
 	lockPath := m.config.ConfigPath + ".zeus.lock"
-	lock, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0o600)
+	lockFile, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0o600)
 	if err != nil {
 		return Result{}, fmt.Errorf("open WireGuard lock: %w", err)
 	}
-	defer lock.Close()
-	if err := lock.Chmod(0o600); err != nil {
+	defer lockFile.Close()
+	if err := lockFile.Chmod(0o600); err != nil {
 		return Result{}, fmt.Errorf("secure WireGuard lock: %w", err)
 	}
-	if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX); err != nil {
-		return Result{}, fmt.Errorf("acquire WireGuard lock: %w", err)
+
+	for {
+		err := syscall.Flock(int(lockFile.Fd()), syscall.LOCK_EX|syscall.LOCK_NB)
+		if err == nil {
+			defer syscall.Flock(int(lockFile.Fd()), syscall.LOCK_UN)
+			break
+		}
+		if !errors.Is(err, syscall.EWOULDBLOCK) && !errors.Is(err, syscall.EAGAIN) {
+			return Result{}, fmt.Errorf("acquire WireGuard lock: %w", err)
+		}
+		timer := time.NewTimer(25 * time.Millisecond)
+		select {
+		case <-ctx.Done():
+			if !timer.Stop() {
+				<-timer.C
+			}
+			return Result{}, ctx.Err()
+		case <-timer.C:
+		}
 	}
-	defer syscall.Flock(int(lock.Fd()), syscall.LOCK_UN)
 
 	if err := ctx.Err(); err != nil {
 		return Result{}, err

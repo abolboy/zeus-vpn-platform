@@ -97,6 +97,17 @@ func (f *fakeRunner) Output(_ context.Context, _ string, args ...string) ([]byte
 	}
 }
 
+type contextCheckingRunner struct {
+	*fakeRunner
+}
+
+func (f contextCheckingRunner) Run(ctx context.Context, binary string, args ...string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	return f.fakeRunner.Run(ctx, binary, args...)
+}
+
 func testConfig(t *testing.T, allowMutations bool) (Config, string) {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "wg0.conf")
@@ -341,6 +352,28 @@ func TestEnsurePeerAddsHostRoutesWhenClientPoolIsOutsideInterfaceSubnet(t *testi
 	}
 	if len(runner.calls) != 3 {
 		t.Fatalf("expected two route additions and one wg set, got %#v", runner.calls)
+	}
+}
+
+func TestRollbackRoutesUsesIndependentContextAfterCancellation(t *testing.T) {
+	config, _ := testConfig(t, true)
+	baseRunner := newFakeRunner()
+	runner := contextCheckingRunner{fakeRunner: baseRunner}
+	manager, err := NewManager(config, runner)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	prefix := netip.MustParsePrefix("10.88.0.3/32")
+	baseRunner.routes[prefix.String()] = "wg0"
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	if err := manager.rollbackRoutes(ctx, []routeSpec{{family: "-4", prefix: prefix}}); err != nil {
+		t.Fatalf("route rollback failed after operation cancellation: %v", err)
+	}
+	if _, exists := baseRunner.routes[prefix.String()]; exists {
+		t.Fatalf("route %s remained after rollback", prefix)
 	}
 }
 

@@ -33,23 +33,32 @@ func (f *fakeClient) Acknowledge(_ context.Context, id string, attempt int, stat
 }
 
 type fakeManager struct {
-	ensureCalls int
-	removeCalls int
-	peer        wireguard.PeerSpec
-	publicKey   string
-	result      wireguard.Result
-	err         error
+	ensureCalls    int
+	removeCalls    int
+	peer           wireguard.PeerSpec
+	publicKey      string
+	result         wireguard.Result
+	err            error
+	waitForContext bool
 }
 
-func (f *fakeManager) EnsurePeer(_ context.Context, peer wireguard.PeerSpec) (wireguard.Result, error) {
+func (f *fakeManager) EnsurePeer(ctx context.Context, peer wireguard.PeerSpec) (wireguard.Result, error) {
 	f.ensureCalls++
 	f.peer = peer
+	if f.waitForContext {
+		<-ctx.Done()
+		return wireguard.Result{}, ctx.Err()
+	}
 	return f.result, f.err
 }
 
-func (f *fakeManager) RemovePeer(_ context.Context, publicKey string) (wireguard.Result, error) {
+func (f *fakeManager) RemovePeer(ctx context.Context, publicKey string) (wireguard.Result, error) {
 	f.removeCalls++
 	f.publicKey = publicKey
+	if f.waitForContext {
+		<-ctx.Done()
+		return wireguard.Result{}, ctx.Err()
+	}
 	return f.result, f.err
 }
 
@@ -62,6 +71,24 @@ func newTestWorker(t *testing.T, command *controlplaneclient.Command, result wir
 		t.Fatal(err)
 	}
 	return w, client, manager
+}
+
+func TestCommandTimeoutDefaultsToTenSeconds(t *testing.T) {
+	w, _, _ := newTestWorker(t, nil, wireguard.Result{}, nil)
+	if w.config.CommandTimeout != 10*time.Second {
+		t.Fatalf("default command timeout = %s, want 10s", w.config.CommandTimeout)
+	}
+}
+
+func TestCommandTimeoutCannotExceedLeaseBudget(t *testing.T) {
+	_, err := New(
+		&fakeClient{},
+		&fakeManager{},
+		Config{PollInterval: time.Second, CommandTimeout: 10*time.Second + time.Nanosecond},
+	)
+	if err == nil {
+		t.Fatal("command timeout above the lease budget was accepted")
+	}
 }
 
 func TestEnsurePeerCommandAppliesAndAcknowledges(t *testing.T) {
@@ -92,6 +119,56 @@ func TestEnsurePeerCommandAppliesAndAcknowledges(t *testing.T) {
 	}
 }
 
+func TestCommandExecutionTimeoutStillAcknowledgesFailure(t *testing.T) {
+	command := &controlplaneclient.Command{
+		ID:        "8e09c3da-fbac-4b34-9ad0-090e1f8d4c47",
+		Attempt:   2,
+		Type:      "peer.remove",
+		Payload:   []byte("{\"public_key\":\"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=\"}"),
+		ExpiresAt: time.Now().Add(time.Minute),
+	}
+	client := &fakeClient{command: command}
+	manager := &fakeManager{waitForContext: true}
+	w, err := New(client, manager, Config{PollInterval: time.Second, CommandTimeout: 100 * time.Millisecond})
+	if err != nil {
+		t.Fatal(err)
+	}
+	started := time.Now()
+	if err := w.process(context.Background(), command); err != nil {
+		t.Fatal(err)
+	}
+	if elapsed := time.Since(started); elapsed > time.Second {
+		t.Fatalf("command execution did not respect its timeout: %s", elapsed)
+	}
+	if manager.removeCalls != 1 {
+		t.Fatalf("expected one executor call, got %d", manager.removeCalls)
+	}
+	if len(client.acks) != 1 || client.acks[0].attempt != 2 || client.acks[0].status != "failed" || client.acks[0].code != "wg_apply_failed" {
+		t.Fatalf("timeout was not acknowledged with the current lease attempt: %+v", client.acks)
+	}
+}
+
+func TestCommandExpiryBoundsExecutionTimeout(t *testing.T) {
+	command := &controlplaneclient.Command{
+		ID:        "8e09c3da-fbac-4b34-9ad0-090e1f8d4c47",
+		Attempt:   2,
+		Type:      "peer.remove",
+		Payload:   []byte("{\"public_key\":\"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=\"}"),
+		ExpiresAt: time.Now().Add(100 * time.Millisecond),
+	}
+	client := &fakeClient{command: command}
+	manager := &fakeManager{waitForContext: true}
+	w, err := New(client, manager, Config{PollInterval: time.Second, CommandTimeout: 5 * time.Second})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := w.process(context.Background(), command); err != nil {
+		t.Fatal(err)
+	}
+	if len(client.acks) != 1 || client.acks[0].attempt != 2 || client.acks[0].status != "failed" || client.acks[0].code != "wg_apply_failed" {
+		t.Fatalf("expired operation was not acknowledged with its lease attempt: %+v", client.acks)
+	}
+}
 func TestDryRunDoesNotReportMutationSuccess(t *testing.T) {
 	payload := []byte("{\"public_key\":\"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=\",\"ipv4\":\"10.77.77.3\",\"ipv6\":\"fd77:77:77::3\"}")
 	command := &controlplaneclient.Command{

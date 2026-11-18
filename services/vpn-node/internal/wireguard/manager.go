@@ -275,11 +275,13 @@ func (m *Manager) ensurePeerRoutes(ctx context.Context, peer PeerSpec) ([]routeS
 	return added, nil
 }
 
-func (m *Manager) rollbackRoutes(ctx context.Context, routes []routeSpec) error {
+func (m *Manager) rollbackRoutes(_ context.Context, routes []routeSpec) error {
+	cleanupCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
 	var failures []error
 	for index := len(routes) - 1; index >= 0; index-- {
 		spec := routes[index]
-		err := m.runner.Run(ctx, m.config.IPBinary, spec.family, "route", "del", spec.prefix.String(), "dev", m.config.Interface)
+		err := m.runner.Run(cleanupCtx, m.config.IPBinary, spec.family, "route", "del", spec.prefix.String(), "dev", m.config.Interface)
 		if err != nil {
 			failures = append(failures, fmt.Errorf("remove route %s: %w", spec.prefix, err))
 		}
@@ -349,7 +351,7 @@ func (m *Manager) withLock(ctx context.Context, operation func() (Result, error)
 	if err := lock.Chmod(0o600); err != nil {
 		return Result{}, fmt.Errorf("secure WireGuard lock: %w", err)
 	}
-	if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX); err != nil {
+	if err := acquireFileLock(ctx, int(lock.Fd())); err != nil {
 		return Result{}, fmt.Errorf("acquire WireGuard lock: %w", err)
 	}
 	defer syscall.Flock(int(lock.Fd()), syscall.LOCK_UN)
@@ -396,4 +398,26 @@ func isIPv4Broadcast(address netip.Addr, prefix netip.Prefix) bool {
 		networkRaw = (networkRaw << 8) | uint32(b)
 	}
 	return raw == (networkRaw | hostMask)
+}
+
+func acquireFileLock(ctx context.Context, fd int) error {
+	for {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		err := syscall.Flock(fd, syscall.LOCK_EX|syscall.LOCK_NB)
+		if err == nil {
+			return nil
+		}
+		if !errors.Is(err, syscall.EWOULDBLOCK) && !errors.Is(err, syscall.EAGAIN) {
+			return err
+		}
+		timer := time.NewTimer(50 * time.Millisecond)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return ctx.Err()
+		case <-timer.C:
+		}
+	}
 }

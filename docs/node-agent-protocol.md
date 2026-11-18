@@ -60,6 +60,8 @@ Arbitrary shell text, executable paths, interface names, firewall scripts, arbit
 ## Local executor
 
 - The worker checks expiry, strictly decodes payloads, and dispatches only peer.ensure / peer.remove.
+- Each WireGuard command operation is bounded to 10 seconds by default and cannot be configured above 10 seconds. The node HTTP client timeout is 10 seconds; rollback/compensation can consume up to 10 seconds; and the acknowledgement request can consume up to 10 seconds. Together with the 10-second operation budget, this leaves a 5-second margin inside the 45-second lease.
+- Cross-process WireGuard lock acquisition observes the operation context. Route rollback uses a separate cleanup context capped at 5 seconds so cancellation of the main operation does not suppress cleanup.
 - The local executor's mutation flag defaults to false. In dry-run mode it validates and previews operations, then reports mutation_disabled; it does not claim a successful mutation.
 - Real execution uses fixed argv calls to wg and iproute2 with no shell, validates public keys/pool membership/address collisions, reads config without following symlinks, writes atomically with rollback handling, and ensures each assigned client /32 and /128 resolves through the WireGuard interface. Exact routes owned by another interface are rejected. If route or peer application fails, newly added routes and the config/runtime peer state are rolled back.
 - Explicitly enabling mutations requires a staging node, a backup, failure-injection tests, and least-privilege OS review.

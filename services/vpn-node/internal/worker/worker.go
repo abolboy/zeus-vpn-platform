@@ -25,7 +25,8 @@ type PeerManager interface {
 }
 
 type Config struct {
-	PollInterval time.Duration
+	PollInterval   time.Duration
+	CommandTimeout time.Duration
 }
 
 type Worker struct {
@@ -53,6 +54,12 @@ func New(client CommandClient, manager PeerManager, config Config) (*Worker, err
 	}
 	if config.PollInterval < time.Second || config.PollInterval > time.Minute {
 		return nil, errors.New("node poll interval must be between 1 and 60 seconds")
+	}
+	if config.CommandTimeout == 0 {
+		config.CommandTimeout = 10 * time.Second
+	}
+	if config.CommandTimeout < 100*time.Millisecond || config.CommandTimeout > 10*time.Second {
+		return nil, errors.New("node command timeout must be between 100ms and 10 seconds")
 	}
 	return &Worker{client: client, manager: manager, config: config}, nil
 }
@@ -95,6 +102,13 @@ func (w *Worker) process(ctx context.Context, command *controlplaneclient.Comman
 		return w.client.Acknowledge(ctx, command.ID, command.Attempt, "failed", "command_expired")
 	}
 
+	operationTimeout := w.config.CommandTimeout
+	if untilExpiry := time.Until(command.ExpiresAt); untilExpiry < operationTimeout {
+		operationTimeout = untilExpiry
+	}
+	operationCtx, cancel := context.WithTimeout(ctx, operationTimeout)
+	defer cancel()
+
 	switch command.Type {
 	case "peer.ensure":
 		var payload ensurePeerPayload
@@ -106,7 +120,7 @@ func (w *Worker) process(ctx context.Context, command *controlplaneclient.Comman
 		if err4 != nil || err6 != nil {
 			return w.client.Acknowledge(ctx, command.ID, command.Attempt, "failed", "validation_failed")
 		}
-		result, err := w.manager.EnsurePeer(ctx, wireguard.PeerSpec{
+		result, err := w.manager.EnsurePeer(operationCtx, wireguard.PeerSpec{
 			PublicKey: payload.PublicKey,
 			IPv4:      ipv4,
 			IPv6:      ipv6,
@@ -123,7 +137,7 @@ func (w *Worker) process(ctx context.Context, command *controlplaneclient.Comman
 		if err := decodePayload(command.Payload, &payload); err != nil {
 			return w.client.Acknowledge(ctx, command.ID, command.Attempt, "failed", "validation_failed")
 		}
-		result, err := w.manager.RemovePeer(ctx, payload.PublicKey)
+		result, err := w.manager.RemovePeer(operationCtx, payload.PublicKey)
 		if err != nil {
 			return w.client.Acknowledge(ctx, command.ID, command.Attempt, "failed", "wg_apply_failed")
 		}

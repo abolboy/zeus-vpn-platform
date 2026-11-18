@@ -4,7 +4,7 @@ This runbook prepares an isolated staging environment. It is not approval to dep
 
 ## Network layout and trust boundaries
 
-- Admin/browser traffic: HTTPS reverse proxy -> `127.0.0.1:8080` (Control Plane HTTP listener).
+- Admin/browser traffic: public HTTPS ALB -> TCP `8080` on the private Control Plane interface. The Control Plane security group permits this port only from the ALB security group.
 - Node-agent traffic: VPN node -> TCP `8443` (separate mTLS listener). Restrict this port to the exact staging node source IPs, or bind to a private VPC address when available.
 - PostgreSQL: private network only; allow access from the Control Plane host only.
 - WireGuard data plane: UDP on the configured WireGuard listen port at the VPN node. Do not expose the Control Plane admin port to the Internet.
@@ -56,7 +56,7 @@ Requirements before startup:
 - A server certificate and matching private key for the node mTLS listener. The private key must be a regular file owned by `zeus`, mode `0600`, because the service checks for owner-only permissions. The certificate and client-CA bundle must be readable by `zeus`. The `/etc/zeus` and `/etc/zeus/node-listener` directories must be traversable by the `zeus` group; keep the environment file root-only.
 - A firewall rule for TCP `8443` allowing only the registered staging node source IPs. Prefer a private VPC address in `ZEUS_NODE_HTTP_ADDR` instead of `0.0.0.0:8443` when possible.
 
-Use a TLS reverse proxy for the admin API and route it to `127.0.0.1:8080`. Do not publish port 8080 directly.
+The staging ALB is the TLS reverse proxy for the admin API. Set `ZEUS_HTTP_ADDR=0.0.0.0:8080` so the target is reachable over the private VPC interface; the Control Plane security group must continue to allow TCP 8080 only from the ALB security group. Do not add a public ingress rule for port 8080.
 
 ## 2A. Prepare customer identity (Cognito)
 

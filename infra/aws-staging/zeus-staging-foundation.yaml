@@ -79,6 +79,14 @@ Parameters:
     MinValue: 1
     MaxValue: 65535
 
+  NodePublicIngressCidr:
+    Type: String
+    Default: 0.0.0.0/0
+    Description: Restrict to known test-client public IP ranges when feasible.
+
+Conditions:
+  UseMultiAZDatabase: !Equals [!Ref DatabaseMultiAZ, "true"]
+
 Resources:
   StagingVpc:
     Type: AWS::EC2::VPC
@@ -261,7 +269,7 @@ Resources:
         - IpProtocol: udp
           FromPort: !Ref WireGuardListenPort
           ToPort: !Ref WireGuardListenPort
-          CidrIp: 0.0.0.0/0
+          CidrIp: !Ref NodePublicIngressCidr
       SecurityGroupEgress:
         - IpProtocol: -1
           CidrIp: 0.0.0.0/0
@@ -411,7 +419,7 @@ Resources:
       StorageType: gp3
       StorageEncrypted: true
       PubliclyAccessible: false
-      MultiAZ: !Ref DatabaseMultiAZ
+      MultiAZ: !If [UseMultiAZDatabase, true, false]
       BackupRetentionPeriod: 7
       AutoMinorVersionUpgrade: true
       CopyTagsToSnapshot: true
@@ -532,7 +540,7 @@ Resources:
       NetworkInterfaces:
         - DeviceIndex: "0"
           SubnetId: !Ref PublicSubnet1
-          AssociatePublicIpAddress: true
+          AssociatePublicIpAddress: false
           GroupSet:
             - !Ref StagingNodeSecurityGroup
           DeleteOnTermination: true
@@ -553,6 +561,17 @@ Resources:
           Value: !Sub "${EnvironmentName}-vpn-node"
         - Key: Project
           Value: ZEUS
+        - Key: Environment
+          Value: staging
+
+  StagingNodeElasticIp:
+    Type: AWS::EC2::EIP
+    Properties:
+      Domain: vpc
+      InstanceId: !Ref StagingVpnNode
+      Tags:
+        - Key: Name
+          Value: !Sub "${EnvironmentName}-vpn-node-eip"
         - Key: Environment
           Value: staging
 
@@ -583,7 +602,8 @@ Outputs:
   NodeInstanceId:
     Value: !Ref StagingVpnNode
   NodePublicIp:
-    Value: !GetAtt StagingVpnNode.PublicIp
+    Description: Static Elastic IP used for the staging WireGuard endpoint.
+    Value: !Ref StagingNodeElasticIp
   NodePrivateIp:
     Value: !GetAtt StagingVpnNode.PrivateIp
   WireGuardUdpPort:

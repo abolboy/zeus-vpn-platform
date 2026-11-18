@@ -73,6 +73,24 @@ func newTestWorker(t *testing.T, command *controlplaneclient.Command, result wir
 	return w, client, manager
 }
 
+func TestCommandTimeoutDefaultsToTenSeconds(t *testing.T) {
+	w, _, _ := newTestWorker(t, nil, wireguard.Result{}, nil)
+	if w.config.CommandTimeout != 10*time.Second {
+		t.Fatalf("default command timeout = %s, want 10s", w.config.CommandTimeout)
+	}
+}
+
+func TestCommandTimeoutCannotExceedLeaseBudget(t *testing.T) {
+	_, err := New(
+		&fakeClient{},
+		&fakeManager{},
+		Config{PollInterval: time.Second, CommandTimeout: 10*time.Second + time.Nanosecond},
+	)
+	if err == nil {
+		t.Fatal("command timeout above the lease budget was accepted")
+	}
+}
+
 func TestEnsurePeerCommandAppliesAndAcknowledges(t *testing.T) {
 	payload, _ := json.Marshal(map[string]string{
 		"public_key": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",

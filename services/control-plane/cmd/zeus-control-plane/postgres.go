@@ -652,6 +652,20 @@ func (s *PostgresStore) EnrollCustomerVPNDevice(
 	}
 	defer tx.Rollback(ctx)
 
+	// Revalidate account status inside the same transaction before an idempotency
+	// replay can return a previously stored device response.
+	var userStatus string
+	if err := tx.QueryRow(ctx, `
+		SELECT status FROM vpn_users WHERE id = $1::uuid FOR UPDATE
+	`, userID).Scan(&userStatus); errors.Is(err, pgx.ErrNoRows) {
+		return VPNDevice{}, false, ErrVPNUserNotFound
+	} else if err != nil {
+		return VPNDevice{}, false, err
+	}
+	if userStatus != "active" {
+		return VPNDevice{}, false, ErrUserNotActive
+	}
+
 	if _, err := tx.Exec(ctx, `
 		DELETE FROM client_device_idempotency_records
 		WHERE user_id = $1::uuid AND expires_at <= now()

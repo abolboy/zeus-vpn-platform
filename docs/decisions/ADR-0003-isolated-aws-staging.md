@@ -1,6 +1,6 @@
 # ADR-0003: Isolated AWS staging environment
 
-- **Status:** Proposed — not approved for provisioning
+- **Status:** Proposed — infrastructure code drafted; provisioning not approved
 - **Date:** 2026-11-18
 - **Owners:** ZEUS platform maintainers
 - **Depends on:** the application and deployment contracts in the current integration branch
@@ -55,7 +55,6 @@ Provisioning is blocked until the following are confirmed:
 
 - AWS account and region to use (the existing project region has historically been `us-east-2`; re-verify in the console before any action).
 - Whether a separate AWS account is available, or whether same-account VPC isolation is accepted.
-- Maximum monthly staging budget and automatic cost-alert threshold.
 - DNS name/subdomain controlled by the operator and certificate issuance method.
 - Whether PostgreSQL will be RDS or host-local; backup retention and restore owner.
 - Instance sizes, operating-system image, storage sizes, and expected test window.
@@ -85,7 +84,7 @@ CI success alone does not satisfy these gates.
 
 - Require a budget owner and monthly limit before provisioning.
 - Add a budget alert before creating billable resources.
-- Prefer single-AZ staging and small instance/storage sizes only after the workload and budget are approved.
+- The operator has stated that staging cost is not a limiting factor. Retain cost visibility and alerting, but do not trade away required isolation or validation merely to reduce spend.
 - Avoid NAT Gateway, load balancers, and always-on managed services unless the design requires them; their recurring costs must be reviewed explicitly.
 - Tag every resource with `Project=ZEUS`, `Environment=staging`, and an owner tag.
 - Define a teardown checklist that first exports required test evidence, then removes only resources tagged for this staging environment. Never use broad account-wide cleanup commands.
@@ -96,8 +95,8 @@ A review-only CloudFormation foundation is maintained at `infra/aws-staging/zeus
 
 ## Rollout sequence
 
-1. Approve the account/isolation model, budget, DNS, database choice, and network CIDRs.
-2. Author and lint an infrastructure-as-code template with explicit parameters and safe defaults.
+1. Confirm the account/isolation model, DNS, and network CIDRs; cost is not a limiting constraint.
+2. Review and lint the drafted infrastructure-as-code template with explicit parameters and safe defaults.
 3. Review the generated change set before any stack creation.
 4. Provision only after explicit operator approval; verify the resulting resource inventory.
 5. Deploy application binaries/configuration through SSM or another audited channel; do not place secrets in instance user data.
@@ -106,4 +105,4 @@ A review-only CloudFormation foundation is maintained at `infra/aws-staging/zeus
 
 ## Consequences
 
-This design adds infrastructure and recurring cost, but gives the team a place to verify actual WireGuard kernel behavior and network traffic without risking production. It intentionally leaves the concrete AWS template and provisioning unimplemented until the unresolved inputs and budget are approved.
+This design adds infrastructure and recurring cost, but gives the team a place to verify actual WireGuard kernel behavior and network traffic without risking production. The template is drafted but not deployed. Provisioning remains blocked until the account, hostname/certificate, network CIDRs, and service quotas are verified and the CloudFormation change set is explicitly approved.

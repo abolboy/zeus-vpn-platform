@@ -9,7 +9,9 @@ import (
 	"path/filepath"
 	"reflect"
 	"strings"
+	"syscall"
 	"testing"
+	"time"
 )
 
 const (
@@ -132,6 +134,34 @@ func testPeer() PeerSpec {
 	}
 }
 
+
+func TestFileLockAcquisitionHonorsContextDeadline(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "wg.lock")
+	first, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer first.Close()
+	if err := syscall.Flock(int(first.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		t.Fatal(err)
+	}
+	defer syscall.Flock(int(first.Fd()), syscall.LOCK_UN)
+	second, err := os.OpenFile(path, os.O_RDWR, 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer second.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	started := time.Now()
+	err = acquireFileLock(ctx, int(second.Fd()))
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("lock acquisition error=%v, want context deadline exceeded", err)
+	}
+	if elapsed := time.Since(started); elapsed > time.Second {
+		t.Fatalf("lock acquisition ignored context deadline: %s", elapsed)
+	}
+}
 func TestMutationIsDisabledByDefault(t *testing.T) {
 	config, original := testConfig(t, false)
 	runner := newFakeRunner()

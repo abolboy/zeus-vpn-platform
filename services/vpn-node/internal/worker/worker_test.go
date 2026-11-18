@@ -133,6 +133,34 @@ func TestPeerCommandExecutionHasBoundedTimeoutAndAcknowledges(t *testing.T) {
 	}
 }
 
+func TestRemovePeerExecutionHasBoundedTimeoutAndAcknowledges(t *testing.T) {
+	command := &controlplaneclient.Command{
+		ID:        "8e09c3da-fbac-4b34-9ad0-090e1f8d4c47",
+		Type:      "peer.remove",
+		Payload:   []byte(`{"public_key":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="}`),
+		ExpiresAt: time.Now().Add(time.Minute),
+	}
+	client := &fakeClient{command: command}
+	manager := &fakeManager{waitForCancellation: true}
+	w, err := New(client, manager, Config{PollInterval: time.Second, CommandTimeout: time.Second})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := w.process(context.Background(), command); err != nil {
+		t.Fatal(err)
+	}
+	if manager.removeCalls != 1 || manager.operationDeadline.IsZero() {
+		t.Fatalf("peer removal did not receive a bounded context: manager=%+v", manager)
+	}
+	if len(client.acks) != 1 || client.acks[0].status != "failed" || client.acks[0].code != "wg_apply_failed" {
+		t.Fatalf("timed-out removal was not reported as failed: %+v", client.acks)
+	}
+	if client.ackContextErr != nil {
+		t.Fatalf("removal acknowledgement inherited the expired operation context: %v", client.ackContextErr)
+	}
+}
+
 func TestDryRunDoesNotReportMutationSuccess(t *testing.T) {
 	payload := []byte("{\"public_key\":\"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=\",\"ipv4\":\"10.77.77.3\",\"ipv6\":\"fd77:77:77::3\"}")
 	command := &controlplaneclient.Command{

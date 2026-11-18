@@ -54,8 +54,8 @@ Parameters:
     AllowedValues: [t3.small, t3.medium, t3.large, c7i.large, m7i.large]
   DatabaseInstanceClass:
     Type: String
-    Default: db.t4g.medium
-    AllowedValues: [db.t4g.medium, db.t4g.large, db.m7g.large, db.m7g.xlarge]
+    Default: db.t4g.small
+    AllowedValues: [db.t4g.small, db.t4g.medium, db.t4g.large, db.m7g.large, db.m7g.xlarge]
   PostgresEngineVersion:
     Type: String
     Default: "16.15"
@@ -64,14 +64,14 @@ Parameters:
 
   DatabaseAllocatedStorage:
     Type: Number
-    Default: 100
+    Default: 20
     MinValue: 20
     MaxValue: 1000
   DatabaseMultiAZ:
     Type: String
-    Default: "true"
+    Default: "false"
     AllowedValues: ["true", "false"]
-    Description: Multi-AZ improves staging resilience and increases cost.
+    Description: Single-AZ is the cost-conscious staging default; enable Multi-AZ only after reviewing its recurring cost.
 
   WireGuardListenPort:
     Type: Number

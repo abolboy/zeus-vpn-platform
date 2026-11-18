@@ -1378,7 +1378,10 @@ func markExpiredNodeCommandSubjects(ctx context.Context, tx pgx.Tx, nodeID strin
 	return err
 }
 
-func (s *PostgresStore) AcknowledgeNodeCommand(ctx context.Context, nodeID, commandID, status, errorCode string) error {
+func (s *PostgresStore) AcknowledgeNodeCommand(ctx context.Context, nodeID, commandID string, attempt int, status, errorCode string) error {
+	if attempt < 1 || attempt > 10 {
+		return errors.New("invalid node command acknowledgement attempt")
+	}
 	if status != "succeeded" && status != "failed" {
 		return errors.New("invalid node command acknowledgement status")
 	}
@@ -1393,17 +1396,18 @@ func (s *PostgresStore) AcknowledgeNodeCommand(ctx context.Context, nodeID, comm
 	defer tx.Rollback(ctx)
 
 	var currentStatus string
+	var currentAttempt int
 	var currentError *string
 	var leaseExpiresAt *time.Time
 	var expiresAt time.Time
 	var commandType string
 	var commandPayload []byte
 	err = tx.QueryRow(ctx, `
-		SELECT status, last_error, lease_expires_at, expires_at, command_type, payload
+		SELECT status, attempts, last_error, lease_expires_at, expires_at, command_type, payload
 		FROM node_commands
 		WHERE id = $1::uuid AND node_id = $2::uuid
 		FOR UPDATE
-	`, commandID, nodeID).Scan(&currentStatus, &currentError, &leaseExpiresAt, &expiresAt, &commandType, &commandPayload)
+	`, commandID, nodeID).Scan(&currentStatus, &currentAttempt, &currentError, &leaseExpiresAt, &expiresAt, &commandType, &commandPayload)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return ErrNodeCommandNotFound
 	}
@@ -1411,6 +1415,11 @@ func (s *PostgresStore) AcknowledgeNodeCommand(ctx context.Context, nodeID, comm
 		return err
 	}
 
+	// Fence acknowledgements to the exact lease attempt. Delayed workers cannot
+	// complete or fail a command after it has been leased again.
+	if currentAttempt != attempt {
+		return ErrNodeCommandConflict
+	}
 	if currentStatus == status {
 		currentCode := ""
 		if currentError != nil {

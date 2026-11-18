@@ -19,8 +19,8 @@ type fakeClient struct {
 type ackRecord struct {
 	id      string
 	attempt int
-	status string
-	code   string
+	status  string
+	code    string
 }
 
 func (f *fakeClient) Poll(context.Context) (*controlplaneclient.Command, error) {

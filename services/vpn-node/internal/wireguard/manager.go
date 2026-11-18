@@ -369,7 +369,10 @@ func (m *Manager) withLock(ctx context.Context, operation func() (Result, error)
 		select {
 		case <-ctx.Done():
 			if !timer.Stop() {
-				<-timer.C
+				select {
+				case <-timer.C:
+				default:
+				}
 			}
 			return Result{}, ctx.Err()
 		case <-timer.C:

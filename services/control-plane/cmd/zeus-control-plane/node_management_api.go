@@ -53,7 +53,7 @@ func (a *API) handleCreateNode(w http.ResponseWriter, r *http.Request) {
 	}
 	node, replayed, err := store.CreateVPNNode(
 		r.Context(), operator.ID, "POST:/v1/nodes", key, requestHash[:],
-		normalized, requestIDFrom(r), remoteIP(r.RemoteAddr),
+		normalized, requestIDFrom(r), a.rateLimitClientIP(r),
 	)
 	switch {
 	case errors.Is(err, ErrIdempotencyConflict):

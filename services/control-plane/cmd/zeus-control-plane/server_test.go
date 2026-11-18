@@ -982,6 +982,27 @@ func TestPostgresStoreIntegration(t *testing.T) {
 		t.Fatalf("failed provisioning state was not recorded: device=%+v err=%v", failedDevice, err)
 	}
 
+	// A consumed enrollment code must not bypass a later customer suspension.
+	if _, err := store.pool.Exec(ctx, `
+		UPDATE vpn_users SET status = 'suspended' WHERE id = $1::uuid
+	`, enrollmentUserID); err != nil {
+		t.Fatalf("suspend enrolled customer fixture: %v", err)
+	}
+	suspendedRetry := httptest.NewRequest(http.MethodPost, "/v1/client/devices/"+enrolledDevice.ID+"/retry", nil)
+	suspendedRetry.Header.Set("Authorization", "EnrollmentCode "+enrollmentCode.Code)
+	suspendedRetryResponse := httptest.NewRecorder()
+	handler.ServeHTTP(suspendedRetryResponse, suspendedRetry)
+	if suspendedRetryResponse.Code != http.StatusForbidden ||
+		!bytes.Contains(suspendedRetryResponse.Body.Bytes(), []byte("customer_account_inactive")) {
+		t.Fatalf("suspended customer retry status=%d body=%s, want 403 customer_account_inactive",
+			suspendedRetryResponse.Code, suspendedRetryResponse.Body.String())
+	}
+	if _, err := store.pool.Exec(ctx, `
+		UPDATE vpn_users SET status = 'active' WHERE id = $1::uuid
+	`, enrollmentUserID); err != nil {
+		t.Fatalf("restore enrolled customer fixture: %v", err)
+	}
+
 	// The consumed invite code authorizes retry only for its bound device.
 	retryRequest := httptest.NewRequest(http.MethodPost, "/v1/client/devices/"+enrolledDevice.ID+"/retry", nil)
 	retryRequest.Header.Set("Authorization", "EnrollmentCode "+enrollmentCode.Code)
@@ -1139,4 +1160,32 @@ func makeBoundNodeClientCertificate(t *testing.T, nodeID string) ([]byte, []byte
 	caPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: caDER})
 	leafPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: leafDER})
 	return caPEM, leafPEM
+}
+
+
+func TestRateLimitClientIPTrustsOnlyConfiguredProxyChain(t *testing.T) {
+	t.Setenv("ZEUS_TRUSTED_PROXY_CIDRS", "127.0.0.1/32,10.0.0.0/8")
+	api, err := NewAPI("test", nil, nil, nil)
+	if err != nil { t.Fatal(err) }
+
+	untrusted := httptest.NewRequest(http.MethodPost, "/v1/auth/login", nil)
+	untrusted.RemoteAddr = "198.51.100.20:41000"
+	untrusted.Header.Set("X-Forwarded-For", "203.0.113.99")
+	if got := api.rateLimitClientIP(untrusted); got == nil || *got != "198.51.100.20" {
+		t.Fatalf("untrusted forwarded header changed client IP: got %v", got)
+	}
+
+	proxied := httptest.NewRequest(http.MethodPost, "/v1/auth/login", nil)
+	proxied.RemoteAddr = "127.0.0.1:8080"
+	proxied.Header.Set("X-Forwarded-For", "203.0.113.77")
+	if got := api.rateLimitClientIP(proxied); got == nil || *got != "203.0.113.77" {
+		t.Fatalf("trusted proxy client IP = %v, want 203.0.113.77", got)
+	}
+
+	multiHop := httptest.NewRequest(http.MethodPost, "/v1/auth/login", nil)
+	multiHop.RemoteAddr = "127.0.0.1:8080"
+	multiHop.Header.Set("X-Forwarded-For", "192.0.2.44, 10.1.2.3")
+	if got := api.rateLimitClientIP(multiHop); got == nil || *got != "192.0.2.44" {
+		t.Fatalf("trusted proxy chain client IP = %v, want 192.0.2.44", got)
+	}
 }

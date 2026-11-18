@@ -341,6 +341,26 @@ func TestPostgresStoreIntegration(t *testing.T) {
 	if err != nil || !hasOwner {
 		t.Fatalf("active owner check failed: hasOwner=%v err=%v", hasOwner, err)
 	}
+
+	// Bootstrap must never create another owner after the first active owner exists.
+	secondLogin := "ci-second-owner-" + newRequestID()
+	if err := store.EnsureBootstrapOperator(ctx, secondLogin, "ci-second-owner-password-456"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.FindOperatorByLogin(ctx, secondLogin); !errors.Is(err, pgx.ErrNoRows) {
+		t.Fatalf("one-time bootstrap created a second owner: lookup error=%v", err)
+	}
+	// Re-running bootstrap for the original login must not replace its password.
+	if err := store.EnsureBootstrapOperator(ctx, login, "ci-replacement-password-789"); err != nil {
+		t.Fatal(err)
+	}
+	originalOperator, err := store.FindOperatorByLogin(ctx, login)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ok, err := verifyPassword(originalOperator.PasswordHash, "ci-owner-password-123"); err != nil || !ok {
+		t.Fatalf("bootstrap unexpectedly changed the original owner password: ok=%v err=%v", ok, err)
+	}
 	_, tokenHash, err := generateSessionToken()
 	if err != nil {
 		t.Fatal(err)

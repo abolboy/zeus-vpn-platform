@@ -164,7 +164,7 @@ func (a *API) handleCustomerDeviceStatus(w http.ResponseWriter, r *http.Request)
 
 func (a *API) handleCustomerDeviceRetry(w http.ResponseWriter, r *http.Request) {
 	requestID := requestIDFrom(r)
-	ip := remoteIP(r.RemoteAddr)
+	ip := a.rateLimitClientIP(r)
 	limiterKey := "unknown"
 	if ip != nil {
 		limiterKey = *ip
@@ -279,7 +279,7 @@ func (a *API) handleCustomerDeviceRetry(w http.ResponseWriter, r *http.Request) 
 
 func (a *API) handleCustomerClientEnrollment(w http.ResponseWriter, r *http.Request) {
 	requestID := requestIDFrom(r)
-	ip := remoteIP(r.RemoteAddr)
+	ip := a.rateLimitClientIP(r)
 	limiterKey := "unknown"
 	if ip != nil {
 		limiterKey = *ip

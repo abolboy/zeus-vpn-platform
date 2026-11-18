@@ -52,7 +52,7 @@ Arbitrary shell text, executable paths, interface names, firewall scripts, arbit
 - Commands are node-scoped and delivered at least once.
 - A command receives a 45-second lease and can be re-leased after a lease timeout, provided it has not expired and has attempts remaining.
 - Commands expire and are limited to 10 attempts.
-- Acknowledgements are scoped to the authenticated node ID and command ID. Identical replays are idempotent; conflicting replies are rejected.
+- Acknowledgements include the exact `attempt` returned by the lease response and are scoped to the authenticated node ID, command ID, and current attempt. A delayed acknowledgement from an earlier lease is rejected after re-leasing. Identical replays for the same attempt are idempotent; conflicting replies are rejected.
 - Node heartbeat updates do not prove successful peer application.
 
 ## Local executor

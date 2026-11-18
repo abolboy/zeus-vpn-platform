@@ -122,12 +122,12 @@ func TestExpiredAndInvalidCommandsAreRejectedBeforeExecution(t *testing.T) {
 		},
 		{
 			name:         "unknown command",
-			command:      &controlplaneclient.Command{ID: "8e09c3da-fbac-4b34-9ad0-090e1f8d4c47", Type: "shell.exec", Payload: []byte("{}"), ExpiresAt: time.Now().Add(time.Minute)},
+			command:      &controlplaneclient.Command{ID: "8e09c3da-fbac-4b34-9ad0-090e1f8d4c47", Attempt: 1, Type: "shell.exec", Payload: []byte("{}"), ExpiresAt: time.Now().Add(time.Minute)},
 			expectedCode: "validation_failed",
 		},
 		{
 			name:         "extra payload field",
-			command:      &controlplaneclient.Command{ID: "8e09c3da-fbac-4b34-9ad0-090e1f8d4c47", Type: "peer.remove", Payload: []byte("{\"public_key\":\"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=\",\"command\":\"id\"}"), ExpiresAt: time.Now().Add(time.Minute)},
+			command:      &controlplaneclient.Command{ID: "8e09c3da-fbac-4b34-9ad0-090e1f8d4c47", Attempt: 1, Type: "peer.remove", Payload: []byte("{\"public_key\":\"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=\",\"command\":\"id\"}"), ExpiresAt: time.Now().Add(time.Minute)},
 			expectedCode: "validation_failed",
 		},
 	} {
@@ -139,7 +139,7 @@ func TestExpiredAndInvalidCommandsAreRejectedBeforeExecution(t *testing.T) {
 			if manager.ensureCalls+manager.removeCalls != 0 {
 				t.Fatal("invalid command reached WireGuard executor")
 			}
-			if len(client.acks) != 1 || client.acks[0].status != "failed" || client.acks[0].code != tc.expectedCode {
+			if len(client.acks) != 1 || client.acks[0].attempt != 1 || client.acks[0].status != "failed" || client.acks[0].code != tc.expectedCode {
 				t.Fatalf("unexpected acknowledgement: %+v", client.acks)
 			}
 		})
@@ -149,6 +149,7 @@ func TestExpiredAndInvalidCommandsAreRejectedBeforeExecution(t *testing.T) {
 func TestRemovePeerCommand(t *testing.T) {
 	command := &controlplaneclient.Command{
 		ID:        "8e09c3da-fbac-4b34-9ad0-090e1f8d4c47",
+		Attempt:   1,
 		Type:      "peer.remove",
 		Payload:   []byte("{\"public_key\":\"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=\"}"),
 		ExpiresAt: time.Now().Add(time.Minute),
@@ -160,7 +161,7 @@ func TestRemovePeerCommand(t *testing.T) {
 	if manager.removeCalls != 1 || manager.publicKey != "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=" {
 		t.Fatalf("unexpected remove operation: %+v", manager)
 	}
-	if len(client.acks) != 1 || client.acks[0].status != "succeeded" {
+	if len(client.acks) != 1 || client.acks[0].attempt != 1 || client.acks[0].status != "succeeded" {
 		t.Fatalf("unexpected acknowledgement: %+v", client.acks)
 	}
 }

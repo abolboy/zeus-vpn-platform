@@ -39,11 +39,28 @@ type nodeAgentE2ECertFiles struct {
 	clientPEM  []byte
 }
 
+type synchronizedE2EBuffer struct {
+	mu     sync.Mutex
+	buffer bytes.Buffer
+}
+
+func (b *synchronizedE2EBuffer) Write(data []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buffer.Write(data)
+}
+
+func (b *synchronizedE2EBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buffer.String()
+}
+
 type nodeAgentProcess struct {
 	cmd     *exec.Cmd
 	done    chan struct{}
 	waitErr error
-	output  *bytes.Buffer
+	output  *synchronizedE2EBuffer
 	once    sync.Once
 }
 
@@ -495,7 +512,7 @@ func writeNodeAgentE2EFile(t *testing.T, directory, name string, content []byte,
 
 func startNodeAgentForE2E(t *testing.T, binary string, environment map[string]string) (*nodeAgentProcess, error) {
 	t.Helper()
-	output := &bytes.Buffer{}
+	output := &synchronizedE2EBuffer{}
 	envNames := make([]string, 0, len(environment))
 	for name := range environment {
 		envNames = append(envNames, name)

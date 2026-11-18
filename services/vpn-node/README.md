@@ -78,6 +78,8 @@ Never enable this on the live AWS node until a staging node has passed peer add/
 - Only peer.ensure and peer.remove commands are accepted.
 - Payloads reject unknown fields and are validated by the local executor.
 - Commands are checked for expiry before execution.
+- Each peer operation has a 25-second default timeout (25 seconds maximum), below the 45-second command lease; lock acquisition is cancellable and route rollback has an independent cleanup deadline of up to 5 seconds.
+- Acknowledgements include the lease `attempt` value so the Control Plane can reject stale responses after a command is re-leased.
 - The worker acknowledges only after the local executor returns. If the acknowledgement is lost, the lease queue may redeliver; executor operations are designed to be idempotent.
 - Private keys are never included in a command, parsed into a peer payload, or logged.
 

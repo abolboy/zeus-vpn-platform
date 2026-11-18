@@ -183,7 +183,7 @@ export default function App() {
         status: node.status,
         ip: node.endpoint_host + ':' + node.endpoint_port,
       }))
-    : servers
+    : []
 
   useEffect(() => {
     try { window.localStorage.setItem('zeus.theme', theme) } catch { /* Browser storage is optional. */ }
@@ -846,7 +846,8 @@ export default function App() {
       </section>
        <section className="content-grid"><article className="panel glass server-panel"><div className="panel-heading"><div><h2>وضعیت سرورها</h2><p>{hasLiveControlPlane ? 'موجودی واقعی نودها؛ بار و تأخیر تا اتصال عامل مانیتورینگ گزارش نمی‌شود.' : 'دادهٔ واقعی پس از پیکربندی Control Plane در این بخش نمایش داده می‌شود.'}</p></div><button className="text-link" onClick={() => setPage('servers')}>همه سرورها ←</button></div>
        <div className="server-list">{overviewServerRows.slice(0,3).map(server => <div className="server-row" key={server.id}><div className="server-symbol">⌘</div><div className="server-info"><b>{server.name}</b><small>{server.region} · {server.protocol}</small></div><div className="server-load"><div className="load-label"><span>بار سرور</span><b>{server.load == null ? '—' : server.load + '%'}</b></div><div className="progress"><i style={{ width: (server.load || 0) + '%' }} /></div></div><Status value={server.status} /></div>)}
-       {hasLiveControlPlane && remoteNodesState === 'loading' && <div className="empty">در حال دریافت نودهای واقعی...</div>}
+       {!hasLiveControlPlane && <div className="empty">برای جلوگیری از نمایش دادهٔ نمونه، فهرست سرورها تا اتصال و ورود به Control Plane خالی می‌ماند.</div>}
+        {hasLiveControlPlane && remoteNodesState === 'loading' && <div className="empty">در حال دریافت نودهای واقعی...</div>}
        {hasLiveControlPlane && remoteNodesState === 'loaded' && remoteNodes.length === 0 && <div className="empty">هنوز نودی در Control Plane ثبت نشده است.</div>}
        {hasLiveControlPlane && remoteNodesState === 'error' && <div className="remote-users-error">{remoteNodesError}</div>}
        </div></article>

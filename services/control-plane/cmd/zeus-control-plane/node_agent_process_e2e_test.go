@@ -141,6 +141,15 @@ func TestNodeAgentProcessEndToEnd(t *testing.T) {
 		t.Fatalf("unexpected initial E2E node state: %+v", node)
 	}
 
+	var e2eUserID string
+	t.Cleanup(func() {
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cleanupCancel()
+		if err := cleanupNodeAgentE2ERecords(cleanupCtx, store, node.ID, e2eUserID, operator.ID); err != nil {
+			t.Errorf("clean up isolated Node Agent E2E records: %v", err)
+		}
+	})
+
 	certificates := createNodeAgentE2ECertificates(t, node.ID)
 	caPEM, err := os.ReadFile(certificates.caPath)
 	if err != nil {
@@ -254,6 +263,7 @@ func TestNodeAgentProcessEndToEnd(t *testing.T) {
 	if user.Status != "active" || user.ID == "" {
 		t.Fatalf("unexpected E2E customer: %+v", user)
 	}
+	e2eUserID = user.ID
 
 	codeResponse := serveE2EJSON(
 		t, handler, http.MethodPost,
@@ -330,6 +340,49 @@ func TestNodeAgentProcessEndToEnd(t *testing.T) {
 	if activeDevice.Peer.AssignedIPv4 == "" || activeDevice.Peer.AssignedIPv6 == "" {
 		t.Fatalf("active device has no allocated client addresses: %+v", activeDevice.Peer)
 	}
+}
+
+func cleanupNodeAgentE2ERecords(ctx context.Context, store *PostgresStore, nodeID, userID, operatorID string) error {
+	tx, err := store.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+
+	if userID != "" {
+		if _, err := tx.Exec(ctx, "DELETE FROM vpn_user_enrollment_codes WHERE user_id=$1::uuid", userID); err != nil {
+			return fmt.Errorf("delete test enrollment codes: %w", err)
+		}
+	}
+	if _, err := tx.Exec(ctx, "DELETE FROM wireguard_peers WHERE node_id=$1::uuid", nodeID); err != nil {
+		return fmt.Errorf("delete test peers: %w", err)
+	}
+	if userID != "" {
+		if _, err := tx.Exec(ctx, "DELETE FROM vpn_devices WHERE user_id=$1::uuid", userID); err != nil {
+			return fmt.Errorf("delete test devices: %w", err)
+		}
+	}
+	if _, err := tx.Exec(ctx, "DELETE FROM node_commands WHERE node_id=$1::uuid", nodeID); err != nil {
+		return fmt.Errorf("delete test node commands: %w", err)
+	}
+	if _, err := tx.Exec(ctx, "DELETE FROM vpn_node_agent_certificates WHERE node_id=$1::uuid", nodeID); err != nil {
+		return fmt.Errorf("delete test node certificates: %w", err)
+	}
+	if _, err := tx.Exec(ctx, "DELETE FROM vpn_nodes WHERE id=$1::uuid", nodeID); err != nil {
+		return fmt.Errorf("delete test node: %w", err)
+	}
+	if userID != "" {
+		if _, err := tx.Exec(ctx, "DELETE FROM vpn_users WHERE id=$1::uuid", userID); err != nil {
+			return fmt.Errorf("delete test customer: %w", err)
+		}
+	}
+	if _, err := tx.Exec(ctx, "DELETE FROM operator_sessions WHERE operator_id=$1::uuid", operatorID); err != nil {
+		return fmt.Errorf("delete test operator sessions: %w", err)
+	}
+	if _, err := tx.Exec(ctx, "DELETE FROM operators WHERE id=$1::uuid", operatorID); err != nil {
+		return fmt.Errorf("delete test operator: %w", err)
+	}
+	return tx.Commit(ctx)
 }
 
 func validateE2ETestDSN(dsn string) error {

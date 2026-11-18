@@ -294,8 +294,14 @@ Resources:
           ToPort: 8443
           SourceSecurityGroupId: !Ref StagingNodeSecurityGroup
       SecurityGroupEgress:
-        - IpProtocol: -1
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
           CidrIp: 0.0.0.0/0
+        - IpProtocol: tcp
+          FromPort: 5432
+          ToPort: 5432
+          CidrIp: !Ref VpcCidr
       Tags:
         - Key: Name
           Value: !Sub "${EnvironmentName}-control-plane-sg"

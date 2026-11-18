@@ -173,7 +173,7 @@ type NodeAgentCertificate struct {
 	NodeID            string     `json:"node_id"`
 	FingerprintSHA256 string     `json:"fingerprint_sha256"`
 	NotBefore         time.Time  `json:"not_before"`
-	NotAfter          time.Time  `json:"not_after"`
+	NotAfter          *time.Time `json:"not_after"`
 	RevokedAt         *time.Time `json:"revoked_at,omitempty"`
 	CreatedAt         time.Time  `json:"created_at"`
 }

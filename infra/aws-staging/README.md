@@ -9,7 +9,7 @@ This CloudFormation template creates an isolated staging network and compute/dat
 - Public Application Load Balancer, HTTPS-only listener, and a private Control Plane EC2 instance.
 - Dedicated staging WireGuard EC2 instance in a public subnet. Only its configured WireGuard UDP port is open inbound; no SSH ingress is created. Source/destination checking is disabled for VPN forwarding.
 - Private PostgreSQL RDS instance, encrypted storage, seven-day backups, managed master password, and deletion protection enabled.
-- Separate SSM-enabled IAM roles for Control Plane and VPN node. Only the Control Plane role can read the RDS-managed master secret and the generated least-privilege `zeus_app` password secret.
+- Separate SSM-enabled IAM roles for Control Plane and VPN node. Only the Control Plane role can read the RDS-managed master secret and the generated `zeus_app` runtime and `zeus_migrator` migration secrets.
 - Private Route 53 hosted zone for the node-to-Control-Plane mTLS name.
 
 The template defaults to Ubuntu Server 24.04 LTS amd64. It uses a small EC2 baseline and a Multi-AZ PostgreSQL 16.15 instance by default. The engine minor version is pinned to 16.15 to match the PostgreSQL 16 test baseline; confirm regional availability before creating the stack. Instance classes, database storage, and Multi-AZ behavior are parameters.
@@ -74,7 +74,7 @@ After an approved stack creation, record these outputs without publishing secret
 - `PublicApiUrl` and `LoadBalancerDnsName`: create an external DNS A/ALIAS record for the exact public hostname to the ALB. The ACM certificate must match that hostname.
 - `ControlPlanePrivateIp` and `ControlPlanePrivateMtlsUrl`: issue/install a separate internal server certificate whose SAN includes the private mTLS DNS name. The node agent uses this private endpoint over the VPC.
 - `NodePublicIp`, `NodePrivateIp`, and `NodeInstanceId`: the staging VPN node endpoint and SSM target.
-- `DatabaseEndpoint`, `DatabasePort`, `DatabaseSecretArn`, and `DatabaseAppSecretArn`: run `scripts/bootstrap-rds-app-role.sh` on the isolated Control Plane host to create/update the non-superuser `zeus_app` login and write its connection URL to `/etc/zeus/database.env`. The script retrieves secrets through the Control Plane instance role and does not print passwords. Never copy either secret into Git, user data, command history, or CI logs.
+- `DatabaseEndpoint`, `DatabasePort`, `DatabaseSecretArn`, `DatabaseAppSecretArn`, and `DatabaseMigratorSecretArn`: run `scripts/bootstrap-rds-app-role.sh` on the isolated Control Plane host. It creates the non-superuser runtime `zeus_app` role without schema CREATE and the separate `zeus_migrator` role with schema CREATE, then writes `/etc/zeus/database-runtime.env` and `/etc/zeus/database-migrate.env`. The script retrieves secrets through the Control Plane instance role and does not print passwords. Never copy secrets into Git, user data, command history, or CI logs.
 
 The private mTLS listener must be configured on the Control Plane's private interface at TCP 8443. The public ALB forwards HTTPS traffic to the Control Plane HTTP listener on TCP 8080. The Node Agent connects to the private Route 53 name on TCP 8443 using the dedicated node ClientAuth certificate; the Control Plane independently verifies the node certificate.
 
@@ -83,7 +83,7 @@ The private mTLS listener must be configured on the Control Plane's private inte
 - This stack does not deploy the ZEUS applications or run database migrations. The ALB target health check uses `/readyz`, which verifies the Control Plane can reach PostgreSQL; expect it to remain unhealthy until the binary, schema, service configuration, listener, and database connectivity are ready.
 - The node security group allows the WireGuard UDP port from the Internet. Restrict the source CIDR to known test-client addresses if those addresses are stable; otherwise retain the minimum required UDP exposure and monitor it.
 - The VPN node has `SourceDestCheck=false`, but forwarding sysctls, nftables/iptables forwarding, NAT, WireGuard interface configuration, and peer pools still require a separate reviewed configuration.
-- The RDS master secret is generated and managed by RDS. A separate Secrets Manager secret generates the `zeus_app` password. The template grants both secrets only to the Control Plane instance role; the Node role receives SSM permissions only.
+- The RDS master secret is generated and managed by RDS. Separate Secrets Manager secrets generate the `zeus_app` and `zeus_migrator` passwords. The template grants all three database secrets only to the Control Plane instance role; the Node role receives SSM permissions only.
 - SSM is the intended administrative channel. No inbound SSH rule is created.
 - The Control Plane private subnet uses one NAT Gateway in AZ A for outbound access and SSM. Loss of that AZ interrupts private-subnet egress until recovery. The ALB spans two AZs; RDS is Multi-AZ by default, but the `DatabaseMultiAZ` parameter can disable that behavior.
 - RDS deletion protection is enabled and the resource has a snapshot deletion policy. Teardown requires an explicit reviewed update to disable deletion protection, a verified final snapshot, and a second explicit operator approval.

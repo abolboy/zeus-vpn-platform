@@ -8,6 +8,7 @@ required_files=(
   "deploy/examples/control-plane.env.example"
   "deploy/examples/vpn-node.env.example"
   "scripts/bootstrap-rds-app-role.sh"
+  "scripts/verify-rds-role-separation.sh"
   "docs/staging-deployment.md"
   "infra/aws-cognito/zeus-customer-user-pool.yaml"
 )
@@ -20,8 +21,12 @@ grep -Fqx 'User=zeus' deploy/systemd/zeus-control-plane.service
 grep -Fqx 'ProtectSystem=strict' deploy/systemd/zeus-control-plane.service
 grep -Fqx 'Type=oneshot' deploy/systemd/zeus-migrate.service
 bash -n scripts/bootstrap-rds-app-role.sh
-grep -Fqx 'EnvironmentFile=-/etc/zeus/database.env' deploy/systemd/zeus-control-plane.service
-grep -Fqx 'EnvironmentFile=-/etc/zeus/database.env' deploy/systemd/zeus-migrate.service
+grep -Fqx 'EnvironmentFile=-/etc/zeus/database-runtime.env' deploy/systemd/zeus-control-plane.service
+grep -Fqx 'EnvironmentFile=-/etc/zeus/database-migrate.env' deploy/systemd/zeus-migrate.service
+grep -Fq 'StagingDatabaseMigratorSecret:' infra/aws-staging/zeus-staging-foundation.yaml
+grep -Fq 'DatabaseMigratorSecretArn:' infra/aws-staging/zeus-staging-foundation.yaml
+grep -Fq 'REVOKE CREATE ON SCHEMA public FROM zeus_app' scripts/bootstrap-rds-app-role.sh
+bash -n scripts/verify-rds-role-separation.sh
 if grep -Fq 'ZEUS_DATABASE_URL=' deploy/examples/control-plane.env.example; then
   echo "FAIL: do not put placeholder or master database credentials in the control-plane example"
   exit 1

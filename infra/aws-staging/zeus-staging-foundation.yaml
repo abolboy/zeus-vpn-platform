@@ -451,9 +451,25 @@ Resources:
     Type: AWS::SecretsManager::Secret
     Properties:
       Name: !Sub "${EnvironmentName}-database-app"
-      Description: Least-privilege ZEUS application database login; generated for staging.
+      Description: Least-privilege ZEUS runtime database login; generated for staging.
       GenerateSecretString:
         SecretStringTemplate: '{"username":"zeus_app"}'
+        GenerateStringKey: password
+        PasswordLength: 40
+        ExcludePunctuation: true
+      Tags:
+        - Key: Project
+          Value: ZEUS
+        - Key: Environment
+          Value: staging
+
+  StagingDatabaseMigratorSecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Name: !Sub "${EnvironmentName}-database-migrator"
+      Description: Dedicated ZEUS schema migration login; generated for staging.
+      GenerateSecretString:
+        SecretStringTemplate: '{"username":"zeus_migrator"}'
         GenerateStringKey: password
         PasswordLength: 40
         ExcludePunctuation: true
@@ -487,6 +503,7 @@ Resources:
                 Resource:
                   - !GetAtt StagingDatabase.MasterUserSecret.SecretArn
                   - !Ref StagingDatabaseAppSecret
+                  - !Ref StagingDatabaseMigratorSecret
       Tags:
         - Key: Project
           Value: ZEUS
@@ -646,5 +663,8 @@ Outputs:
     Description: RDS-managed master secret ARN; retrieve through an approved secret-access workflow.
     Value: !GetAtt StagingDatabase.MasterUserSecret.SecretArn
   DatabaseAppSecretArn:
-    Description: Generated least-privilege zeus_app password secret for the Control Plane bootstrap step.
+    Description: Generated least-privilege zeus_app password secret for the Control Plane runtime.
     Value: !Ref StagingDatabaseAppSecret
+  DatabaseMigratorSecretArn:
+    Description: Generated zeus_migrator password secret for explicit schema migrations.
+    Value: !Ref StagingDatabaseMigratorSecret

@@ -103,6 +103,10 @@ func main() {
 		logger.Error("API initialization failed", "error", err)
 		os.Exit(1)
 	}
+	if err := api.SetTrustedProxyCIDRs(os.Getenv("ZEUS_TRUSTED_PROXY_CIDRS")); err != nil {
+		logger.Error("trusted proxy configuration failed", "error", err)
+		os.Exit(1)
+	}
 	oidcIssuer := strings.TrimSpace(os.Getenv("ZEUS_OIDC_ISSUER"))
 	oidcClientID := strings.TrimSpace(os.Getenv("ZEUS_OIDC_CLIENT_ID"))
 	if oidcIssuer != "" || oidcClientID != "" {

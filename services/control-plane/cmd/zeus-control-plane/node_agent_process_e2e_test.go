@@ -69,7 +69,7 @@ func TestNodeAgentProcessEndToEnd(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open disposable E2E PostgreSQL: %v", err)
 	}
-	defer store.Close()
+	t.Cleanup(store.Close)
 	if err := store.Ping(ctx); err != nil {
 		t.Fatalf("E2E database schema is not ready: %v", err)
 	}
@@ -155,7 +155,7 @@ func TestNodeAgentProcessEndToEnd(t *testing.T) {
 	nodeServer := httptest.NewUnstartedServer(NewNodeAgentHandler(store, nil))
 	nodeServer.TLS = serverTLS
 	nodeServer.StartTLS()
-	defer nodeServer.Close()
+	t.Cleanup(nodeServer.Close)
 
 	repoRoot, err := e2ERepositoryRoot()
 	if err != nil {

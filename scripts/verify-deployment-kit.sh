@@ -47,6 +47,10 @@ grep -Fqx 'ZEUS_NODE_HTTP_ADDR=0.0.0.0:8443' deploy/examples/control-plane.env.e
 grep -Fqx 'ZEUS_NODE_ALLOW_MUTATIONS=false' deploy/examples/vpn-node.env.example
 grep -Fqx 'CapabilityBoundingSet=CAP_NET_ADMIN' deploy/systemd/zeus-vpn-node.service
 grep -Fqx 'ReadWritePaths=/etc/wireguard' deploy/systemd/zeus-vpn-node.service
+for unit in deploy/systemd/zeus-control-plane.service deploy/systemd/zeus-migrate.service deploy/systemd/zeus-vpn-node.service; do
+  grep -Fqx 'IPAddressDeny=169.254.169.254/32' "$unit"
+  grep -Fqx 'IPAddressDeny=fd00:ec2::254/128' "$unit"
+done
 
 # Cognito must have a usable managed-login style and explicit token rotation,
 # without silently enabling threat protection that requires the Plus tier.

@@ -113,27 +113,43 @@ func (s *PostgresStore) FindOperatorByLogin(ctx context.Context, login string) (
 	return operator, err
 }
 
+const bootstrapOwnerAdvisoryLockID int64 = 726198430022
+
 func (s *PostgresStore) EnsureBootstrapOperator(ctx context.Context, login, password string) error {
 	if !validPasswordForBootstrap(password) {
 		return errors.New("bootstrap password must contain 14 to 1024 bytes")
 	}
-	var exists bool
-	if err := s.pool.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM operators WHERE login = $1)", login).Scan(&exists); err != nil {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
 		return err
 	}
-	if exists {
-		return nil
+	defer tx.Rollback(ctx)
+
+	// Serialize first-owner bootstrap across concurrent Control Plane instances.
+	if _, err := tx.Exec(ctx, "SELECT pg_advisory_xact_lock($1)", bootstrapOwnerAdvisoryLockID); err != nil {
+		return err
 	}
+	var activeOwnerExists bool
+	if err := tx.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM operators WHERE role = 'owner' AND status = 'active')").Scan(&activeOwnerExists); err != nil {
+		return err
+	}
+	if activeOwnerExists {
+		// Bootstrap credentials are a one-time creation path, never an owner-provisioning API.
+		return tx.Commit(ctx)
+	}
+
 	hash, err := hashPassword(password)
 	if err != nil {
 		return err
 	}
-	_, err = s.pool.Exec(ctx, `
+	if _, err := tx.Exec(ctx, `
 		INSERT INTO operators (login, password_hash, role, status)
 		VALUES ($1, $2, 'owner', 'active')
 		ON CONFLICT (login) DO NOTHING
-	`, login, hash)
-	return err
+	`, login, hash); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
 }
 
 func (s *PostgresStore) CreateSession(ctx context.Context, operatorID string, tokenHash []byte, expiresAt time.Time) error {

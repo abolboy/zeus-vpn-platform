@@ -405,7 +405,35 @@ Resources:
         - Key: Environment
           Value: staging
 
-  StagingInstanceRole:
+  StagingControlPlaneRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ec2.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
+      Policies:
+        - PolicyName: ReadOnlyOwnStagingDatabaseSecret
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - secretsmanager:GetSecretValue
+                  - secretsmanager:DescribeSecret
+                Resource: !GetAtt StagingDatabase.MasterUserSecret.SecretArn
+      Tags:
+        - Key: Project
+          Value: ZEUS
+        - Key: Environment
+          Value: staging
+
+  StagingNodeRole:
     Type: AWS::IAM::Role
     Properties:
       AssumeRolePolicyDocument:
@@ -423,18 +451,24 @@ Resources:
         - Key: Environment
           Value: staging
 
-  StagingInstanceProfile:
+  StagingControlPlaneInstanceProfile:
     Type: AWS::IAM::InstanceProfile
     Properties:
       Roles:
-        - !Ref StagingInstanceRole
+        - !Ref StagingControlPlaneRole
+
+  StagingNodeInstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Roles:
+        - !Ref StagingNodeRole
 
   StagingControlPlane:
     Type: AWS::EC2::Instance
     Properties:
       ImageId: !Ref UbuntuAmiId
       InstanceType: !Ref ControlPlaneInstanceType
-      IamInstanceProfile: !Ref StagingInstanceProfile
+      IamInstanceProfile: !Ref StagingControlPlaneInstanceProfile
       SubnetId: !Ref PrivateSubnet1
       SecurityGroupIds:
         - !Ref StagingControlPlaneSecurityGroup
@@ -462,7 +496,7 @@ Resources:
     Properties:
       ImageId: !Ref UbuntuAmiId
       InstanceType: !Ref NodeInstanceType
-      IamInstanceProfile: !Ref StagingInstanceProfile
+      IamInstanceProfile: !Ref StagingNodeInstanceProfile
       NetworkInterfaces:
         - DeviceIndex: "0"
           SubnetId: !Ref PublicSubnet1

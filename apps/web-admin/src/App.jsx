@@ -109,12 +109,12 @@ export default function App() {
 
   async function checkControlPlane() {
     setApiStatus('checking')
-    setApiMessage('در حال بررسی اتصال کنترل‌پلین')
+    setApiMessage('در حال بررسی پاسخ API')
     const result = await getControlPlaneHealth()
     setApiStatus(result.state)
     setApiMessage(result.message)
-    if (result.state === 'online') toast('ارتباط با Control Plane برقرار است؛ فقط سلامت سرویس تأیید شد.')
-    else if (result.state === 'offline') toast('Control Plane پاسخ معتبر نداد.')
+    if (result.state === 'online') toast('API پاسخ سلامت معتبر داد؛ آمادگی پایگاه داده و دسترسی مدیریتی جداگانه بررسی می‌شوند.')
+    else if (result.state === 'offline') toast('API پاسخ نداد.')
     else toast('نشانی API تنظیم نشده است.')
   }
 

@@ -441,6 +441,22 @@ Resources:
         - Key: Environment
           Value: staging
 
+  StagingDatabaseAppSecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Name: !Sub "${EnvironmentName}-database-app"
+      Description: Least-privilege ZEUS application database login; generated for staging.
+      GenerateSecretString:
+        SecretStringTemplate: '{"username":"zeus_app"}'
+        GenerateStringKey: password
+        PasswordLength: 40
+        ExcludePunctuation: true
+      Tags:
+        - Key: Project
+          Value: ZEUS
+        - Key: Environment
+          Value: staging
+
   StagingControlPlaneRole:
     Type: AWS::IAM::Role
     Properties:
@@ -462,7 +478,9 @@ Resources:
                 Action:
                   - secretsmanager:GetSecretValue
                   - secretsmanager:DescribeSecret
-                Resource: !GetAtt StagingDatabase.MasterUserSecret.SecretArn
+                Resource:
+                  - !GetAtt StagingDatabase.MasterUserSecret.SecretArn
+                  - !Ref StagingDatabaseAppSecret
       Tags:
         - Key: Project
           Value: ZEUS
@@ -621,3 +639,6 @@ Outputs:
   DatabaseSecretArn:
     Description: RDS-managed master secret ARN; retrieve through an approved secret-access workflow.
     Value: !GetAtt StagingDatabase.MasterUserSecret.SecretArn
+  DatabaseAppSecretArn:
+    Description: Generated least-privilege zeus_app password secret for the Control Plane bootstrap step.
+    Value: !Ref StagingDatabaseAppSecret

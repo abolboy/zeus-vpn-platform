@@ -58,6 +58,7 @@ func TestClientUsesMutualTLSAndPollsCommands(t *testing.T) {
 			w.WriteHeader(http.StatusNoContent)
 		case r.Method == http.MethodPost && r.URL.Path == "/agent/v1/commands/8e09c3da-fbac-4b34-9ad0-090e1f8d4c47/ack":
 			var ack struct {
+				Attempt   int    "json:\"attempt\""
 				Status    string "json:\"status\""
 				ErrorCode string "json:\"error_code\""
 			}
@@ -65,7 +66,7 @@ func TestClientUsesMutualTLSAndPollsCommands(t *testing.T) {
 				http.Error(w, "bad acknowledgement", http.StatusBadRequest)
 				return
 			}
-			if ack.Status != "succeeded" || ack.ErrorCode != "" {
+			if ack.Attempt != 1 || ack.Status != "succeeded" || ack.ErrorCode != "" {
 				http.Error(w, "unexpected acknowledgement", http.StatusBadRequest)
 				return
 			}
@@ -106,7 +107,7 @@ func TestClientUsesMutualTLSAndPollsCommands(t *testing.T) {
 	if command == nil || command.Type != "peer.ensure" || command.Attempt != 1 {
 		t.Fatalf("unexpected command: %+v", command)
 	}
-	if err := client.Acknowledge(t.Context(), command.ID, "succeeded", ""); err != nil {
+	if err := client.Acknowledge(t.Context(), command.ID, command.Attempt, "succeeded", ""); err != nil {
 		t.Fatal(err)
 	}
 	empty, err := client.Poll(t.Context())

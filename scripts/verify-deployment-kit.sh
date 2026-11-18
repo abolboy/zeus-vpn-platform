@@ -29,7 +29,6 @@ fi
 grep -Fq 'StagingDatabaseAppSecret:' infra/aws-staging/zeus-staging-foundation.yaml
 grep -Fq 'DatabaseAppSecretArn:' infra/aws-staging/zeus-staging-foundation.yaml
 
-grep -Fqx 'ZEUS_HTTP_ADDR=127.0.0.1:8080' deploy/examples/control-plane.env.example
 grep -Fqx 'ZEUS_NODE_HTTP_ADDR=0.0.0.0:8443' deploy/examples/control-plane.env.example
 grep -Fqx 'ZEUS_NODE_ALLOW_MUTATIONS=false' deploy/examples/vpn-node.env.example
 grep -Fqx 'ZEUS_HTTP_ADDR=0.0.0.0:8080' deploy/examples/control-plane.env.example

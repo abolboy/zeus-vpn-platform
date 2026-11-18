@@ -25,7 +25,8 @@ type PeerManager interface {
 }
 
 type Config struct {
-	PollInterval time.Duration
+	PollInterval   time.Duration
+	CommandTimeout time.Duration
 }
 
 type Worker struct {
@@ -53,6 +54,12 @@ func New(client CommandClient, manager PeerManager, config Config) (*Worker, err
 	}
 	if config.PollInterval < time.Second || config.PollInterval > time.Minute {
 		return nil, errors.New("node poll interval must be between 1 and 60 seconds")
+	}
+	if config.CommandTimeout == 0 {
+		config.CommandTimeout = 20 * time.Second
+	}
+	if config.CommandTimeout < time.Second || config.CommandTimeout > 20*time.Second {
+		return nil, errors.New("node command timeout must be between 1 and 20 seconds")
 	}
 	return &Worker{client: client, manager: manager, config: config}, nil
 }
@@ -106,11 +113,13 @@ func (w *Worker) process(ctx context.Context, command *controlplaneclient.Comman
 		if err4 != nil || err6 != nil {
 			return w.client.Acknowledge(ctx, command.ID, command.Attempt, "failed", "validation_failed")
 		}
-		result, err := w.manager.EnsurePeer(ctx, wireguard.PeerSpec{
+		operationCtx, cancel := context.WithTimeout(ctx, w.config.CommandTimeout)
+		result, err := w.manager.EnsurePeer(operationCtx, wireguard.PeerSpec{
 			PublicKey: payload.PublicKey,
 			IPv4:      ipv4,
 			IPv6:      ipv6,
 		})
+		cancel()
 		if err != nil {
 			return w.client.Acknowledge(ctx, command.ID, command.Attempt, "failed", "wg_apply_failed")
 		}
@@ -123,7 +132,9 @@ func (w *Worker) process(ctx context.Context, command *controlplaneclient.Comman
 		if err := decodePayload(command.Payload, &payload); err != nil {
 			return w.client.Acknowledge(ctx, command.ID, command.Attempt, "failed", "validation_failed")
 		}
-		result, err := w.manager.RemovePeer(ctx, payload.PublicKey)
+		operationCtx, cancel := context.WithTimeout(ctx, w.config.CommandTimeout)
+		result, err := w.manager.RemovePeer(operationCtx, payload.PublicKey)
+		cancel()
 		if err != nil {
 			return w.client.Acknowledge(ctx, command.ID, command.Attempt, "failed", "wg_apply_failed")
 		}

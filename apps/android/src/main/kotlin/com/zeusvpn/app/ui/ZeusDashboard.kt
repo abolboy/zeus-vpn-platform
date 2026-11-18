@@ -197,7 +197,8 @@ fun ZeusDashboard() {
                 settings.setTunnelDesired(false)
                 profileSaved = false
                 wireGuardMessage = missingProfileMessage
-            } catch (_: Exception) {
+            } catch (error: Exception) {
+                if (error is CancellationException) throw error
                 settings.setTunnelDesired(false)
                 wireGuardMessage = connectionFailedMessage
             }
@@ -236,7 +237,8 @@ fun ZeusDashboard() {
                             failedAttempts = 0
                         } catch (cancelled: CancellationException) {
                             throw cancelled
-                        } catch (_: Exception) {
+                        } catch (error: Exception) {
+                            if (error is CancellationException) throw error
                             failedAttempts += 1
                             wireGuardMessage = "اتصال مجدد انجام نشد؛ تلاش بعدی با فاصلهٔ کنترل‌شده انجام می‌شود."
                             delay(TunnelReconnectPolicy.delayAfterFailure(failedAttempts - 1))
@@ -265,7 +267,8 @@ fun ZeusDashboard() {
             try {
                 wireGuard.disconnect()
                 wireGuardMessage = disconnectedMessage
-            } catch (_: Exception) {
+            } catch (error: Exception) {
+                if (error is CancellationException) throw error
                 wireGuardMessage = connectionFailedMessage
             }
         }
@@ -281,7 +284,8 @@ fun ZeusDashboard() {
                 profileSetupMessage = profileSavedMessage
             } catch (_: InvalidWireGuardProfileException) {
                 wireGuardMessage = invalidProfileMessage
-            } catch (_: Exception) {
+            } catch (error: Exception) {
+                if (error is CancellationException) throw error
                 wireGuardMessage = invalidProfileMessage
             }
         }
@@ -295,7 +299,8 @@ fun ZeusDashboard() {
                 profileSaved = false
                 profileDraft = ""
                 profileSetupMessage = profileDeletedMessage
-            } catch (_: Exception) {
+            } catch (error: Exception) {
+                if (error is CancellationException) throw error
                 wireGuardMessage = connectionFailedMessage
             }
         }
@@ -331,6 +336,7 @@ fun ZeusDashboard() {
                         connectAfterProvisioning = false
                         enrollmentMessage = error.message ?: "ثبت دستگاه انجام نشد."
                     } catch (error: Exception) {
+                        if (error is CancellationException) throw error
                         connectAfterProvisioning = false
                         enrollmentMessage = error.message ?: "ثبت انجام نشد؛ تلاش امن برای ادامه روی همین گوشی نگهداری شده است."
                     } finally {
@@ -362,6 +368,7 @@ fun ZeusDashboard() {
                         performEnrollment(idToken, "")
                     }
                 } catch (error: Exception) {
+                    if (error is CancellationException) throw error
                     connectAfterProvisioning = false
                     authMessage = error.message ?: "ورود امن انجام نشد."
                 }
@@ -379,6 +386,7 @@ fun ZeusDashboard() {
                 try {
                     customerSignInLauncher.launch(identity.createAuthorizationIntent())
                 } catch (error: Exception) {
+                    if (error is CancellationException) throw error
                     authBusy = false
                     authMessage = error.message ?: "صفحهٔ ورود در دسترس نیست."
                 }
@@ -405,6 +413,7 @@ fun ZeusDashboard() {
                     val idToken = identity.freshIdToken()
                     performEnrollment(idToken, "")
                 } catch (error: Exception) {
+                    if (error is CancellationException) throw error
                     customerSignedIn = identity.hasStoredSession()
                     authMessage = error.message ?: "نشست حساب منقضی شده است؛ دوباره وارد شوید."
                 }
@@ -433,6 +442,7 @@ fun ZeusDashboard() {
                 try {
                     performEnrollment(identity.freshIdToken(), "")
                 } catch (error: Exception) {
+                    if (error is CancellationException) throw error
                     customerSignedIn = identity.hasStoredSession()
                     authMessage = error.message ?: "برای ادامهٔ ثبت دستگاه دوباره وارد حساب شوید."
                 }
@@ -500,7 +510,8 @@ fun ZeusDashboard() {
                     profileSetupMessage = profileSavedMessage
                 } catch (_: InvalidWireGuardProfileException) {
                     wireGuardMessage = invalidProfileMessage
-                } catch (_: Exception) {
+                } catch (error: Exception) {
+                    if (error is CancellationException) throw error
                     wireGuardMessage = "فایل انتخاب‌شده قابل خواندن یا معتبر نیست."
                 } finally {
                     profileImportBusy = false

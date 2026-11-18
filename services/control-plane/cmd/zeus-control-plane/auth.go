@@ -65,6 +65,8 @@ type loginLimiter struct {
 	entries map[string]loginBucket
 }
 
+const loginLimiterMaxEntries = 10_000
+
 type loginBucket struct {
 	start time.Time
 	count int
@@ -85,14 +87,25 @@ func (l *loginLimiter) allowWindow(key string, now time.Time, maximum int, windo
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
-	if len(l.entries) > 10000 {
-		for k, bucket := range l.entries {
-			if now.Sub(bucket.start) > 2*window {
-				delete(l.entries, k)
+	bucket, exists := l.entries[key]
+	if !exists {
+		// Bound memory even when requests arrive from many distinct source IPs.
+		// Expired windows are reclaimable; if every slot is still active, reject
+		// new keys rather than allowing unbounded map growth.
+		if len(l.entries) >= loginLimiterMaxEntries {
+			for candidate, entry := range l.entries {
+				if !now.Before(entry.start) && now.Sub(entry.start) >= window {
+					delete(l.entries, candidate)
+				}
+			}
+			if len(l.entries) >= loginLimiterMaxEntries {
+				return false
 			}
 		}
+		l.entries[key] = loginBucket{start: now, count: 1}
+		return true
 	}
-	bucket := l.entries[key]
+
 	if bucket.start.IsZero() || now.Sub(bucket.start) >= window || now.Before(bucket.start) {
 		l.entries[key] = loginBucket{start: now, count: 1}
 		return true

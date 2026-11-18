@@ -33,12 +33,12 @@ func (f *fakeClient) Acknowledge(_ context.Context, id string, attempt int, stat
 }
 
 type fakeManager struct {
-	ensureCalls int
-	removeCalls int
-	peer        wireguard.PeerSpec
-	publicKey   string
-	result      wireguard.Result
-	err         error
+	ensureCalls    int
+	removeCalls    int
+	peer           wireguard.PeerSpec
+	publicKey      string
+	result         wireguard.Result
+	err            error
 	waitForContext bool
 }
 
@@ -100,7 +100,6 @@ func TestEnsurePeerCommandAppliesAndAcknowledges(t *testing.T) {
 		t.Fatalf("unexpected acknowledgement: %+v", client.acks)
 	}
 }
-
 
 func TestCommandExecutionTimeoutStillAcknowledgesFailure(t *testing.T) {
 	command := &controlplaneclient.Command{

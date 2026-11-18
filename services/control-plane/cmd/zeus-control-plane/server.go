@@ -32,6 +32,7 @@ type API struct {
 	limiter      *loginLimiter
 	enrollmentLimiter *loginLimiter
 	customerStatusLimiter *loginLimiter
+	trustedProxyCIDRs []*net.IPNet
 	hashSlots    chan struct{}
 	dummyHash    string
 	allowedOrigin map[string]struct{}
@@ -242,7 +243,7 @@ func (a *API) handleLogin(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusServiceUnavailable, "not_ready", "احراز هویت هنوز پیکربندی نشده است", requestID)
 		return
 	}
-	ip := remoteIP(r.RemoteAddr)
+	ip := a.clientIP(r)
 	limiterKey := "unknown"
 	if ip != nil {
 		limiterKey = *ip
@@ -461,7 +462,7 @@ func (a *API) handleCreateUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	hash := sha256.Sum256(fingerprint)
-	user, replayed, err := store.CreateVPNUser(r.Context(), operator.ID, "POST:/v1/users", key, hash[:], input, requestIDFrom(r), remoteIP(r.RemoteAddr))
+	user, replayed, err := store.CreateVPNUser(r.Context(), operator.ID, "POST:/v1/users", key, hash[:], input, requestIDFrom(r), a.clientIP(r))
 	if errors.Is(err, ErrIdempotencyConflict) {
 		writeError(w, http.StatusConflict, "idempotency_conflict", "این کلید قبلاً برای درخواست دیگری استفاده شده است", requestIDFrom(r))
 		return
@@ -534,7 +535,7 @@ func (a *API) handleUpdateUser(w http.ResponseWriter, r *http.Request) {
 	}
 	hash := sha256.Sum256(fingerprint)
 	route := "PATCH:/v1/users/" + userID
-	user, replayed, err := store.UpdateVPNUser(r.Context(), operator.ID, userID, route, key, hash[:], input, requestIDFrom(r), remoteIP(r.RemoteAddr))
+	user, replayed, err := store.UpdateVPNUser(r.Context(), operator.ID, userID, route, key, hash[:], input, requestIDFrom(r), a.clientIP(r))
 	if errors.Is(err, ErrIdempotencyConflict) {
 		writeError(w, http.StatusConflict, "idempotency_conflict", "این کلید قبلاً برای درخواست دیگری استفاده شده است", requestIDFrom(r))
 		return
@@ -667,7 +668,7 @@ func (a *API) handleCreateDevice(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	hash := sha256.Sum256(requestBody)
-	device, replayed, err := store.CreateVPNDevice(r.Context(), operator.ID, userID, "POST:/v1/users/"+userID+"/devices", key, hash[:], input, requestIDFrom(r), remoteIP(r.RemoteAddr))
+	device, replayed, err := store.CreateVPNDevice(r.Context(), operator.ID, userID, "POST:/v1/users/"+userID+"/devices", key, hash[:], input, requestIDFrom(r), a.clientIP(r))
 	switch {
 	case errors.Is(err, ErrIdempotencyConflict):
 		writeError(w, http.StatusConflict, "idempotency_conflict", "این کلید قبلاً برای درخواست دیگری استفاده شده است", requestIDFrom(r))
@@ -738,7 +739,7 @@ func (a *API) handleCreateEnrollmentCode(w http.ResponseWriter, r *http.Request)
 	expiresAt := time.Now().UTC().Add(15 * time.Minute)
 	err := store.CreateDeviceEnrollmentCode(
 		r.Context(), operator.ID, userID, tokenHash[:], expiresAt,
-		requestIDFrom(r), remoteIP(r.RemoteAddr),
+		requestIDFrom(r), a.clientIP(r),
 	)
 	switch {
 	case errors.Is(err, ErrVPNUserNotFound):
@@ -758,7 +759,7 @@ func (a *API) handleClientEnrollment(w http.ResponseWriter, r *http.Request) {
 		a.handleCustomerClientEnrollment(w, r)
 		return
 	}
-	ip := remoteIP(r.RemoteAddr)
+	ip := a.clientIP(r)
 	limiterKey := "unknown"
 	if ip != nil {
 		limiterKey = *ip
@@ -892,7 +893,7 @@ func (a *API) handleRevokeDevice(w http.ResponseWriter, r *http.Request) {
 	}
 	hash := sha256.Sum256([]byte("zeus-device-revoke-v1"))
 	route := "POST:/v1/users/" + userID + "/devices/" + deviceID + "/revoke"
-	device, replayed, err := store.RevokeVPNDevice(r.Context(), operator.ID, userID, deviceID, route, key, hash[:], requestIDFrom(r), remoteIP(r.RemoteAddr))
+	device, replayed, err := store.RevokeVPNDevice(r.Context(), operator.ID, userID, deviceID, route, key, hash[:], requestIDFrom(r), a.clientIP(r))
 	switch {
 	case errors.Is(err, ErrIdempotencyConflict):
 		writeError(w, http.StatusConflict, "idempotency_conflict", "این کلید قبلاً برای درخواست دیگری استفاده شده است", requestIDFrom(r))
@@ -943,7 +944,7 @@ func (a *API) recordAudit(r *http.Request, actorID *string, action, outcome stri
 	if a.store == nil {
 		return
 	}
-	if err := a.store.RecordAudit(r.Context(), actorID, nil, action, outcome, requestIDFrom(r), remoteIP(r.RemoteAddr)); err != nil {
+	if err := a.store.RecordAudit(r.Context(), actorID, nil, action, outcome, requestIDFrom(r), a.clientIP(r)); err != nil {
 		a.logger.Error("audit event could not be persisted", "request_id", requestIDFrom(r), "action", action)
 	}
 }

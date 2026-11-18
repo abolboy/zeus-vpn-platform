@@ -120,7 +120,7 @@ func (a *API) handleRegisterNodeCertificate(w http.ResponseWriter, r *http.Reque
 	}
 	certificate, replayed, err := store.RegisterNodeAgentCertificate(
 		r.Context(), operator.ID, nodeID, fingerprint, notBefore, notAfter,
-		requestIDFrom(r), remoteIP(r.RemoteAddr),
+		requestIDFrom(r), a.rateLimitClientIP(r),
 	)
 	switch {
 	case errors.Is(err, ErrNodeNotFound):
@@ -165,7 +165,7 @@ func (a *API) handleRevokeNodeCertificate(w http.ResponseWriter, r *http.Request
 	}
 	certificate, replayed, err := store.RevokeNodeAgentCertificate(
 		r.Context(), operator.ID, nodeID, certificateID,
-		requestIDFrom(r), remoteIP(r.RemoteAddr),
+		requestIDFrom(r), a.rateLimitClientIP(r),
 	)
 	switch {
 	case errors.Is(err, ErrNodeNotFound):

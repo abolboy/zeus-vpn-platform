@@ -73,7 +73,7 @@ func (a *API) verifyCustomerIdentity(ctx context.Context, authorizationHeader st
 
 func (a *API) handleCustomerDeviceStatus(w http.ResponseWriter, r *http.Request) {
 	requestID := requestIDFrom(r)
-	ip := remoteIP(r.RemoteAddr)
+	ip := a.rateLimitClientIP(r)
 	limiterKey := "unknown"
 	if ip != nil {
 		limiterKey = *ip
@@ -164,7 +164,7 @@ func (a *API) handleCustomerDeviceStatus(w http.ResponseWriter, r *http.Request)
 
 func (a *API) handleCustomerDeviceRetry(w http.ResponseWriter, r *http.Request) {
 	requestID := requestIDFrom(r)
-	ip := remoteIP(r.RemoteAddr)
+	ip := a.rateLimitClientIP(r)
 	limiterKey := "unknown"
 	if ip != nil {
 		limiterKey = *ip
@@ -256,6 +256,9 @@ func (a *API) handleCustomerDeviceRetry(w http.ResponseWriter, r *http.Request) 
 	case errors.Is(err, ErrDeviceNotFound):
 		writeError(w, http.StatusNotFound, "device_not_found", "دستگاه پیدا نشد", requestID)
 		return
+	case errors.Is(err, ErrUserNotActive):
+		writeError(w, http.StatusForbidden, "customer_account_inactive", "حساب مشتری فعال نیست", requestID)
+		return
 	case errors.Is(err, ErrDeviceRetryNotAllowed):
 		writeError(w, http.StatusConflict, "device_retry_not_allowed", "وضعیت فعلی دستگاه اجازه تلاش مجدد برای ساخت Peer را نمی‌دهد", requestID)
 		return
@@ -279,7 +282,7 @@ func (a *API) handleCustomerDeviceRetry(w http.ResponseWriter, r *http.Request) 
 
 func (a *API) handleCustomerClientEnrollment(w http.ResponseWriter, r *http.Request) {
 	requestID := requestIDFrom(r)
-	ip := remoteIP(r.RemoteAddr)
+	ip := a.rateLimitClientIP(r)
 	limiterKey := "unknown"
 	if ip != nil {
 		limiterKey = *ip

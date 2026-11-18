@@ -105,7 +105,7 @@ func TestEnsurePeerCommandAppliesAndAcknowledges(t *testing.T) {
 }
 
 func TestPeerCommandExecutionHasBoundedTimeoutAndAcknowledges(t *testing.T) {
-	payload := []byte("{\\"public_key\\":\\"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=\\",\\"ipv4\\":\\"10.77.77.3\\",\\"ipv6\\":\\"fd77:77:77::3\\"}")
+	payload := []byte(`{"public_key":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=","ipv4":"10.77.77.3","ipv6":"fd77:77:77::3"}`)
 	command := &controlplaneclient.Command{
 		ID:        "8e09c3da-fbac-4b34-9ad0-090e1f8d4c47",
 		Type:      "peer.ensure",

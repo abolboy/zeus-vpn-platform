@@ -26,7 +26,7 @@ Deliver authenticated multi-user management while keeping the already-working pr
 - [x] Login throttling and bounded concurrent password verification.
 - [x] Server-side role checks.
 - [x] PostgreSQL integration tests, race detector, and static analysis in CI.
-- Remaining: password reset, operator lifecycle/role APIs, distributed rate limits, session cleanup, expanded threat model.
+- Remaining: password reset, operator lifecycle/role APIs, distributed rate limits, expanded threat model.
 
 ## 2C — User and device lifecycle
 - [x] Transactional VPN user create/read/update API.
@@ -51,7 +51,7 @@ Deliver authenticated multi-user management while keeping the already-working pr
 - [x] Offline per-node ClientAuth certificate issuance, node-bound certificate registration, and owner/admin revocation endpoints.
 - [x] Manual certificate rotation sequence documented; overlapping valid fingerprints are supported during replacement.
 - [ ] Automated certificate expiry monitoring, rotation orchestration, and revocation alerts.
-- [x] Hardened systemd templates added for the Control Plane and VPN node; the node unit is limited to CAP_NET_ADMIN and writes only to /etc/wireguard.
+- [x] Hardened systemd templates added for the Control Plane, migration runner, and VPN node; the node unit is limited to CAP_NET_ADMIN and writes only to /etc/wireguard. All three units deny EC2 IMDS IPv4/IPv6 endpoints with systemd IPAddressDeny (cgroup v2 required).
 - [x] Staging environment examples and a deployment/rollback runbook added under deploy/ and docs/staging-deployment.md.
 - [ ] Verify service ownership, permissions, mTLS reachability, and peer lifecycle on an isolated staging VPS.
 - Production node mutations remain disabled until staging gates pass.
@@ -83,8 +83,8 @@ Deliver authenticated multi-user management while keeping the already-working pr
 
 ## Current status
 - Current delivery chain: PR #21 (customer lifecycle/node-agent integration) → PR #22 (process-level mTLS enrollment test) → PR #23 (isolated staging architecture) → PR #24 (AWS staging foundation) → PR #26 (database runtime/migration role separation). All five PRs remain Draft and unmerged; preserve this merge order.
-- The PR #26 changes add a dedicated Secrets Manager secret and PostgreSQL login for `zeus_migrator`, keep `zeus_app` away from schema CREATE, revoke CREATE from PUBLIC, and separate the Control Plane and migration systemd environment files.
-- CI covers Android debug build/unit tests, Go Control Plane race tests and vet, PostgreSQL migrations run twice as `zeus_migrator`, runtime-role privilege checks (including table/sequence use and denied DDL), VPN node-agent race tests and vet, web-admin lifecycle tests/build, repository checks, and CloudFormation linting. These checks do not prove a live AWS deployment or a real VPN tunnel.
+- PR #25 was closed as superseded, not merged. PR #26 is its synchronized replacement: it adds a dedicated Secrets Manager secret and PostgreSQL login for `zeus_migrator`, keeps `zeus_app` away from schema CREATE, revokes CREATE from PUBLIC, limits runtime sequences to USAGE/SELECT (no UPDATE/setval), separates systemd environment files, and blocks IMDS access from service cgroups.
+- Latest PR #26 head `ed4fb2242cb80450f094476f02d0a759fb1086ed` passes all CI: Android debug build/unit tests, Go Control Plane tests and vet, PostgreSQL migrations run twice as `zeus_migrator`, runtime-role privilege checks (including denied DDL and sequence UPDATE), VPN node-agent tests and vet, web-admin lifecycle tests/build, repository checks, and CloudFormation linting. These checks do not prove a live AWS deployment or a real VPN tunnel. These checks do not prove a live AWS deployment or a real VPN tunnel.
 - The default Android build has no Control Plane URL/OIDC values. Automatic customer registration requires a deployed HTTPS Control Plane and matching Cognito provider outputs.
 - Staging systemd units and environment examples are templates only; they have not been installed on any host. Node mutations remain disabled by default.
 - Blocked on AWS account/CloudShell activation and a separately approved staging deployment: create/inspect the isolated stack, deploy Cognito and PostgreSQL, install binaries/systemd units, establish public TLS and private mTLS, enroll the staging node, run real peer add/remove, and verify VPN egress/DNS/IPv6.

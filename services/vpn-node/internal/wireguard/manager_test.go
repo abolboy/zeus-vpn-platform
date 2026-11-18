@@ -9,7 +9,9 @@ import (
 	"path/filepath"
 	"reflect"
 	"strings"
+	"syscall"
 	"testing"
+	"time"
 )
 
 const (
@@ -140,6 +142,60 @@ func testPeer() PeerSpec {
 		PublicKey: testKey,
 		IPv4:      netip.MustParseAddr("10.77.77.3"),
 		IPv6:      netip.MustParseAddr("fd77:77:77::3"),
+	}
+}
+
+func TestEnsurePeerHonorsContextWhileLocalLockIsHeld(t *testing.T) {
+	config, original := testConfig(t, true)
+	runner := newFakeRunner()
+	manager, err := NewManager(config, runner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager.lock <- struct{}{}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	if _, err := manager.EnsurePeer(ctx, testPeer()); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("local lock wait error = %v, want context deadline exceeded", err)
+	}
+	got, err := os.ReadFile(config.ConfigPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != original || len(runner.calls) != 0 {
+		t.Fatal("operation mutated WireGuard state while local lock was unavailable")
+	}
+}
+
+func TestEnsurePeerHonorsContextWhileFileLockIsHeld(t *testing.T) {
+	config, original := testConfig(t, true)
+	runner := newFakeRunner()
+	manager, err := NewManager(config, runner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lockFile, err := os.OpenFile(config.ConfigPath+".zeus.lock", os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer lockFile.Close()
+	if err := syscall.Flock(int(lockFile.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		t.Fatal(err)
+	}
+	defer syscall.Flock(int(lockFile.Fd()), syscall.LOCK_UN)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	if _, err := manager.EnsurePeer(ctx, testPeer()); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("file lock wait error = %v, want context deadline exceeded", err)
+	}
+	got, err := os.ReadFile(config.ConfigPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != original || len(runner.calls) != 0 {
+		t.Fatal("operation mutated WireGuard state while file lock was unavailable")
 	}
 }
 

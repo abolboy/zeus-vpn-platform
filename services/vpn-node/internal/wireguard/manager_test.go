@@ -164,6 +164,7 @@ func TestFileLockAcquisitionHonorsContextDeadline(t *testing.T) {
 		t.Fatalf("lock acquisition ignored context deadline: %s", elapsed)
 	}
 }
+
 func TestRouteRollbackUsesIndependentCleanupContext(t *testing.T) {
 	runner := newFakeRunner()
 	prefix := netip.MustParsePrefix("10.77.77.3/32")

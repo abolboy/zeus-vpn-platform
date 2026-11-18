@@ -17,7 +17,8 @@ type fakeClient struct {
 }
 
 type ackRecord struct {
-	id     string
+	id      string
+	attempt int
 	status string
 	code   string
 }
@@ -26,8 +27,8 @@ func (f *fakeClient) Poll(context.Context) (*controlplaneclient.Command, error) 
 	return f.command, nil
 }
 
-func (f *fakeClient) Acknowledge(_ context.Context, id, status, code string) error {
-	f.acks = append(f.acks, ackRecord{id: id, status: status, code: code})
+func (f *fakeClient) Acknowledge(_ context.Context, id string, attempt int, status, code string) error {
+	f.acks = append(f.acks, ackRecord{id: id, attempt: attempt, status: status, code: code})
 	return nil
 }
 
@@ -71,6 +72,7 @@ func TestEnsurePeerCommandAppliesAndAcknowledges(t *testing.T) {
 	})
 	command := &controlplaneclient.Command{
 		ID:        "8e09c3da-fbac-4b34-9ad0-090e1f8d4c47",
+		Attempt:   1,
 		Type:      "peer.ensure",
 		Payload:   payload,
 		ExpiresAt: time.Now().Add(time.Minute),
@@ -85,7 +87,7 @@ func TestEnsurePeerCommandAppliesAndAcknowledges(t *testing.T) {
 	if manager.peer.IPv4 != netip.MustParseAddr("10.77.77.3") || manager.peer.IPv6 != netip.MustParseAddr("fd77:77:77::3") {
 		t.Fatalf("unexpected peer addresses: %+v", manager.peer)
 	}
-	if len(client.acks) != 1 || client.acks[0].status != "succeeded" {
+	if len(client.acks) != 1 || client.acks[0].attempt != 1 || client.acks[0].status != "succeeded" {
 		t.Fatalf("unexpected acknowledgement: %+v", client.acks)
 	}
 }
@@ -102,7 +104,7 @@ func TestDryRunDoesNotReportMutationSuccess(t *testing.T) {
 	if err := w.process(context.Background(), command); err != nil {
 		t.Fatal(err)
 	}
-	if manager.ensureCalls != 1 || len(client.acks) != 1 || client.acks[0].status != "failed" || client.acks[0].code != "mutation_disabled" {
+	if manager.ensureCalls != 1 || len(client.acks) != 1 || client.acks[0].attempt != 1 || client.acks[0].status != "failed" || client.acks[0].code != "mutation_disabled" {
 		t.Fatalf("dry-run must not be acknowledged as success: calls=%d acks=%+v", manager.ensureCalls, client.acks)
 	}
 }
@@ -115,7 +117,7 @@ func TestExpiredAndInvalidCommandsAreRejectedBeforeExecution(t *testing.T) {
 	}{
 		{
 			name:         "expired",
-			command:      &controlplaneclient.Command{ID: "8e09c3da-fbac-4b34-9ad0-090e1f8d4c47", Type: "peer.remove", Payload: []byte("{\"public_key\":\"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=\"}"), ExpiresAt: time.Now().Add(-time.Second)},
+			command:      &controlplaneclient.Command{ID: "8e09c3da-fbac-4b34-9ad0-090e1f8d4c47", Attempt: 1, Type: "peer.remove", Payload: []byte("{\"public_key\":\"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=\"}"), ExpiresAt: time.Now().Add(-time.Second)},
 			expectedCode: "command_expired",
 		},
 		{

@@ -102,7 +102,11 @@ func (w *Worker) process(ctx context.Context, command *controlplaneclient.Comman
 		return w.client.Acknowledge(ctx, command.ID, command.Attempt, "failed", "command_expired")
 	}
 
-	operationCtx, cancel := context.WithTimeout(ctx, w.config.CommandTimeout)
+	operationTimeout := w.config.CommandTimeout
+	if untilExpiry := time.Until(command.ExpiresAt); untilExpiry < operationTimeout {
+		operationTimeout = untilExpiry
+	}
+	operationCtx, cancel := context.WithTimeout(ctx, operationTimeout)
 	defer cancel()
 
 	switch command.Type {

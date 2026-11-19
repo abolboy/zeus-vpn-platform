@@ -58,6 +58,9 @@ func TestClientIPDefaultsToDirectPeerAndRejectsInvalidProxyCIDRs(t *testing.T) {
 	if err := api.SetTrustedProxyCIDRs("not-a-cidr"); err == nil {
 		t.Fatal("invalid trusted proxy CIDR was accepted")
 	}
+	if err := api.SetTrustedProxyCIDRs("0.0.0.0/0"); err == nil {
+		t.Fatal("unrestricted trusted proxy CIDR was accepted")
+	}
 }
 
 func TestClientIPFallsBackWhenTrustedProxyHeaderIsMalformed(t *testing.T) {

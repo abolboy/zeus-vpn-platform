@@ -408,8 +408,10 @@ func TestPostgresStoreIntegration(t *testing.T) {
 	t.Cleanup(func() {
 		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cleanupCancel()
-		if _, err := store.pool.Exec(cleanupCtx, "UPDATE operators SET status = 'active' WHERE id = ANY($1::uuid[])", deactivatedOwnerIDs); err != nil {
-			t.Errorf("restore active owner statuses after bootstrap conflict test: %v", err)
+		for _, id := range deactivatedOwnerIDs {
+			if _, err := store.pool.Exec(cleanupCtx, "UPDATE operators SET status = 'active' WHERE id::text = $1", id); err != nil {
+				t.Errorf("restore active owner %s after bootstrap conflict test: %v", id, err)
+			}
 		}
 	})
 	if err := store.EnsureBootstrapOperator(ctx, operator.Login, "ci-collision-password-789"); !errors.Is(err, ErrBootstrapLoginConflict) {

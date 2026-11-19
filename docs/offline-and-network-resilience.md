@@ -40,4 +40,4 @@ No network; validated Wi-Fi; captive portal; DNS failure; restricted mobile data
 
 ## Current verified scope
 
-The app includes the official WireGuard userspace engine, encrypted profile storage, device-network monitoring, handshake/HTTPS tunnel checks, bounded reconnect policy, and (on the split-tunneling feature branch) per-app route selection. WARP account provisioning, dynamic endpoint discovery, AmneziaWG runtime, VLESS/REALITY and Hysteria2 adapters, and real Iranian carrier acceptance tests remain future work. A successful CI build is not proof that any transport works on a specific Iranian ISP.
+The app includes the official WireGuard userspace engine, encrypted profile storage, device-network monitoring, handshake/HTTPS tunnel checks, bounded reconnect policy, and per-app route selection (unit-tested only; not yet verified on a physical Android device). WARP account provisioning, dynamic endpoint discovery, AmneziaWG runtime, VLESS/REALITY and Hysteria2 adapters, and real Iranian carrier acceptance tests remain future work. A successful CI build is not proof that any transport works on a specific Iranian ISP.

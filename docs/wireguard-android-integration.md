@@ -8,7 +8,7 @@
 - User-supplied `.conf` content is parsed with the library's `Config.parse` and checked for an interface address, at least one peer endpoint, and allowed IPs.
 - Profiles are written to `noBackupFilesDir`, encrypted with AES-256-GCM, and keyed by a non-exportable Android Keystore key. Android backup is disabled.
 - The UI keeps device internet state separate from WireGuard engine state.
-- The split-tunnel feature branch uses the backend's supported `IncludedApplications` and `ExcludedApplications` settings. It validates package names, limits selections to 100 launchable apps, and applies the chosen policy when starting the tunnel.
+- ZEUS uses the backend's supported `IncludedApplications` and `ExcludedApplications` settings. It validates package names, limits selections to 100 launchable apps, and applies the chosen policy when starting the tunnel.
 
 ## Split-tunnel semantics
 

@@ -424,6 +424,11 @@ func TestPostgresStoreIntegration(t *testing.T) {
 	if collisionOperator.Status != "disabled" || collisionOperator.PasswordHash != originalPasswordHash {
 		t.Fatalf("bootstrap collision changed existing account: status=%s hash_changed=%v", collisionOperator.Status, collisionOperator.PasswordHash != originalPasswordHash)
 	}
+	for _, id := range deactivatedOwnerIDs {
+		if _, err := store.pool.Exec(ctx, "UPDATE operators SET status = 'active' WHERE id::text = $1", id); err != nil {
+			t.Fatalf("restore active owner %s after bootstrap conflict assertion: %v", id, err)
+		}
+	}
 	_, tokenHash, err := generateSessionToken()
 	if err != nil {
 		t.Fatal(err)

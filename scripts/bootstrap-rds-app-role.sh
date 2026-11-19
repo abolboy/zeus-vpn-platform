@@ -40,7 +40,7 @@ done
 [[ -r "$ca_file" && -s "$ca_file" ]] || die "RDS CA bundle is missing or unreadable: $ca_file"
 [[ -d /etc/zeus ]] || die "/etc/zeus must exist before running this script"
 [[ ! -e "$output_file" ]] || die "$output_file already exists; preserve it and review before replacing it"
-for command_name in aws jq psql mktemp mv chmod chown; do
+for command_name in aws jq psql mktemp ln rm chmod chown; do
   command -v "$command_name" >/dev/null 2>&1 || die "required command not found: $command_name"
 done
 
@@ -75,7 +75,8 @@ printf 'ZEUS_DATABASE_URL=postgres://zeus_app:%s@%s:5432/zeus_staging?sslmode=ve
   "$app_password" "$db_host" "$ca_file" > "$temporary_file"
 chmod 0600 "$temporary_file"
 chown root:root "$temporary_file"
-mv -- "$temporary_file" "$output_file"
+ln -- "$temporary_file" "$output_file" || die "$output_file appeared during bootstrap; no existing file was replaced"
+rm -- "$temporary_file"
 trap - EXIT
 
 unset master_json app_json master_password app_password

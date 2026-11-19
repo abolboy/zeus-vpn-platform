@@ -48,10 +48,14 @@ master_json="$(aws secretsmanager get-secret-value --region "$region" --secret-i
 app_json="$(aws secretsmanager get-secret-value --region "$region" --secret-id "$app_secret_arn" --query SecretString --output text)"
 master_username="$(jq -er '.username | strings | select(length > 0)' <<<"$master_json")"
 master_password="$(jq -er '.password | strings | select(length > 0)' <<<"$master_json")"
+master_engine="$(jq -er '.engine | strings | select(length > 0)' <<<"$master_json")"
+master_host="$(jq -er '.host | strings | select(length > 0)' <<<"$master_json")"
+master_port="$(jq -er '.port | tostring' <<<"$master_json")"
 app_username="$(jq -er '.username | strings | select(length > 0)' <<<"$app_json")"
 app_password="$(jq -er '.password | strings | select(length > 0)' <<<"$app_json")"
 
-[[ "$master_username" =~ ^[A-Za-z][A-Za-z0-9_]{0,15}$ ]] || die "unexpected RDS master username format"
+[[ "$master_username" == "zeus_stage_admin" ]] || die "master secret is not for the expected staging database user"
+[[ "$master_engine" == "postgres" && "$master_host" == "$db_host" && "$master_port" == "5432" ]] || die "master secret metadata does not match the supplied PostgreSQL RDS endpoint"
 [[ "$app_username" == "zeus_app" ]] || die "application secret username must be zeus_app"
 [[ "$app_password" =~ ^[A-Za-z0-9]{40}$ ]] || die "application secret password does not match the expected 40-character alphanumeric format"
 

@@ -114,7 +114,7 @@ export default function App() {
     setApiStatus(result.state)
     setApiMessage(result.message)
     if (result.state === 'online') toast('API پاسخ سلامت معتبر داد؛ آمادگی پایگاه داده و دسترسی مدیریتی جداگانه بررسی می‌شوند.')
-    else if (result.state === 'offline') toast('API پاسخ نداد.')
+    else if (result.state === 'offline') toast('بررسی سلامت API موفق نبود؛ جزئیات وضعیت نمایش داده می‌شود.')
     else toast('نشانی API تنظیم نشده است.')
   }
 
@@ -810,7 +810,7 @@ export default function App() {
     </aside>
 
     <main className="main">
-      <header className="topbar"><div className="crumb">ZEUS <span>/</span> {activePage}</div><div className="top-actions"><span className={`live-indicator api-${apiStatus}`}><i /> {apiStatus === "online" ? "API پاسخ‌گوست" : apiStatus === "offline" ? "API پاسخ نمی‌دهد" : apiStatus === "checking" ? "در حال بررسی API" : "API تنظیم نشده"}</span>{operator && <span className="auth-user-chip">{operator.login} · {operator.role}</span>}<button className="icon-btn" aria-label="گزارش رویدادها" onClick={() => setPage('activity')}>♧</button><button className="language-btn" onClick={() => toast('رابط فارسی فعال است؛ زبان انگلیسی در برنامه توسعه قرار دارد.')}>فا <span>⌄</span></button></div></header>
+      <header className="topbar"><div className="crumb">ZEUS <span>/</span> {activePage}</div><div className="top-actions"><span className={`live-indicator api-${apiStatus}`}><i /> {apiStatus === "online" ? "API پاسخ‌گوست" : apiStatus === "offline" ? "بررسی سلامت API ناموفق است" : apiStatus === "checking" ? "در حال بررسی API" : "API تنظیم نشده"}</span>{operator && <span className="auth-user-chip">{operator.login} · {operator.role}</span>}<button className="icon-btn" aria-label="گزارش رویدادها" onClick={() => setPage('activity')}>♧</button><button className="language-btn" onClick={() => toast('رابط فارسی فعال است؛ زبان انگلیسی در برنامه توسعه قرار دارد.')}>فا <span>⌄</span></button></div></header>
 
       <section className="page-head"><div><div className="eyebrow"><span /> SYSTEM OVERVIEW / ۰۱</div><h1>{page === 'overview' ? 'مرکز فرماندهی' : activePage}<span className="heading-glow">.</span></h1><p>{page === 'overview' ? 'نمای زنده از زیرساخت، کاربران و سلامت شبکه ZEUS' : 'مدیریت و پایش بخش ' + activePage + ' در پنل ZEUS'}</p></div><div className="head-actions"><button className="button secondary" onClick={checkControlPlane}>↻ بررسی API</button>{!isControlPlaneConfigured && <button className="button primary" onClick={() => { setPage('servers'); setShowServerForm(true) }}>＋ افزودن سرور</button>}</div></section>
 
@@ -823,7 +823,7 @@ export default function App() {
           <h2>زیرساختت، زیر کنترل تو.</h2>
           <p>نمایی متمرکز از وضعیت پلتفرم، همراه با ابزارهای مدیریت و پایش در یک فضای یکپارچه.</p>
           <div className="hero-meta">
-            <span className={`health-chip api-${apiStatus}`}><i /> {apiStatus === 'online' ? 'API پاسخ‌گوست' : apiStatus === 'offline' ? 'API پاسخ نمی‌دهد' : apiStatus === 'checking' ? 'در حال بررسی اتصال' : 'اتصال API پیکربندی نشده'}</span>
+            <span className={`health-chip api-${apiStatus}`}><i /> {apiStatus === 'online' ? 'API پاسخ‌گوست' : apiStatus === 'offline' ? 'بررسی سلامت API ناموفق است' : apiStatus === 'checking' ? 'در حال بررسی اتصال' : 'اتصال API پیکربندی نشده'}</span>
             <span className="hero-date">{todayLabel}</span>
           </div>
         </div>

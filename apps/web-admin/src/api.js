@@ -52,7 +52,7 @@ export async function getControlPlaneHealth() {
     if (body?.status !== 'ok') return { state: 'offline', message: 'پاسخ سلامت API معتبر نیست' }
     return { state: 'online', message: 'API پاسخ سلامت معتبر داد؛ آمادگی پایگاه داده و دسترسی مدیریتی جداگانه بررسی می‌شوند' }
   } catch (error) {
-    return { state: 'offline', message: error.message || 'API پاسخ نداد؛ نشانی، شبکه و CORS را بررسی کنید' }
+    return { state: 'offline', message: error.message || 'بررسی سلامت API انجام نشد؛ نشانی، شبکه و CORS را بررسی کنید' }
   }
 }
 

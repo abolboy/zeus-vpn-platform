@@ -8,7 +8,7 @@ The Go service supports PostgreSQL-backed operator authentication, verified OIDC
 - A database created specifically for ZEUS; do not point this service at an unrelated database.
 
 ## Local setup
-Set ZEUS_DATABASE_URL to a PostgreSQL connection string. Keep it in a local environment file or secret manager; never commit credentials.
+Set ZEUS_DATABASE_URL to a PostgreSQL connection string. Keep it in a local environment file or secret manager; never commit credentials. In deployed environments, the Control Plane uses the `zeus_app` runtime login while the explicit `zeus-migrate` command uses the separate `zeus_migrator` login. Do not share the migration credential with the API process.
 
 Run the explicit migration command before starting the API:
 
@@ -95,7 +95,7 @@ Do not register a node for client provisioning until its endpoint, server public
 - Production PostgreSQL connections require sslmode=verify-full. Admin HTTP must be behind a TLS reverse proxy, and the application listener should remain private.
 
 ## Database migrations
-Migrations are explicit and versioned. API startup never changes database schema. The migration runner takes a PostgreSQL advisory lock, applies each migration transactionally, records a SHA-256 checksum, and refuses to run if an applied migration file was modified.
+Migrations are explicit and versioned. API startup never changes database schema. In the staging deployment, `zeus_migrator` owns schema objects and alone has schema CREATE; `zeus_app` receives only runtime DML/sequence/function privileges through current and default grants. The migration runner takes a PostgreSQL advisory lock, applies each migration transactionally, records a SHA-256 checksum, and refuses to run if an applied migration file was modified.
 
 ## Deployment boundary
 This alpha is not yet approved for public exposure. Use a dedicated least-privilege database role, secure backups, TLS, and an isolated staging deployment. Do not deploy it to the live VPN node or change production WireGuard peers until staging, rollback, and security tests are complete and separately approved.

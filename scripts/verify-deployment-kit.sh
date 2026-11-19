@@ -7,6 +7,7 @@ required_files=(
   "deploy/systemd/zeus-vpn-node.service"
   "deploy/examples/control-plane.env.example"
   "deploy/examples/vpn-node.env.example"
+  "scripts/bootstrap-rds-app-role.sh"
   "docs/staging-deployment.md"
   "infra/aws-cognito/zeus-customer-user-pool.yaml"
 )
@@ -18,6 +19,16 @@ done
 grep -Fqx 'User=zeus' deploy/systemd/zeus-control-plane.service
 grep -Fqx 'ProtectSystem=strict' deploy/systemd/zeus-control-plane.service
 grep -Fqx 'Type=oneshot' deploy/systemd/zeus-migrate.service
+bash -n scripts/bootstrap-rds-app-role.sh
+grep -Fqx 'EnvironmentFile=-/etc/zeus/database.env' deploy/systemd/zeus-control-plane.service
+grep -Fqx 'EnvironmentFile=-/etc/zeus/database.env' deploy/systemd/zeus-migrate.service
+if grep -Fq 'ZEUS_DATABASE_URL=' deploy/examples/control-plane.env.example; then
+  echo "FAIL: do not put placeholder or master database credentials in the control-plane example"
+  exit 1
+fi
+grep -Fq 'StagingDatabaseAppSecret:' infra/aws-staging/zeus-staging-foundation.yaml
+grep -Fq 'DatabaseAppSecretArn:' infra/aws-staging/zeus-staging-foundation.yaml
+
 grep -Fqx 'ZEUS_HTTP_ADDR=127.0.0.1:8080' deploy/examples/control-plane.env.example
 grep -Fqx 'ZEUS_NODE_HTTP_ADDR=0.0.0.0:8443' deploy/examples/control-plane.env.example
 grep -Fqx 'ZEUS_NODE_ALLOW_MUTATIONS=false' deploy/examples/vpn-node.env.example

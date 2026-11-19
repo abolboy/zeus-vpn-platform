@@ -34,6 +34,12 @@ grep -Fq 'REVOKE CREATE ON SCHEMA public FROM PUBLIC' scripts/bootstrap-rds-app-
 grep -Fq 'REVOKE CREATE ON SCHEMA public FROM zeus_app' scripts/bootstrap-rds-app-role.sh
 grep -Fq "acl.grantee = 0" scripts/verify-rds-role-separation.sh
 bash -n scripts/verify-rds-role-separation.sh
+grep -Fq 'export PGPASSFILE="$pgpass_file"' scripts/verify-rds-role-separation.sh
+grep -Fq 'chmod 0600 "$pgpass_file"' scripts/verify-rds-role-separation.sh
+if grep -Fq 'psql "$runtime_url"' scripts/verify-rds-role-separation.sh || grep -Fq 'psql "$migrate_url"' scripts/verify-rds-role-separation.sh; then
+  echo "FAIL: database URLs containing credentials must never be passed to psql argv"
+  exit 1
+fi
 if grep -Fq 'ZEUS_DATABASE_URL=' deploy/examples/control-plane.env.example; then
   echo "FAIL: do not put placeholder or master database credentials in the control-plane example"
   exit 1

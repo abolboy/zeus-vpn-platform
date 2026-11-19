@@ -87,7 +87,7 @@ func main() {
 				logger.Error("no active owner account is available after bootstrap", "error", ownerErr)
 				os.Exit(1)
 			}
-			logger.Info("bootstrap admin checked; an existing account was not overwritten")
+			logger.Info("bootstrap admin initialization completed; existing account credentials were not overwritten")
 		}
 	} else {
 		logger.Warn("database URL not configured; only liveness and metadata endpoints are available")
@@ -103,7 +103,12 @@ func main() {
 		logger.Error("API initialization failed", "error", err)
 		os.Exit(1)
 	}
-	if err := api.SetTrustedProxyCIDRs(os.Getenv("ZEUS_TRUSTED_PROXY_CIDRS")); err != nil {
+	trustedProxyCIDRs := strings.TrimSpace(os.Getenv("ZEUS_TRUSTED_PROXY_CIDRS"))
+	if production && trustedProxyCIDRs == "" {
+		logger.Error("ZEUS_TRUSTED_PROXY_CIDRS is required in production when client IP rate limiting is enabled behind the load balancer")
+		os.Exit(1)
+	}
+	if err := api.SetTrustedProxyCIDRs(trustedProxyCIDRs); err != nil {
 		logger.Error("trusted proxy configuration failed", "error", err)
 		os.Exit(1)
 	}

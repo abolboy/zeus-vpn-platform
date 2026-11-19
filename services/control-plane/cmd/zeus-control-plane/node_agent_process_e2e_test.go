@@ -98,12 +98,18 @@ func TestNodeAgentProcessEndToEnd(t *testing.T) {
 	handler := api.Handler()
 
 	operatorLogin := "e2e-" + strings.ReplaceAll(newRequestID(), "-", "")
-	if err := store.EnsureBootstrapOperator(ctx, operatorLogin, "CI-only-owner-password-123456"); err != nil {
-		t.Fatalf("create isolated E2E operator: %v", err)
-	}
-	operator, err := store.FindOperatorByLogin(ctx, operatorLogin)
+	operatorPasswordHash, err := hashPassword("CI-only-e2e-password-123456")
 	if err != nil {
-		t.Fatalf("load isolated E2E operator: %v", err)
+		t.Fatalf("hash isolated E2E operator password: %v", err)
+	}
+	var operator Operator
+	err = store.pool.QueryRow(ctx, `
+		INSERT INTO operators (login, password_hash, role, status)
+		VALUES ($1, $2, 'admin', 'active')
+		RETURNING id::text, login, role, status
+	`, operatorLogin, operatorPasswordHash).Scan(&operator.ID, &operator.Login, &operator.Role, &operator.Status)
+	if err != nil {
+		t.Fatalf("create isolated E2E operator fixture: %v", err)
 	}
 	token, tokenHash, err := generateSessionToken()
 	if err != nil {

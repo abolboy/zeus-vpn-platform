@@ -90,6 +90,10 @@ CI success alone does not satisfy these gates.
 - Tag every resource with `Project=ZEUS`, `Environment=staging`, and an owner tag.
 - Define a teardown checklist that first exports required test evidence, then removes only resources tagged for this staging environment. Never use broad account-wide cleanup commands.
 
+## Infrastructure implementation status
+
+A review-only CloudFormation foundation is maintained at `infra/aws-staging/zeus-staging-foundation.yaml`, with operator guidance in `infra/aws-staging/README.md`. It defines the isolated VPC, public HTTPS ALB, private Control Plane, dedicated WireGuard node, private PostgreSQL, managed RDS secret, SSM roles, and private mTLS DNS. It intentionally does not deploy application binaries, configure host services, issue certificates, or execute WireGuard changes. The template must pass repository CloudFormation linting and receive a separate operator review before any change set is executed.
+
 ## Rollout sequence
 
 1. Approve the account/isolation model, budget, DNS, database choice, and network CIDRs.

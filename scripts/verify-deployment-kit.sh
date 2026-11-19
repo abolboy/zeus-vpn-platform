@@ -8,6 +8,7 @@ required_files=(
   "deploy/examples/control-plane.env.example"
   "deploy/examples/vpn-node.env.example"
   "scripts/bootstrap-rds-app-role.sh"
+  "scripts/verify-rds-role-separation.sh"
   "docs/staging-deployment.md"
   "infra/aws-cognito/zeus-customer-user-pool.yaml"
 )
@@ -20,8 +21,29 @@ grep -Fqx 'User=zeus' deploy/systemd/zeus-control-plane.service
 grep -Fqx 'ProtectSystem=strict' deploy/systemd/zeus-control-plane.service
 grep -Fqx 'Type=oneshot' deploy/systemd/zeus-migrate.service
 bash -n scripts/bootstrap-rds-app-role.sh
-grep -Fqx 'EnvironmentFile=-/etc/zeus/database.env' deploy/systemd/zeus-control-plane.service
-grep -Fqx 'EnvironmentFile=-/etc/zeus/database.env' deploy/systemd/zeus-migrate.service
+grep -Fqx 'EnvironmentFile=-/etc/zeus/database-runtime.env' deploy/systemd/zeus-control-plane.service
+grep -Fqx 'Environment=ZEUS_ENV=production' deploy/systemd/zeus-migrate.service
+grep -Fqx 'EnvironmentFile=/etc/zeus/database-migrate.env' deploy/systemd/zeus-migrate.service
+if grep -Fq 'EnvironmentFile=/etc/zeus/control-plane.env' deploy/systemd/zeus-migrate.service; then
+  echo "FAIL: migration unit must not inherit Control Plane credentials"
+  exit 1
+fi
+grep -Fq 'StagingDatabaseMigratorSecret:' infra/aws-staging/zeus-staging-foundation.yaml
+grep -Fq 'DatabaseMigratorSecretArn:' infra/aws-staging/zeus-staging-foundation.yaml
+grep -Fq 'REVOKE CREATE ON SCHEMA public FROM PUBLIC' scripts/bootstrap-rds-app-role.sh
+grep -Fq 'REVOKE ALL PRIVILEGES ON SCHEMA public FROM zeus_app' scripts/bootstrap-rds-app-role.sh
+grep -Fq 'REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA public FROM zeus_app' scripts/bootstrap-rds-app-role.sh
+grep -Fq 'REVOKE ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public FROM zeus_app' scripts/bootstrap-rds-app-role.sh
+grep -Fq 'ALTER DEFAULT PRIVILEGES IN SCHEMA public REVOKE ALL ON TABLES FROM zeus_app' scripts/bootstrap-rds-app-role.sh
+grep -Fq 'ALTER DEFAULT PRIVILEGES IN SCHEMA public REVOKE ALL ON SEQUENCES FROM zeus_app' scripts/bootstrap-rds-app-role.sh
+grep -Fq "acl.grantee = 0" scripts/verify-rds-role-separation.sh
+bash -n scripts/verify-rds-role-separation.sh
+grep -Fq 'export PGPASSFILE="$pgpass_file"' scripts/verify-rds-role-separation.sh
+grep -Fq 'chmod 0600 "$pgpass_file"' scripts/verify-rds-role-separation.sh
+if grep -Fq 'psql "$runtime_url"' scripts/verify-rds-role-separation.sh || grep -Fq 'psql "$migrate_url"' scripts/verify-rds-role-separation.sh; then
+  echo "FAIL: database URLs containing credentials must never be passed to psql argv"
+  exit 1
+fi
 if grep -Fq 'ZEUS_DATABASE_URL=' deploy/examples/control-plane.env.example; then
   echo "FAIL: do not put placeholder or master database credentials in the control-plane example"
   exit 1
@@ -29,12 +51,16 @@ fi
 grep -Fq 'StagingDatabaseAppSecret:' infra/aws-staging/zeus-staging-foundation.yaml
 grep -Fq 'DatabaseAppSecretArn:' infra/aws-staging/zeus-staging-foundation.yaml
 
-grep -Fqx 'ZEUS_NODE_HTTP_ADDR=0.0.0.0:8443' deploy/examples/control-plane.env.example
-grep -Fqx 'ZEUS_NODE_ALLOW_MUTATIONS=false' deploy/examples/vpn-node.env.example
 grep -Fqx 'ZEUS_HTTP_ADDR=0.0.0.0:8080' deploy/examples/control-plane.env.example
 grep -Fq 'SourceSecurityGroupId: !Ref StagingAlbSecurityGroup' infra/aws-staging/zeus-staging-foundation.yaml
+grep -Fqx 'ZEUS_NODE_HTTP_ADDR=0.0.0.0:8443' deploy/examples/control-plane.env.example
+grep -Fqx 'ZEUS_NODE_ALLOW_MUTATIONS=false' deploy/examples/vpn-node.env.example
 grep -Fqx 'CapabilityBoundingSet=CAP_NET_ADMIN' deploy/systemd/zeus-vpn-node.service
 grep -Fqx 'ReadWritePaths=/etc/wireguard' deploy/systemd/zeus-vpn-node.service
+for unit in deploy/systemd/zeus-control-plane.service deploy/systemd/zeus-migrate.service deploy/systemd/zeus-vpn-node.service; do
+  grep -Fqx 'IPAddressDeny=169.254.169.254/32' "$unit"
+  grep -Fqx 'IPAddressDeny=fd00:ec2::254/128' "$unit"
+done
 
 # Cognito must have a usable managed-login style and explicit token rotation,
 # without silently enabling threat protection that requires the Plus tier.
@@ -62,6 +88,8 @@ if command -v systemd-analyze >/dev/null 2>&1; then
   trap 'rm -rf "$temp_root"' EXIT
   mkdir -p "$temp_root/etc/zeus" "$temp_root/etc/systemd/system" "$temp_root/etc/wireguard" "$temp_root/opt/zeus/bin"
   : > "$temp_root/etc/zeus/control-plane.env"
+  : > "$temp_root/etc/zeus/database-runtime.env"
+  : > "$temp_root/etc/zeus/database-migrate.env"
   : > "$temp_root/etc/zeus/vpn-node.env"
   : > "$temp_root/opt/zeus/bin/zeus-control-plane"
   : > "$temp_root/opt/zeus/bin/zeus-migrate"

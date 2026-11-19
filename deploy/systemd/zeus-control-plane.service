@@ -10,7 +10,7 @@ Type=simple
 User=zeus
 Group=zeus
 EnvironmentFile=/etc/zeus/control-plane.env
-EnvironmentFile=-/etc/zeus/database.env
+EnvironmentFile=-/etc/zeus/database-runtime.env
 ExecStart=/opt/zeus/bin/zeus-control-plane
 Restart=on-failure
 RestartSec=5s
@@ -20,6 +20,9 @@ UMask=0077
 LimitNOFILE=65536
 
 NoNewPrivileges=yes
+# Prevent the service process from obtaining EC2 instance-profile credentials via IMDS.
+IPAddressDeny=169.254.169.254/32
+IPAddressDeny=fd00:ec2::254/128
 PrivateTmp=yes
 ProtectSystem=strict
 ProtectHome=yes

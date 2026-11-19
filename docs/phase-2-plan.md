@@ -21,12 +21,13 @@ Deliver authenticated multi-user management while keeping the already-working pr
 - [x] PostgreSQL connection pool/readiness checks.
 - [x] Argon2id password hashing and opaque random 256-bit sessions (only SHA-256 token hashes stored).
 - [x] Eight-hour expiry and server-side revocation.
-- [x] First-owner bootstrap that never overwrites an existing account.
+- [x] One-time first-owner bootstrap serialized with a PostgreSQL advisory lock; it does not create a second active owner or overwrite an existing password.
 - [x] Exact-origin CORS, security headers, bounded JSON bodies, request IDs, structured errors.
+- [x] Client IP and IP-based rate-limit attribution trust X-Forwarded-For only from configured ALB subnet CIDRs.
 - [x] Login throttling and bounded concurrent password verification.
 - [x] Server-side role checks.
 - [x] PostgreSQL integration tests, race detector, and static analysis in CI.
-- Remaining: password reset, operator lifecycle/role APIs, distributed rate limits, session cleanup, expanded threat model.
+- Remaining: password reset, operator lifecycle/role APIs, distributed rate limits, expanded threat model.
 
 ## 2C — User and device lifecycle
 - [x] Transactional VPN user create/read/update API.
@@ -51,7 +52,7 @@ Deliver authenticated multi-user management while keeping the already-working pr
 - [x] Offline per-node ClientAuth certificate issuance, node-bound certificate registration, and owner/admin revocation endpoints.
 - [x] Manual certificate rotation sequence documented; overlapping valid fingerprints are supported during replacement.
 - [ ] Automated certificate expiry monitoring, rotation orchestration, and revocation alerts.
-- [x] Hardened systemd templates added for the Control Plane and VPN node; the node unit is limited to CAP_NET_ADMIN and writes only to /etc/wireguard.
+- [x] Hardened systemd templates added for the Control Plane, migration runner, and VPN node; the node unit is limited to CAP_NET_ADMIN and writes only to /etc/wireguard. All three units deny EC2 IMDS IPv4/IPv6 endpoints with systemd IPAddressDeny (cgroup v2 required).
 - [x] Staging environment examples and a deployment/rollback runbook added under deploy/ and docs/staging-deployment.md.
 - [ ] Verify service ownership, permissions, mTLS reachability, and peer lifecycle on an isolated staging VPS.
 - Production node mutations remain disabled until staging gates pass.
@@ -82,10 +83,12 @@ Deliver authenticated multi-user management while keeping the already-working pr
 - Android reconnect works without a reachable Control Plane using a previously provisioned profile.
 
 ## Current status
-- Working branch: `ui/neon-motion-redesign-2026-11-14` (PR #1 remains Draft and unmerged).
-- Verified code scope: authenticated user/device management, OIDC customer self-service path, one-time activation fallback, mTLS node command transport, dry-run-first WireGuard executor with route checks/rollback, and Android local key generation, encrypted profile storage, connectivity diagnostics, bounded reconnect, and live WireGuard throughput chart.
-- CI validates Android build/unit tests, Go Control Plane tests and PostgreSQL session-cleanup integration, VPN node-agent tests, web-admin certificate-lifecycle tests/build, repository/deployment-kit checks, and database migrations. CI does not prove a real tunnel. Node inventory uses mTLS last-seen heartbeats and a 90-second offline threshold.
+- Current delivery chain: PR #21 (customer lifecycle/node-agent integration) → PR #22 (process-level mTLS enrollment test) → PR #23 (isolated staging architecture) → PR #24 (AWS staging foundation) → PR #26 (database runtime/migration role separation). All five PRs remain Draft and unmerged; preserve this merge order. PR #22 is retargeted to the latest PR #21 integration head; PR #26 is retargeted to the latest PR #24 staging-foundation head.
+- PR #25 was closed as superseded, not merged. PR #26 is its synchronized replacement: it adds a dedicated Secrets Manager secret and PostgreSQL login for `zeus_migrator`, keeps `zeus_app` away from schema CREATE, resets existing and default runtime grants to DML plus sequence USAGE/SELECT only (no TRUNCATE/REFERENCES/TRIGGER or UPDATE/setval), separates systemd environment files, avoids exposing database passwords in process arguments during verification, and blocks IMDS access from service cgroups.
+- PR #26's latest pre-retarget head passed ZEUS CI, Repository checks, and PostgreSQL Migration Check. Because its base was just advanced to the latest PR #24 head, CI must be re-run against the refreshed PR merge ref before any merge decision. The full matrix includes Android debug build/unit tests, Go Control Plane tests and vet, PostgreSQL migrations run twice as `zeus_migrator`, runtime-role privilege checks (including denied DDL, excess table grants, and sequence UPDATE), VPN node-agent tests and vet, web-admin lifecycle tests/build, repository checks, and CloudFormation linting. These checks do not prove a live AWS deployment or a real VPN tunnel.
 - The default Android build has no Control Plane URL/OIDC values. Automatic customer registration requires a deployed HTTPS Control Plane and matching Cognito provider outputs.
 - Staging systemd units and environment examples are templates only; they have not been installed on any host. Node mutations remain disabled by default.
-- Not yet verified: staging AWS Cognito deployment, PostgreSQL deployment/migration on staging, public TLS/mTLS end-to-end node registration, real peer add/remove, actual VPN egress/DNS/IPv6, Android process-death/reboot behavior, subscription/billing enforcement, per-node traffic/load telemetry, and production audit API.
+- Blocked on AWS account/CloudShell activation and a separately approved staging deployment: create/inspect the isolated stack, deploy Cognito and PostgreSQL, install binaries/systemd units, establish public TLS and private mTLS, enroll the staging node, run real peer add/remove, and verify VPN egress/DNS/IPv6.
+- Requires a physical Android device test: verify process-death recovery, network changes, sustained traffic, force-stop, and reboot using a real staging tunnel.
+- Requires product/operations decisions before implementation: password-reset delivery and recovery policy, operator lifecycle/role-management rules, distributed rate-limit backend, subscription/billing policy, telemetry retention/collection, audit-log access policy, and certificate rotation/revocation notification channel. The dashboard already displays certificate validity warnings; it does not yet automate rotation or send external alerts.
 - No AWS resource, firewall/security group, production WireGuard peer, production database, or `main` branch was changed.

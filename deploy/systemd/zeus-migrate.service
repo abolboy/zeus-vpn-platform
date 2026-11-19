@@ -7,13 +7,16 @@ After=network-online.target
 Type=oneshot
 User=zeus
 Group=zeus
-EnvironmentFile=/etc/zeus/control-plane.env
-EnvironmentFile=-/etc/zeus/database.env
+Environment=ZEUS_ENV=production
+EnvironmentFile=/etc/zeus/database-migrate.env
 ExecStart=/opt/zeus/bin/zeus-migrate
 TimeoutStartSec=5min
 UMask=0077
 
 NoNewPrivileges=yes
+# Prevent the service process from obtaining EC2 instance-profile credentials via IMDS.
+IPAddressDeny=169.254.169.254/32
+IPAddressDeny=fd00:ec2::254/128
 PrivateTmp=yes
 ProtectSystem=strict
 ProtectHome=yes

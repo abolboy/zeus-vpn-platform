@@ -4,7 +4,8 @@ This runbook prepares an isolated staging environment. It is not approval to dep
 
 ## Network layout and trust boundaries
 
-- Admin/browser traffic: HTTPS reverse proxy -> `127.0.0.1:8080` (Control Plane HTTP listener).
+- Admin/browser traffic: public HTTPS ALB -> TCP `8080` on the private Control Plane interface. The Control Plane security group permits this port only from the ALB security group.
+- Client IP attribution and IP-based rate limits: set `ZEUS_TRUSTED_PROXY_CIDRS` to the exact ALB subnet CIDRs (the template defaults are `10.240.0.0/24,10.240.1.0/24`). The Control Plane uses the final address appended to `X-Forwarded-For` only when the immediate peer belongs to one of these CIDRs. If subnet parameters change, update the environment file to match. Do not trust forwarded headers from arbitrary peers.
 - Node-agent traffic: VPN node -> TCP `8443` (separate mTLS listener). Restrict this port to the exact staging node source IPs, or bind to a private VPC address when available.
 - PostgreSQL: private network only; allow access from the Control Plane host only.
 - WireGuard data plane: UDP on the configured WireGuard listen port at the VPN node. Do not expose the Control Plane admin port to the Internet.
@@ -46,7 +47,7 @@ sudo install -d -o root -g zeus -m 0750 /etc/zeus/node-listener
 
 Install the Control Plane and migration binaries under `/opt/zeus/bin`. Install `deploy/systemd/zeus-control-plane.service` as `/etc/systemd/system/zeus-control-plane.service` and `deploy/systemd/zeus-migrate.service` as `/etc/systemd/system/zeus-migrate.service`.
 
-Copy `deploy/examples/control-plane.env.example` to `/etc/zeus/control-plane.env`, replace all placeholders, and use mode `0600` owned by root. The file contains database credentials and must not be readable by ordinary users.
+Copy `deploy/examples/control-plane.env.example` to `/etc/zeus/control-plane.env`, replace all placeholders, and use mode `0600` owned by root. Keep it unreadable by ordinary users; the database URL is generated separately in `/etc/zeus/database.env`.
 
 Requirements before startup:
 - A dedicated PostgreSQL database and least-privilege role.
@@ -56,7 +57,8 @@ Requirements before startup:
 - A server certificate and matching private key for the node mTLS listener. The private key must be a regular file owned by `zeus`, mode `0600`, because the service checks for owner-only permissions. The certificate and client-CA bundle must be readable by `zeus`. The `/etc/zeus` and `/etc/zeus/node-listener` directories must be traversable by the `zeus` group; keep the environment file root-only.
 - A firewall rule for TCP `8443` allowing only the registered staging node source IPs. Prefer a private VPC address in `ZEUS_NODE_HTTP_ADDR` instead of `0.0.0.0:8443` when possible.
 
-Use a TLS reverse proxy for the admin API and route it to `127.0.0.1:8080`. Do not publish port 8080 directly.
+The staging ALB is the TLS reverse proxy for the admin API. Set `ZEUS_HTTP_ADDR=0.0.0.0:8080` so the target is reachable over the private VPC interface; the Control Plane security group must continue to allow TCP 8080 only from the ALB security group. Do not add a public ingress rule for port 8080.
+Keep `ZEUS_TRUSTED_PROXY_CIDRS` limited to the ALB's public subnet CIDRs. The application ignores `X-Forwarded-For` when the direct TCP peer is outside those CIDRs, preventing clients from spoofing their rate-limit and audit source IP.
 
 ## 2A. Prepare customer identity (Cognito)
 
@@ -76,6 +78,39 @@ aws cloudformation describe-stacks \
 ```
 
 Record the exact `OidcIssuer`, `OidcClientId`, and `HostedUiDomain` outputs. Configure the Control Plane and Android build with the same issuer/client pair. Never put a client secret in the Android package. Confirm the managed-login authorization endpoint responds before building the configured APK. Do not enable production public signup until abuse controls, capacity policy, email delivery, and monitoring are approved.
+
+## 2B. Prepare PostgreSQL credentials and RDS certificate trust
+
+For the CloudFormation RDS deployment, do not run the application with the RDS master account. The stack creates a separate generated password secret for `zeus_app`; the Control Plane instance role can read that secret and the RDS-managed master secret, while the VPN node role cannot read either one.
+
+On the isolated Control Plane host, ensure the AWS CLI, `jq`, `psql`, and `openssl` are installed. Confirm the instance is using the staging Control Plane role through IMDSv2/SSM; do not copy access keys to the host.
+
+Download the AWS RDS CA bundle and install it as a public trust file:
+
+```sh
+sudo install -d -o root -g root -m 0755 /etc/zeus/rds
+curl --fail --location --proto '=https' --tlsv1.2 \
+  https://truststore.pki.rds.amazonaws.com/global/global-bundle.pem \
+  --output /tmp/zeus-rds-global-bundle.pem
+openssl crl2pkcs7 -nocrl -certfile /tmp/zeus-rds-global-bundle.pem -out /dev/null
+sudo install -o root -g root -m 0644 \
+  /tmp/zeus-rds-global-bundle.pem /etc/zeus/rds/global-bundle.pem
+rm -f /tmp/zeus-rds-global-bundle.pem
+```
+
+Run the bootstrap script from the exact reviewed repository commit on the Control Plane host. Supply the literal RDS endpoint and both secret ARNs from the staging CloudFormation outputs:
+
+```sh
+sudo bash scripts/bootstrap-rds-app-role.sh \
+  --region us-east-2 \
+  --db-host '<DatabaseEndpoint>' \
+  --master-secret-arn '<DatabaseSecretArn>' \
+  --app-secret-arn '<DatabaseAppSecretArn>'
+```
+
+The script retrieves both secrets through the instance role, creates or updates the non-superuser `zeus_app` login, grants only database connection and schema/table creation rights needed by the explicit migration runner, and writes `/etc/zeus/database.env` as root-owned mode `0600`. It does not print either password. It refuses to overwrite an existing database environment file; preserve and review any existing file before deciding how to rotate it. The script requires the exact RDS endpoint hostname so `sslmode=verify-full` validates both the RDS CA chain and hostname.
+
+Both the migration and Control Plane systemd units load this generated file. Do not start migrations or the API until the script reports success and the file exists with the expected owner and permissions.
 
 ## 3. Apply the database migrations
 
@@ -102,7 +137,7 @@ curl --fail --silent http://127.0.0.1:8080/healthz
 curl --fail --silent http://127.0.0.1:8080/readyz
 ```
 
-`/healthz` proves process liveness only; `/readyz` checks database/schema readiness. Also inspect `journalctl -u zeus-control-plane` and verify the mTLS listener is bound only to the intended interface.
+`/healthz` proves process liveness only; `/readyz` checks PostgreSQL connectivity with a bounded timeout. Schema migrations remain a separate explicit step. Also inspect `journalctl -u zeus-control-plane` and verify the mTLS listener is bound only to the intended interface.
 
 ## 5. Enroll the staging VPN node
 

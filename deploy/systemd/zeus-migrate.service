@@ -8,6 +8,7 @@ Type=oneshot
 User=zeus
 Group=zeus
 EnvironmentFile=/etc/zeus/control-plane.env
+EnvironmentFile=-/etc/zeus/database.env
 ExecStart=/opt/zeus/bin/zeus-migrate
 TimeoutStartSec=5min
 UMask=0077

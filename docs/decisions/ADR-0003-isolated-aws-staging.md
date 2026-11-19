@@ -1,6 +1,6 @@
 # ADR-0003: Isolated AWS staging environment
 
-- **Status:** Proposed — not approved for provisioning
+- **Status:** Proposed — infrastructure code drafted; provisioning not approved
 - **Date:** 2026-11-18
 - **Owners:** ZEUS platform maintainers
 - **Depends on:** the application and deployment contracts in the current integration branch
@@ -24,9 +24,9 @@ Do not repurpose either existing ZEUS EC2 instance and do not point staging at t
 
 ### Logical topology
 
-- **Control Plane host:** a dedicated Linux EC2 instance. Expose HTTPS on TCP 443 through its TLS reverse proxy. Keep the application listener on loopback TCP 8080.
+- **Control Plane host:** a dedicated Linux EC2 instance in a private subnet. The public ALB terminates HTTPS on TCP 443 and forwards HTTP to the private application listener on TCP 8080. Keep the mTLS node-control listener on TCP 8443, reachable only from the staging node security group.
 - **VPN node host:** a second dedicated Linux EC2 instance running the Node Agent and a real, isolated WireGuard interface. Expose only the chosen WireGuard UDP port to intended test clients.
-- **Database:** a dedicated PostgreSQL 16 database, private and not publicly accessible. Permit TCP 5432 only from the staging Control Plane security group. An RDS deployment is preferred for managed backups; a local PostgreSQL instance is a lower-cost alternative only if the operator explicitly accepts host-level backup and recovery responsibility.
+- **Database:** a dedicated PostgreSQL 16 RDS database, private and not publicly accessible. Permit TCP 5432 only from the staging Control Plane security group. Use a separate migration credential from the runtime credential; do not run the API as the RDS master or migration role.
 - **Node control channel:** TCP 8443 on the Control Plane, permitted only from the staging VPN node security group or its fixed private address. The node validates the Control Plane server certificate; the Control Plane validates the node ClientAuth certificate and its node identity.
 - **Customer identity:** a staging-only Cognito User Pool and public Authorization Code client if OIDC is enabled. Never reuse production users or app-client credentials.
 - **Administration:** use AWS Systems Manager Session Manager. Do not open inbound SSH. Attach least-privilege instance profiles with SSM access; grant secret read access only to the service that needs each secret.
@@ -44,6 +44,7 @@ Do not repurpose either existing ZEUS EC2 instance and do not point staging at t
 ### Identity, secrets, and key custody
 
 - Use separate IAM roles for Control Plane and VPN node. Avoid wildcard secret access and do not put credentials in user data, AMIs, Git, CI logs, or shell history.
+- The current staging template grants the Control Plane instance profile access to the RDS master, runtime, and migration secrets for bootstrap. This is a host-level trust boundary, not isolation between systemd services; treat it as a staging-only limitation until migration credentials are moved to a separate runner/identity.
 - Store database credentials and service secrets in an approved secret store with resource-scoped access.
 - Generate the node CA private key offline/on an encrypted administrator workstation. Do not copy the CA private key to either EC2 host.
 - Transfer only the per-node client certificate/private key to the staging node and the required public CA bundles to their respective trust consumers. Keep private keys root-owned and mode 0600.
@@ -55,7 +56,6 @@ Provisioning is blocked until the following are confirmed:
 
 - AWS account and region to use (the existing project region has historically been `us-east-2`; re-verify in the console before any action).
 - Whether a separate AWS account is available, or whether same-account VPC isolation is accepted.
-- Maximum monthly staging budget and automatic cost-alert threshold.
 - DNS name/subdomain controlled by the operator and certificate issuance method.
 - Whether PostgreSQL will be RDS or host-local; backup retention and restore owner.
 - Instance sizes, operating-system image, storage sizes, and expected test window.
@@ -83,17 +83,20 @@ CI success alone does not satisfy these gates.
 
 ## Cost and teardown controls
 
-- Require a budget owner and monthly limit before provisioning.
-- Add a budget alert before creating billable resources.
-- Prefer single-AZ staging and small instance/storage sizes only after the workload and budget are approved.
-- Avoid NAT Gateway, load balancers, and always-on managed services unless the design requires them; their recurring costs must be reviewed explicitly.
-- Tag every resource with `Project=ZEUS`, `Environment=staging`, and an owner tag.
+- The current template uses a `db.t4g.small` Single-AZ RDS default with 20 GiB storage. Multi-AZ is opt-in, not the default.
+- NAT Gateway, ALB, EC2, EIP, RDS, storage, and data transfer still create recurring charges. Obtain a current regional estimate and set a budget alert before creating a change set; available credits are finite and are not a cost guarantee.
+- Do not trade away required isolation or validation merely to reduce spend.
+- Use `Project=ZEUS` and `Environment=staging` tags on every resource type that supports tagging; add an owner tag when an accountable owner label is established.
 - Define a teardown checklist that first exports required test evidence, then removes only resources tagged for this staging environment. Never use broad account-wide cleanup commands.
+
+## Infrastructure implementation status
+
+A review-only CloudFormation foundation is maintained at `infra/aws-staging/zeus-staging-foundation.yaml`, with operator guidance in `infra/aws-staging/README.md`. It defines the isolated VPC, public HTTPS ALB, private Control Plane, dedicated WireGuard node, private PostgreSQL, managed RDS secret, SSM roles, and private mTLS DNS. It intentionally does not deploy application binaries, configure host services, issue certificates, or execute WireGuard changes. The template must pass repository CloudFormation linting and receive a separate operator review before any change set is executed.
 
 ## Rollout sequence
 
-1. Approve the account/isolation model, budget, DNS, database choice, and network CIDRs.
-2. Author and lint an infrastructure-as-code template with explicit parameters and safe defaults.
+1. Confirm the account/isolation model, DNS, and network CIDRs; cost is not a limiting constraint.
+2. Review and lint the drafted infrastructure-as-code template with explicit parameters and safe defaults.
 3. Review the generated change set before any stack creation.
 4. Provision only after explicit operator approval; verify the resulting resource inventory.
 5. Deploy application binaries/configuration through SSM or another audited channel; do not place secrets in instance user data.
@@ -102,4 +105,4 @@ CI success alone does not satisfy these gates.
 
 ## Consequences
 
-This design adds infrastructure and recurring cost, but gives the team a place to verify actual WireGuard kernel behavior and network traffic without risking production. It intentionally leaves the concrete AWS template and provisioning unimplemented until the unresolved inputs and budget are approved.
+This design adds infrastructure and recurring cost, but gives the team a place to verify actual WireGuard kernel behavior and network traffic without risking production. The template is drafted but not deployed. Provisioning remains blocked until the account, hostname/certificate, network CIDRs, and service quotas are verified and the CloudFormation change set is explicitly approved.

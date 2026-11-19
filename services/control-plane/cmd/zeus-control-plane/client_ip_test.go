@@ -11,7 +11,7 @@ func TestClientIPUsesForwardedAddressOnlyFromTrustedProxy(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := api.SetTrustedProxyCIDRs("10.240.1.0/24, 10.240.2.0/24"); err != nil {
+	if err := api.SetTrustedProxyCIDRs("10.240.0.0/24, 10.240.1.0/24"); err != nil {
 		t.Fatal(err)
 	}
 

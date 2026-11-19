@@ -44,7 +44,7 @@ SELECT has_schema_privilege(current_user, 'public', 'USAGE')
       AND NOT (
         has_sequence_privilege(current_user, format('%I.%I', s.schemaname, s.sequencename), 'USAGE')
         AND has_sequence_privilege(current_user, format('%I.%I', s.schemaname, s.sequencename), 'SELECT')
-        AND has_sequence_privilege(current_user, format('%I.%I', s.schemaname, s.sequencename), 'UPDATE')
+        AND NOT has_sequence_privilege(current_user, format('%I.%I', s.schemaname, s.sequencename), 'UPDATE')
       )
   )
   AND NOT EXISTS (

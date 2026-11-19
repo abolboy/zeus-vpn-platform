@@ -21,6 +21,10 @@ func (a *API) SetTrustedProxyCIDRs(raw string) error {
 		if err != nil {
 			return errors.New("ZEUS_TRUSTED_PROXY_CIDRS must contain comma-separated CIDRs")
 		}
+		ones, _ := network.Mask.Size()
+		if ones == 0 {
+			return errors.New("ZEUS_TRUSTED_PROXY_CIDRS must not contain an unrestricted /0 network")
+		}
 		networks = append(networks, network)
 	}
 	a.trustedProxyCIDRs = networks

@@ -23,6 +23,9 @@ LimitNOFILE=4096
 CapabilityBoundingSet=CAP_NET_ADMIN
 AmbientCapabilities=CAP_NET_ADMIN
 NoNewPrivileges=yes
+# Prevent the service process from obtaining EC2 instance-profile credentials via IMDS.
+IPAddressDeny=169.254.169.254/32
+IPAddressDeny=fd00:ec2::254/128
 PrivateTmp=yes
 ProtectSystem=strict
 ProtectHome=yes

@@ -130,7 +130,7 @@ fun ZeusDashboard() {
     var connectAfterProvisioning by remember { mutableStateOf(false) }
     var pendingResumeAttempted by remember { mutableStateOf(false) }
     var showSplitTunnelDialog by remember { mutableStateOf(false) }
-    var splitTunnelMessage by remember { mutableStateOf("") }
+    var splitTunnelNotice by remember { mutableStateOf<SplitTunnelNotice?>(null) }
     val enrollmentGate = remember { AtomicBoolean(false) }
 
     val network by produceState(NetworkCondition.UNKNOWN, monitor) {
@@ -703,8 +703,8 @@ fun ZeusDashboard() {
                             splitTunnelPolicy = splitTunnelPolicy,
                             onEditSplitTunnel = { showSplitTunnelDialog = true },
                         )
-                        if (splitTunnelMessage.isNotBlank()) {
-                            InlineNotice(splitTunnelMessage, if (splitTunnelMessage.contains("ذخیره شد")) Positive else Warning)
+                        splitTunnelNotice?.takeIf { it.message.isNotBlank() }?.let { notice ->
+                            InlineNotice(notice.message, if (notice.isSuccess) Positive else Warning)
                         }
                         if (showSplitTunnelDialog) {
                             SplitTunnelDialog(
@@ -713,12 +713,24 @@ fun ZeusDashboard() {
                                 onDismiss = { showSplitTunnelDialog = false },
                                 onApply = { updatedPolicy ->
                                     scope.launch {
-                                        settings.setSplitTunnelPolicy(updatedPolicy)
-                                        showSplitTunnelDialog = false
-                                        splitTunnelMessage = if (wireGuardState == WireGuardState.ENGINE_UP) {
-                                            "قانون مسیریابی ذخیره شد؛ برای اعمال آن تونل را قطع و دوباره وصل کنید."
-                                        } else {
-                                            "قانون مسیریابی ذخیره شد و در اتصال بعدی اعمال می‌شود."
+                                        try {
+                                            settings.setSplitTunnelPolicy(updatedPolicy)
+                                            showSplitTunnelDialog = false
+                                            splitTunnelNotice = SplitTunnelNotice(
+                                                message = if (wireGuardState == WireGuardState.ENGINE_UP) {
+                                                    "قانون مسیریابی ذخیره شد؛ برای اعمال آن تونل را قطع و دوباره وصل کنید."
+                                                } else {
+                                                    "قانون مسیریابی ذخیره شد و در اتصال بعدی اعمال می‌شود."
+                                                },
+                                                isSuccess = true,
+                                            )
+                                        } catch (cancelled: CancellationException) {
+                                            throw cancelled
+                                        } catch (_: Exception) {
+                                            splitTunnelNotice = SplitTunnelNotice(
+                                                message = "ذخیرهٔ قانون مسیریابی انجام نشد؛ فضای ذخیره‌سازی دستگاه را بررسی و دوباره تلاش کنید.",
+                                                isSuccess = false,
+                                            )
                                         }
                                     }
                                 },
@@ -1681,6 +1693,8 @@ private fun SettingsCard(
 }
 
 
+private data class SplitTunnelNotice(val message: String, val isSuccess: Boolean)
+
 private data class LaunchableApp(
     val packageName: String,
     val label: String,
@@ -1722,6 +1736,21 @@ private fun SplitTunnelDialog(
                 it.packageName.contains(search, ignoreCase = true)
         }
     }
+    val visiblePackageNames = remember(applications) {
+        applications.mapTo(mutableSetOf()) { it.packageName }
+    }
+    val unavailableSelectedPackages = remember(selectedPackages, visiblePackageNames) {
+        selectedPackages.filterNot { it in visiblePackageNames }
+    }
+    val unavailableApps = remember(unavailableSelectedPackages, search) {
+        unavailableSelectedPackages
+            .filter { search.isBlank() || it.contains(search, ignoreCase = true) }
+            .sorted()
+            .map { LaunchableApp(it, "در فهرست فعلی Android قابل‌مشاهده نیست") }
+    }
+    val selectableApps = remember(visibleApps, unavailableApps) {
+        unavailableApps + visibleApps
+    }
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -1758,7 +1787,7 @@ private fun SplitTunnelDialog(
                         color = SecondaryText,
                         style = MaterialTheme.typography.labelSmall,
                     )
-                    if (applications.isEmpty()) {
+                    if (applications.isEmpty() && unavailableSelectedPackages.isEmpty()) {
                         Text(
                             "برنامهٔ قابل‌نمایشی پیدا نشد. فهرست برنامه‌های دارای آیکون اجرا از Android خوانده می‌شود.",
                             color = Warning,
@@ -1768,7 +1797,7 @@ private fun SplitTunnelDialog(
                         LazyColumn(
                             modifier = Modifier.fillMaxWidth().heightIn(max = 250.dp),
                         ) {
-                            items(visibleApps, key = { it.packageName }) { app ->
+                            items(selectableApps, key = { it.packageName }) { app ->
                                 Row(
                                     modifier = Modifier.fillMaxWidth(),
                                     verticalAlignment = Alignment.CenterVertically,
@@ -1784,6 +1813,7 @@ private fun SplitTunnelDialog(
                                                     selectedPackages + app.packageName
                                                 }
                                             } else {
+                                                validationMessage = ""
                                                 selectedPackages - app.packageName
                                             }
                                         },

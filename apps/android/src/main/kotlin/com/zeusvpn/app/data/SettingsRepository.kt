@@ -3,6 +3,7 @@ package com.zeusvpn.app.data
 import android.content.Context
 import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
+import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.core.stringSetPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
@@ -27,26 +28,10 @@ class SettingsRepository(context: Context) {
      */
     val tunnelDesired: Flow<Boolean> = store.data.map { it[TUNNEL_DESIRED] ?: false }
 
-    val splitTunnelPolicy: Flow<SplitTunnelPolicy> = store.data.map { preferences ->
-        val mode = runCatching {
-            SplitTunnelMode.valueOf(preferences[SPLIT_TUNNEL_MODE] ?: SplitTunnelMode.ALL.name)
-        }.getOrDefault(SplitTunnelMode.ALL)
-        SplitTunnelPolicy(
-            mode = mode,
-            packageNames = preferences[SPLIT_TUNNEL_PACKAGES] ?: emptySet(),
-        )
-    }
+    val splitTunnelPolicy: Flow<SplitTunnelPolicy> = store.data.map { it.toSplitTunnelPolicy() }
 
-    suspend fun loadSplitTunnelPolicy(): SplitTunnelPolicy {
-        val preferences = store.data.first()
-        val mode = runCatching {
-            SplitTunnelMode.valueOf(preferences[SPLIT_TUNNEL_MODE] ?: SplitTunnelMode.ALL.name)
-        }.getOrDefault(SplitTunnelMode.ALL)
-        return SplitTunnelPolicy(
-            mode = mode,
-            packageNames = preferences[SPLIT_TUNNEL_PACKAGES] ?: emptySet(),
-        )
-    }
+    suspend fun loadSplitTunnelPolicy(): SplitTunnelPolicy =
+        store.data.first().toSplitTunnelPolicy()
 
     suspend fun setSplitTunnelPolicy(policy: SplitTunnelPolicy) {
         policy.validate()
@@ -62,6 +47,16 @@ class SettingsRepository(context: Context) {
 
     suspend fun setTunnelDesired(desired: Boolean) {
         store.edit { it[TUNNEL_DESIRED] = desired }
+    }
+
+    private fun Preferences.toSplitTunnelPolicy(): SplitTunnelPolicy {
+        val mode = runCatching {
+            SplitTunnelMode.valueOf(this[SPLIT_TUNNEL_MODE] ?: SplitTunnelMode.ALL.name)
+        }.getOrDefault(SplitTunnelMode.ALL)
+        return SplitTunnelPolicy(
+            mode = mode,
+            packageNames = this[SPLIT_TUNNEL_PACKAGES] ?: emptySet(),
+        )
     }
 
     private companion object {

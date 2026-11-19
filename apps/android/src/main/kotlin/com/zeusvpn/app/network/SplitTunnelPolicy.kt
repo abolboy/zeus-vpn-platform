@@ -51,7 +51,8 @@ object SplitTunnelProfilePolicy {
         policy.validate()
         require(profileText.isNotBlank()) { "WireGuard profile is empty." }
 
-        val lines = profileText.split('\n')
+        val normalizedProfileText = profileText.replace("\r\n", "\n").replace('\r', '\n')
+        val lines = normalizedProfileText.split('\n')
         val interfaceIndex = lines.indexOfFirst { it.trim().equals("[Interface]", ignoreCase = true) }
         require(interfaceIndex >= 0) { "WireGuard profile has no Interface section." }
 

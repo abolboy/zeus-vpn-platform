@@ -46,7 +46,7 @@ sudo install -d -o root -g zeus -m 0750 /etc/zeus/node-listener
 
 Install the Control Plane and migration binaries under `/opt/zeus/bin`. Install `deploy/systemd/zeus-control-plane.service` as `/etc/systemd/system/zeus-control-plane.service` and `deploy/systemd/zeus-migrate.service` as `/etc/systemd/system/zeus-migrate.service`.
 
-Copy `deploy/examples/control-plane.env.example` to `/etc/zeus/control-plane.env`, replace all placeholders, and use mode `0600` owned by root. The file contains database credentials and must not be readable by ordinary users.
+Copy `deploy/examples/control-plane.env.example` to `/etc/zeus/control-plane.env`, replace all placeholders, and use mode `0600` owned by root. Keep it unreadable by ordinary users; the database URL is generated separately in `/etc/zeus/database.env`.
 
 Requirements before startup:
 - A dedicated PostgreSQL database and least-privilege role.
@@ -135,7 +135,7 @@ curl --fail --silent http://127.0.0.1:8080/healthz
 curl --fail --silent http://127.0.0.1:8080/readyz
 ```
 
-`/healthz` proves process liveness only; `/readyz` checks database/schema readiness. Also inspect `journalctl -u zeus-control-plane` and verify the mTLS listener is bound only to the intended interface.
+`/healthz` proves process liveness only; `/readyz` checks PostgreSQL connectivity with a bounded timeout. Schema migrations remain a separate explicit step. Also inspect `journalctl -u zeus-control-plane` and verify the mTLS listener is bound only to the intended interface.
 
 ## 5. Enroll the staging VPN node
 

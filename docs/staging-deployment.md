@@ -77,6 +77,39 @@ aws cloudformation describe-stacks \
 
 Record the exact `OidcIssuer`, `OidcClientId`, and `HostedUiDomain` outputs. Configure the Control Plane and Android build with the same issuer/client pair. Never put a client secret in the Android package. Confirm the managed-login authorization endpoint responds before building the configured APK. Do not enable production public signup until abuse controls, capacity policy, email delivery, and monitoring are approved.
 
+## 2B. Prepare PostgreSQL credentials and RDS certificate trust
+
+For the CloudFormation RDS deployment, do not run the application with the RDS master account. The stack creates a separate generated password secret for `zeus_app`; the Control Plane instance role can read that secret and the RDS-managed master secret, while the VPN node role cannot read either one.
+
+On the isolated Control Plane host, ensure the AWS CLI, `jq`, `psql`, and `openssl` are installed. Confirm the instance is using the staging Control Plane role through IMDSv2/SSM; do not copy access keys to the host.
+
+Download the AWS RDS CA bundle and install it as a public trust file:
+
+```sh
+sudo install -d -o root -g root -m 0755 /etc/zeus/rds
+curl --fail --location --proto '=https' --tlsv1.2 \
+  https://truststore.pki.rds.amazonaws.com/global/global-bundle.pem \
+  --output /tmp/zeus-rds-global-bundle.pem
+openssl crl2pkcs7 -nocrl -certfile /tmp/zeus-rds-global-bundle.pem -out /dev/null
+sudo install -o root -g root -m 0644 \
+  /tmp/zeus-rds-global-bundle.pem /etc/zeus/rds/global-bundle.pem
+rm -f /tmp/zeus-rds-global-bundle.pem
+```
+
+Run the bootstrap script from the exact reviewed repository commit on the Control Plane host. Supply the literal RDS endpoint and both secret ARNs from the staging CloudFormation outputs:
+
+```sh
+sudo bash scripts/bootstrap-rds-app-role.sh \
+  --region us-east-2 \
+  --db-host '<DatabaseEndpoint>' \
+  --master-secret-arn '<DatabaseSecretArn>' \
+  --app-secret-arn '<DatabaseAppSecretArn>'
+```
+
+The script retrieves both secrets through the instance role, creates or updates the non-superuser `zeus_app` login, grants only database connection and schema/table creation rights needed by the explicit migration runner, and writes `/etc/zeus/database.env` as root-owned mode `0600`. It does not print either password. It refuses to overwrite an existing database environment file; preserve and review any existing file before deciding how to rotate it. The script requires the exact RDS endpoint hostname so `sslmode=verify-full` validates both the RDS CA chain and hostname.
+
+Both the migration and Control Plane systemd units load this generated file. Do not start migrations or the API until the script reports success and the file exists with the expected owner and permissions.
+
 ## 3. Apply the database migrations
 
 Back up the empty/dedicated staging database first. Then run the migration binary using the same root-only environment file as the service:

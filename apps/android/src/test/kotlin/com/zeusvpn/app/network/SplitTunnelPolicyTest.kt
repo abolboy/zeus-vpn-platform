@@ -3,6 +3,7 @@ package com.zeusvpn.app.network
 import com.wireguard.crypto.KeyPair
 import com.zeusvpn.app.vpn.WireGuardProfileValidator
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertThrows
 import org.junit.Test
 
@@ -53,6 +54,38 @@ class SplitTunnelPolicyTest {
 
         assertEquals(emptySet<String>(), parsed.getInterface().getIncludedApplications())
         assertEquals(emptySet<String>(), parsed.getInterface().getExcludedApplications())
+    }
+
+    @Test
+    fun removesOldRoutingDirectivesFromCrLfProfiles() {
+        val imported = profile()
+            .replace("\n", "\r\n")
+            .replace(
+                "[Interface]\r\n",
+                "[Interface]\r\nIncludedApplications = com.example.old\r\nExcludedApplications = com.example.older\r\n",
+            )
+        val routed = SplitTunnelProfilePolicy.apply(
+            imported,
+            SplitTunnelPolicy(SplitTunnelMode.EXCLUDE_SELECTED, setOf("com.example.new")),
+        )
+        val parsed = WireGuardProfileValidator.parse(routed)
+
+        assertEquals(setOf("com.example.new"), parsed.getInterface().getExcludedApplications())
+        assertEquals(emptySet<String>(), parsed.getInterface().getIncludedApplications())
+    }
+
+    @Test
+    fun normalizesLoneCarriageReturnProfileLineEndings() {
+        val imported = profile()
+            .replace("\n", "\r")
+            .replace(
+                "[Interface]\r",
+                "[Interface]\rIncludedApplications = com.example.old\r",
+            )
+
+        val routed = SplitTunnelProfilePolicy.apply(imported, SplitTunnelPolicy.DEFAULT)
+
+        assertFalse(routed.contains("IncludedApplications", ignoreCase = true))
     }
 
     @Test

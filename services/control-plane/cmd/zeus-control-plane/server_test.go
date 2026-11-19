@@ -377,11 +377,11 @@ func TestPostgresStoreIntegration(t *testing.T) {
 		t.Fatal("bootstrap unexpectedly changed the existing owner password hash")
 	}
 
-	// An inactive account occupying the bootstrap login must fail explicitly
+	// A disabled account occupying the bootstrap login must fail explicitly
 	// when no active owner exists; it must not silently leave the service ownerless.
 	rows, err := store.pool.Query(ctx, `
 		UPDATE operators
-		SET status = 'inactive'
+		SET status = 'disabled'
 		WHERE role = 'owner' AND status = 'active'
 		RETURNING id::text
 	`)
@@ -421,7 +421,7 @@ func TestPostgresStoreIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if collisionOperator.Status != "inactive" || collisionOperator.PasswordHash != originalPasswordHash {
+	if collisionOperator.Status != "disabled" || collisionOperator.PasswordHash != originalPasswordHash {
 		t.Fatalf("bootstrap collision changed existing account: status=%s hash_changed=%v", collisionOperator.Status, collisionOperator.PasswordHash != originalPasswordHash)
 	}
 	_, tokenHash, err := generateSessionToken()

@@ -56,6 +56,12 @@ Parameters:
     Type: String
     Default: db.t4g.medium
     AllowedValues: [db.t4g.medium, db.t4g.large, db.m7g.large, db.m7g.xlarge]
+  PostgresEngineVersion:
+    Type: String
+    Default: "16.15"
+    AllowedPattern: "^16\\.[0-9]+$"
+    Description: Pin the PostgreSQL 16 major line used by the Control Plane CI integration tests.
+
   DatabaseAllocatedStorage:
     Type: Number
     Default: 100
@@ -396,6 +402,7 @@ Resources:
     Properties:
       DBInstanceIdentifier: !Sub "${EnvironmentName}-postgres"
       Engine: postgres
+      EngineVersion: !Ref PostgresEngineVersion
       DBName: zeus_staging
       MasterUsername: zeus_staging_admin
       ManageMasterUserPassword: true

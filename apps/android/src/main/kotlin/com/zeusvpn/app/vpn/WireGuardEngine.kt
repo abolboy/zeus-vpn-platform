@@ -4,6 +4,8 @@ import android.content.Context
 import com.wireguard.android.backend.GoBackend
 import com.wireguard.android.backend.Tunnel
 import com.zeusvpn.app.data.EncryptedWireGuardConfigStore
+import com.zeusvpn.app.network.SplitTunnelPolicy
+import com.zeusvpn.app.network.SplitTunnelProfilePolicy
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -120,14 +122,17 @@ class WireGuardEngine private constructor(context: Context) {
         }
     }
 
-    suspend fun connect() = withContext(Dispatchers.IO) {
+    suspend fun connect(splitTunnelPolicy: SplitTunnelPolicy = SplitTunnelPolicy.DEFAULT) = withContext(Dispatchers.IO) {
         operationMutex.withLock {
             val actualState = syncBackendStateLocked()
             if (actualState == WireGuardState.ENGINE_UP) return@withLock
 
+            val validatedPolicy = validateInstalledApplications(splitTunnelPolicy)
             val profileBytes = profileStore.read() ?: throw MissingWireGuardProfileException()
             val config = try {
-                WireGuardProfileValidator.parse(profileBytes)
+                val storedProfile = profileBytes.toString(Charsets.UTF_8)
+                val routedProfile = SplitTunnelProfilePolicy.apply(storedProfile, validatedPolicy)
+                WireGuardProfileValidator.parse(routedProfile)
             } finally {
                 profileBytes.fill(0)
             }
@@ -188,6 +193,15 @@ class WireGuardEngine private constructor(context: Context) {
             }
             profileStore.clearProfile()
         }
+    }
+
+    private fun validateInstalledApplications(policy: SplitTunnelPolicy): SplitTunnelPolicy {
+        val installedPackages = policy.packageNames.filterTo(linkedSetOf()) { packageName ->
+            runCatching {
+                appContext.packageManager.getApplicationInfo(packageName, 0)
+            }.isSuccess
+        }
+        return policy.copy(packageNames = installedPackages).also { it.validate() }
     }
 
     private fun syncBackendStateLocked(): WireGuardState {

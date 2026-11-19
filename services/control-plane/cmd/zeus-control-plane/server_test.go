@@ -376,6 +376,52 @@ func TestPostgresStoreIntegration(t *testing.T) {
 	if unchangedOperator.PasswordHash != originalPasswordHash {
 		t.Fatal("bootstrap unexpectedly changed the existing owner password hash")
 	}
+
+	// An inactive account occupying the bootstrap login must fail explicitly
+	// when no active owner exists; it must not silently leave the service ownerless.
+	rows, err := store.pool.Query(ctx, `
+		UPDATE operators
+		SET status = 'inactive'
+		WHERE role = 'owner' AND status = 'active'
+		RETURNING id::text
+	`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var deactivatedOwnerIDs []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			rows.Close()
+			t.Fatal(err)
+		}
+		deactivatedOwnerIDs = append(deactivatedOwnerIDs, id)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		t.Fatal(err)
+	}
+	rows.Close()
+	if len(deactivatedOwnerIDs) == 0 {
+		t.Fatal("expected at least one active owner for bootstrap conflict test")
+	}
+	t.Cleanup(func() {
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cleanupCancel()
+		if _, err := store.pool.Exec(cleanupCtx, "UPDATE operators SET status = 'active' WHERE id = ANY($1::uuid[])", deactivatedOwnerIDs); err != nil {
+			t.Errorf("restore active owner statuses after bootstrap conflict test: %v", err)
+		}
+	})
+	if err := store.EnsureBootstrapOperator(ctx, operator.Login, "ci-collision-password-789"); !errors.Is(err, ErrBootstrapLoginConflict) {
+		t.Fatalf("bootstrap login collision error = %v, want ErrBootstrapLoginConflict", err)
+	}
+	collisionOperator, err := store.FindOperatorByLogin(ctx, operator.Login)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if collisionOperator.Status != "inactive" || collisionOperator.PasswordHash != originalPasswordHash {
+		t.Fatalf("bootstrap collision changed existing account: status=%s hash_changed=%v", collisionOperator.Status, collisionOperator.PasswordHash != originalPasswordHash)
+	}
 	_, tokenHash, err := generateSessionToken()
 	if err != nil {
 		t.Fatal(err)

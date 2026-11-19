@@ -5,6 +5,7 @@ This runbook prepares an isolated staging environment. It is not approval to dep
 ## Network layout and trust boundaries
 
 - Admin/browser traffic: public HTTPS ALB -> TCP `8080` on the private Control Plane interface. The Control Plane security group permits this port only from the ALB security group.
+- Client IP attribution and IP-based rate limits: set `ZEUS_TRUSTED_PROXY_CIDRS` to the exact ALB subnet CIDRs (the template defaults are `10.240.0.0/24,10.240.1.0/24`). The Control Plane uses the final address appended to `X-Forwarded-For` only when the immediate peer belongs to one of these CIDRs. If subnet parameters change, update the environment file to match. Do not trust forwarded headers from arbitrary peers.
 - Node-agent traffic: VPN node -> TCP `8443` (separate mTLS listener). Restrict this port to the exact staging node source IPs, or bind to a private VPC address when available.
 - PostgreSQL: private network only; allow access from the Control Plane host only.
 - WireGuard data plane: UDP on the configured WireGuard listen port at the VPN node. Do not expose the Control Plane admin port to the Internet.
@@ -57,6 +58,7 @@ Requirements before startup:
 - A firewall rule for TCP `8443` allowing only the registered staging node source IPs. Prefer a private VPC address in `ZEUS_NODE_HTTP_ADDR` instead of `0.0.0.0:8443` when possible.
 
 The staging ALB is the TLS reverse proxy for the admin API. Set `ZEUS_HTTP_ADDR=0.0.0.0:8080` so the target is reachable over the private VPC interface; the Control Plane security group must continue to allow TCP 8080 only from the ALB security group. Do not add a public ingress rule for port 8080.
+Keep `ZEUS_TRUSTED_PROXY_CIDRS` limited to the ALB's public subnet CIDRs. The application ignores `X-Forwarded-For` when the direct TCP peer is outside those CIDRs, preventing clients from spoofing their rate-limit and audit source IP.
 
 ## 2A. Prepare customer identity (Cognito)
 

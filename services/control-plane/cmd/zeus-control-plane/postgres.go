@@ -142,11 +142,17 @@ func (s *PostgresStore) EnsureBootstrapOperator(ctx context.Context, login, pass
 	if err != nil {
 		return err
 	}
-	if _, err := tx.Exec(ctx, `
+	var createdID string
+	err = tx.QueryRow(ctx, `
 		INSERT INTO operators (login, password_hash, role, status)
 		VALUES ($1, $2, 'owner', 'active')
 		ON CONFLICT (login) DO NOTHING
-	`, login, hash); err != nil {
+		RETURNING id::text
+	`, login, hash).Scan(&createdID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ErrBootstrapLoginConflict
+	}
+	if err != nil {
 		return err
 	}
 	return tx.Commit(ctx)

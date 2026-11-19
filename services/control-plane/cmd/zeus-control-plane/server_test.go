@@ -405,7 +405,7 @@ func TestPostgresStoreIntegration(t *testing.T) {
 	if len(deactivatedOwnerIDs) == 0 {
 		t.Fatal("expected at least one active owner for bootstrap conflict test")
 	}
-	t.Cleanup(func() {
+	defer func() {
 		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cleanupCancel()
 		for _, id := range deactivatedOwnerIDs {
@@ -413,7 +413,7 @@ func TestPostgresStoreIntegration(t *testing.T) {
 				t.Errorf("restore active owner %s after bootstrap conflict test: %v", id, err)
 			}
 		}
-	})
+	}()
 	if err := store.EnsureBootstrapOperator(ctx, operator.Login, "ci-collision-password-789"); !errors.Is(err, ErrBootstrapLoginConflict) {
 		t.Fatalf("bootstrap login collision error = %v, want ErrBootstrapLoginConflict", err)
 	}

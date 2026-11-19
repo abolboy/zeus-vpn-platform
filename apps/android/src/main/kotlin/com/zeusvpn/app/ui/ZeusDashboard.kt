@@ -357,7 +357,8 @@ fun ZeusDashboard() {
                         connectAfterProvisioning = false
                         enrollmentMessage = error.message ?: "ثبت دستگاه انجام نشد."
                     } catch (error: Exception) {
-                        if (error is CancellationException) throw error                        connectAfterProvisioning = false
+                        if (error is CancellationException) throw error
+                        connectAfterProvisioning = false
                         enrollmentMessage = error.message ?: "ثبت انجام نشد؛ تلاش امن برای ادامه روی همین گوشی نگهداری شده است."
                     } finally {
                         hasPendingEnrollment = runCatching { enrollment.hasPendingEnrollment() }.getOrDefault(false)
@@ -388,7 +389,8 @@ fun ZeusDashboard() {
                         performEnrollment(idToken, "")
                     }
                 } catch (error: Exception) {
-                    if (error is CancellationException) throw error                    connectAfterProvisioning = false
+                    if (error is CancellationException) throw error
+                    connectAfterProvisioning = false
                     authMessage = error.message ?: "ورود امن انجام نشد."
                 }
             }
@@ -405,7 +407,8 @@ fun ZeusDashboard() {
                 try {
                     customerSignInLauncher.launch(identity.createAuthorizationIntent())
                 } catch (error: Exception) {
-                    if (error is CancellationException) throw error                    authBusy = false
+                    if (error is CancellationException) throw error
+                    authBusy = false
                     authMessage = error.message ?: "صفحهٔ ورود در دسترس نیست."
                 }
             }
@@ -431,7 +434,8 @@ fun ZeusDashboard() {
                     val idToken = identity.freshIdToken()
                     performEnrollment(idToken, "")
                 } catch (error: Exception) {
-                    if (error is CancellationException) throw error                    customerSignedIn = identity.hasStoredSession()
+                    if (error is CancellationException) throw error
+                    customerSignedIn = identity.hasStoredSession()
                     authMessage = error.message ?: "نشست حساب منقضی شده است؛ دوباره وارد شوید."
                 }
             }
@@ -459,7 +463,8 @@ fun ZeusDashboard() {
                 try {
                     performEnrollment(identity.freshIdToken(), "")
                 } catch (error: Exception) {
-                    if (error is CancellationException) throw error                    customerSignedIn = identity.hasStoredSession()
+                    if (error is CancellationException) throw error
+                    customerSignedIn = identity.hasStoredSession()
                     authMessage = error.message ?: "برای ادامهٔ ثبت دستگاه دوباره وارد حساب شوید."
                 }
             }

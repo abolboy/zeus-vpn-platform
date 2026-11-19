@@ -1,5 +1,7 @@
 name: ZEUS CI
 
+# Run this matrix against the current stacked PR base and head.
+
 on:
   push:
   pull_request:

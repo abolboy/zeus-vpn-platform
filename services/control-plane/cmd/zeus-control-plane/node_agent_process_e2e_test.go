@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/ecdsa"
+	"errors"
 	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/x509"
@@ -28,6 +29,8 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 type nodeAgentE2ECertFiles struct {
@@ -57,11 +60,13 @@ func (b *synchronizedE2EBuffer) String() string {
 }
 
 type nodeAgentProcess struct {
-	cmd     *exec.Cmd
-	done    chan struct{}
-	waitErr error
-	output  *synchronizedE2EBuffer
-	once    sync.Once
+	cmd        *exec.Cmd
+	done       chan struct{}
+	waitErr    error
+	output     *synchronizedE2EBuffer
+	once       sync.Once
+	privileged bool
+	stopErr    error
 }
 
 func TestNodeAgentProcessEndToEnd(t *testing.T) {
@@ -242,7 +247,11 @@ func TestNodeAgentProcessEndToEnd(t *testing.T) {
 	if err != nil {
 		t.Fatalf("start real node-agent process: %v", err)
 	}
-	t.Cleanup(agent.stop)
+	t.Cleanup(func() {
+		if err := agent.stop(); err != nil {
+			t.Errorf("stop Node Agent E2E process: %v", err)
+		}
+	})
 
 	waitForE2ECondition(t, ctx, agent, "node to authenticate over mTLS and become online", func() (bool, error) {
 		var status string
@@ -391,25 +400,96 @@ func cleanupNodeAgentE2ERecords(ctx context.Context, store *PostgresStore, nodeI
 	return tx.Commit(ctx)
 }
 
+func TestValidateE2ETestDSN(t *testing.T) {
+	const validDSN = "postgres://zeus_test:zeus_ci_only_password@127.0.0.1:5432/zeus_test?sslmode=disable"
+	if err := validateE2ETestDSN(validDSN); err != nil {
+		t.Fatalf("current CI DSN must be accepted: %v", err)
+	}
+
+	tests := []struct {
+		name string
+		dsn  string
+	}{
+		{
+			name: "query host override",
+			dsn:  validDSN + "&host=10.0.0.10",
+		},
+		{
+			name: "query user override",
+			dsn:  validDSN + "&user=app",
+		},
+		{
+			name: "query database override",
+			dsn:  validDSN + "&database=other",
+		},
+		{
+			name: "query port override",
+			dsn:  validDSN + "&port=5433",
+		},
+		{
+			name: "multiple hosts",
+			dsn:  "postgres://zeus_test:zeus_ci_only_password@127.0.0.1:5432,10.0.0.10:5432/zeus_test?sslmode=disable",
+		},
+		{
+			name: "TLS mode override",
+			dsn:  validDSN + "&sslmode=prefer",
+		},
+		{
+			name: "duplicate TLS mode",
+			dsn:  validDSN + "&sslmode=verify-full",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if err := validateE2ETestDSN(test.dsn); err == nil {
+				t.Fatal("expected unsafe database DSN to be rejected")
+			}
+		})
+	}
+}
+
 func validateE2ETestDSN(dsn string) error {
 	parsed, err := url.Parse(dsn)
 	if err != nil {
-		return fmt.Errorf("invalid PostgreSQL URL: %w", err)
+		return fmt.Errorf("invalid PostgreSQL URL")
 	}
 	if parsed.Scheme != "postgres" && parsed.Scheme != "postgresql" {
 		return fmt.Errorf("expected PostgreSQL URL")
 	}
-	if parsed.Hostname() != "127.0.0.1" {
-		return fmt.Errorf("database host must be 127.0.0.1, got %q", parsed.Hostname())
+
+	// Keep the E2E URL deliberately narrow: CI uses only sslmode=disable.
+	// This rejects duplicate and query-string overrides before pgx can merge them.
+	query := parsed.Query()
+	sslModes := query["sslmode"]
+	if len(query) != 1 || len(sslModes) != 1 || sslModes[0] != "disable" {
+		return fmt.Errorf("E2E database URL may contain only one sslmode=disable parameter")
 	}
-	if parsed.Path != "/zeus_test" {
-		return fmt.Errorf("database name must be zeus_test, got %q", parsed.Path)
+
+	// Use the exact parser used by OpenPostgres so validation sees pgx's effective
+	// settings, not only the URL authority (which query parameters can override).
+	config, err := pgxpool.ParseConfig(dsn)
+	if err != nil {
+		return fmt.Errorf("invalid PostgreSQL connection configuration")
 	}
-	if parsed.User == nil || parsed.User.Username() != "zeus_test" {
-		return fmt.Errorf("database role must be zeus_test")
+	connection := config.ConnConfig
+	if connection.Host != "127.0.0.1" {
+		return fmt.Errorf("effective database host must be 127.0.0.1")
 	}
-	if parsed.Query().Get("sslmode") != "disable" {
-		return fmt.Errorf("CI-only database must use sslmode=disable on loopback")
+	if connection.Port != 5432 {
+		return fmt.Errorf("effective database port must be 5432")
+	}
+	if connection.Database != "zeus_test" {
+		return fmt.Errorf("effective database name must be zeus_test")
+	}
+	if connection.User != "zeus_test" {
+		return fmt.Errorf("effective database role must be zeus_test")
+	}
+	if connection.Password == "" {
+		return fmt.Errorf("E2E database password must be explicit in the CI URL")
+	}
+	if connection.TLSConfig != nil || len(connection.Fallbacks) != 0 || connection.SSLNegotiation != "" {
+		return fmt.Errorf("E2E database connection must use TLS-disabled loopback with no fallback targets")
 	}
 	return nil
 }
@@ -572,6 +652,7 @@ func writeNodeAgentE2EFile(t *testing.T, directory, name string, content []byte,
 func startNodeAgentForE2E(t *testing.T, binary string, environment map[string]string) (*nodeAgentProcess, error) {
 	t.Helper()
 	output := &synchronizedE2EBuffer{}
+	privileged := os.Geteuid() != 0
 	envNames := make([]string, 0, len(environment))
 	for name := range environment {
 		envNames = append(envNames, name)
@@ -599,10 +680,16 @@ func startNodeAgentForE2E(t *testing.T, binary string, environment map[string]st
 	command.Stdout = output
 	command.Stderr = output
 	command.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	command.WaitDelay = 2 * time.Second
 	if err := command.Start(); err != nil {
 		return nil, fmt.Errorf("launch isolated node-agent process: %w", err)
 	}
-	process := &nodeAgentProcess{cmd: command, done: make(chan struct{}), output: output}
+	process := &nodeAgentProcess{
+		cmd:        command,
+		done:       make(chan struct{}),
+		output:     output,
+		privileged: privileged,
+	}
 	go func() {
 		process.waitErr = command.Wait()
 		close(process.done)
@@ -610,19 +697,86 @@ func startNodeAgentForE2E(t *testing.T, binary string, environment map[string]st
 	return process, nil
 }
 
-func (p *nodeAgentProcess) stop() {
+func (p *nodeAgentProcess) signalGroup(signal syscall.Signal) error {
+	pid := p.cmd.Process.Pid
+	if err := syscall.Kill(-pid, signal); err == nil || errors.Is(err, syscall.ESRCH) {
+		return nil
+	} else if !errors.Is(err, syscall.EPERM) || !p.privileged {
+		return fmt.Errorf("signal process group with signal %d: %w", signal, err)
+	}
+
+	// A non-root test process cannot signal the root-owned agent started through
+	// sudo. Use the same non-interactive privilege path for bounded cleanup.
+	sudo, err := exec.LookPath("sudo")
+	if err != nil {
+		return fmt.Errorf("direct signal failed and sudo is unavailable: %w", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	command := exec.CommandContext(
+		ctx,
+		sudo,
+		"-n",
+		"kill",
+		fmt.Sprintf("-%d", signal),
+		"--",
+		fmt.Sprintf("-%d", pid),
+	)
+	output, err := command.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("signal process group with sudo (signal %d): %w: %s", signal, err, strings.TrimSpace(string(output)))
+	}
+	return nil
+}
+
+func (p *nodeAgentProcess) stop() error {
 	if p == nil || p.cmd == nil || p.cmd.Process == nil {
-		return
+		return nil
 	}
 	p.once.Do(func() {
-		_ = syscall.Kill(-p.cmd.Process.Pid, syscall.SIGTERM)
+		select {
+		case <-p.done:
+			return
+		default:
+		}
+
+		var signalErrors []string
+		if err := p.signalGroup(syscall.SIGTERM); err != nil {
+			signalErrors = append(signalErrors, err.Error())
+		}
+
 		select {
 		case <-p.done:
 		case <-time.After(5 * time.Second):
-			_ = syscall.Kill(-p.cmd.Process.Pid, syscall.SIGKILL)
-			<-p.done
+			if err := p.signalGroup(syscall.SIGKILL); err != nil {
+				signalErrors = append(signalErrors, err.Error())
+			}
+			select {
+			case <-p.done:
+			case <-time.After(5 * time.Second):
+				details := "no signal errors"
+				if len(signalErrors) > 0 {
+					details = strings.Join(signalErrors, "; ")
+				}
+				p.stopErr = fmt.Errorf(
+					"Node Agent process group %d survived SIGTERM and SIGKILL; %s; agent output:\n%s",
+					p.cmd.Process.Pid,
+					details,
+					p.output.String(),
+				)
+				return
+			}
+		}
+
+		if len(signalErrors) > 0 {
+			p.stopErr = fmt.Errorf(
+				"Node Agent process cleanup required signal errors: %s; agent output:\n%s",
+				strings.Join(signalErrors, "; "),
+				p.output.String(),
+			)
 		}
 	})
+	return p.stopErr
 }
 
 func waitForE2ECondition(

@@ -24,7 +24,7 @@ Do not repurpose either existing ZEUS EC2 instance and do not point staging at t
 
 ### Logical topology
 
-- **Control Plane host:** a dedicated Linux EC2 instance. Expose HTTPS on TCP 443 through its TLS reverse proxy. Keep the application listener on loopback TCP 8080.
+- **Control Plane host:** a dedicated Linux EC2 instance in a private subnet. The public ALB terminates HTTPS on TCP 443 and forwards HTTP to the private application listener on TCP 8080. Keep the mTLS node-control listener on TCP 8443, reachable only from the staging node security group.
 - **VPN node host:** a second dedicated Linux EC2 instance running the Node Agent and a real, isolated WireGuard interface. Expose only the chosen WireGuard UDP port to intended test clients.
 - **Database:** a dedicated PostgreSQL 16 database, private and not publicly accessible. Permit TCP 5432 only from the staging Control Plane security group. An RDS deployment is preferred for managed backups; a local PostgreSQL instance is a lower-cost alternative only if the operator explicitly accepts host-level backup and recovery responsibility.
 - **Node control channel:** TCP 8443 on the Control Plane, permitted only from the staging VPN node security group or its fixed private address. The node validates the Control Plane server certificate; the Control Plane validates the node ClientAuth certificate and its node identity.
@@ -82,11 +82,9 @@ CI success alone does not satisfy these gates.
 
 ## Cost and teardown controls
 
-- Require a budget owner and monthly limit before provisioning.
-- Add a budget alert before creating billable resources.
-- The operator has stated that staging cost is not a limiting factor. Retain cost visibility and alerting, but do not trade away required isolation or validation merely to reduce spend.
-- Avoid NAT Gateway, load balancers, and always-on managed services unless the design requires them; their recurring costs must be reviewed explicitly.
-- Tag every resource with `Project=ZEUS`, `Environment=staging`, and an owner tag.
+- Retain cost visibility and billing alerts before provisioning; cost is not a limiting constraint for this staging effort.
+- Do not trade away required isolation, resilience, or validation merely to reduce spend.
+- Use `Project=ZEUS` and `Environment=staging` tags on every resource type that supports tagging; add an owner tag when an accountable owner label is established.
 - Define a teardown checklist that first exports required test evidence, then removes only resources tagged for this staging environment. Never use broad account-wide cleanup commands.
 
 ## Infrastructure implementation status

@@ -71,7 +71,7 @@ Do not register a node for client provisioning until its endpoint, server public
 
 ## Endpoints
 - GET /healthz: process liveness only.
-- GET /readyz: database connectivity and required schema readiness.
+- GET /readyz: database connectivity check with a bounded two-second timeout; schema migrations are a separate explicit deployment step.
 - GET /v1/meta: service metadata.
 - POST /v1/auth/login, GET /v1/auth/me, POST /v1/auth/logout: operator sessions.
 - Authenticated user/device APIs support owner/admin mutations and read access for support/read-only roles.

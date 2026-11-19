@@ -32,6 +32,10 @@ grep -Fq 'StagingDatabaseMigratorSecret:' infra/aws-staging/zeus-staging-foundat
 grep -Fq 'DatabaseMigratorSecretArn:' infra/aws-staging/zeus-staging-foundation.yaml
 grep -Fq 'REVOKE CREATE ON SCHEMA public FROM PUBLIC' scripts/bootstrap-rds-app-role.sh
 grep -Fq 'REVOKE ALL PRIVILEGES ON SCHEMA public FROM zeus_app' scripts/bootstrap-rds-app-role.sh
+grep -Fq 'REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA public FROM zeus_app' scripts/bootstrap-rds-app-role.sh
+grep -Fq 'REVOKE ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public FROM zeus_app' scripts/bootstrap-rds-app-role.sh
+grep -Fq 'ALTER DEFAULT PRIVILEGES IN SCHEMA public REVOKE ALL ON TABLES FROM zeus_app' scripts/bootstrap-rds-app-role.sh
+grep -Fq 'ALTER DEFAULT PRIVILEGES IN SCHEMA public REVOKE ALL ON SEQUENCES FROM zeus_app' scripts/bootstrap-rds-app-role.sh
 grep -Fq "acl.grantee = 0" scripts/verify-rds-role-separation.sh
 bash -n scripts/verify-rds-role-separation.sh
 grep -Fq 'export PGPASSFILE="$pgpass_file"' scripts/verify-rds-role-separation.sh

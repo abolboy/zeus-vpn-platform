@@ -18,7 +18,8 @@ done
 grep -Fqx 'User=zeus' deploy/systemd/zeus-control-plane.service
 grep -Fqx 'ProtectSystem=strict' deploy/systemd/zeus-control-plane.service
 grep -Fqx 'Type=oneshot' deploy/systemd/zeus-migrate.service
-grep -Fqx 'ZEUS_HTTP_ADDR=127.0.0.1:8080' deploy/examples/control-plane.env.example
+grep -Fqx 'ZEUS_HTTP_ADDR=0.0.0.0:8080' deploy/examples/control-plane.env.example
+grep -Fqx 'ZEUS_TRUSTED_PROXY_CIDRS=10.240.0.0/24,10.240.1.0/24' deploy/examples/control-plane.env.example
 grep -Fqx 'ZEUS_NODE_HTTP_ADDR=0.0.0.0:8443' deploy/examples/control-plane.env.example
 grep -Fqx 'ZEUS_NODE_ALLOW_MUTATIONS=false' deploy/examples/vpn-node.env.example
 grep -Fqx 'CapabilityBoundingSet=CAP_NET_ADMIN' deploy/systemd/zeus-vpn-node.service

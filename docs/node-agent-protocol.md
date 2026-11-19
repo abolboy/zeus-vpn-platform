@@ -41,6 +41,8 @@ On the separate mTLS listener:
 - GET /agent/v1/commands/next leases one command for the verified node identity; 204 means no command is ready.
 - POST /agent/v1/commands/{commandID}/ack acknowledges succeeded or failed using a constrained error-code allowlist.
 
+The acknowledgement JSON must include the `attempt` integer returned by the current lease response (1 through 10), for example `{"attempt":2,"status":"succeeded"}`. Failed results also include an allowlisted `error_code`. The server rejects an acknowledgement whose attempt is no longer current.
+
 The command enum is closed:
 - peer.ensure: payload includes only the WireGuard public key and assigned IPv4/IPv6 host addresses.
 - peer.remove: payload includes only the public key to remove.
@@ -52,12 +54,14 @@ Arbitrary shell text, executable paths, interface names, firewall scripts, arbit
 - Commands are node-scoped and delivered at least once.
 - A command receives a 45-second lease and can be re-leased after a lease timeout, provided it has not expired and has attempts remaining.
 - Commands expire and are limited to 10 attempts.
-- Acknowledgements are scoped to the authenticated node ID and command ID. Identical replays are idempotent; conflicting replies are rejected.
+- Acknowledgements include the exact `attempt` returned by the lease response and are scoped to the authenticated node ID, command ID, and current attempt. A delayed acknowledgement from an earlier lease is rejected after re-leasing. Identical replays for the same attempt are idempotent; conflicting replies are rejected.
 - Node heartbeat updates do not prove successful peer application.
 
 ## Local executor
 
 - The worker checks expiry, strictly decodes payloads, and dispatches only peer.ensure / peer.remove.
+- Each WireGuard command operation is bounded to 10 seconds by default and cannot be configured above 10 seconds. Route cleanup after a failed operation uses a separate context capped at 5 seconds, and the acknowledgement request is bounded by the node HTTP client's 10-second timeout. The documented worst-case operation + cleanup + acknowledgement budget is therefore 25 seconds, leaving at least 20 seconds of the 45-second lease for scheduling and transport variance.
+- Cross-process WireGuard lock acquisition observes the operation context. Route rollback uses a separate cleanup context capped at 5 seconds so cancellation of the main operation does not suppress cleanup.
 - The local executor's mutation flag defaults to false. In dry-run mode it validates and previews operations, then reports mutation_disabled; it does not claim a successful mutation.
 - Real execution uses fixed argv calls to wg and iproute2 with no shell, validates public keys/pool membership/address collisions, reads config without following symlinks, writes atomically with rollback handling, and ensures each assigned client /32 and /128 resolves through the WireGuard interface. Exact routes owned by another interface are rejected. If route or peer application fails, newly added routes and the config/runtime peer state are rolled back.
 - Explicitly enabling mutations requires a staging node, a backup, failure-injection tests, and least-privilege OS review.

@@ -113,27 +113,49 @@ func (s *PostgresStore) FindOperatorByLogin(ctx context.Context, login string) (
 	return operator, err
 }
 
+const bootstrapOwnerAdvisoryLockID int64 = 726198430022
+
 func (s *PostgresStore) EnsureBootstrapOperator(ctx context.Context, login, password string) error {
 	if !validPasswordForBootstrap(password) {
 		return errors.New("bootstrap password must contain 14 to 1024 bytes")
 	}
-	var exists bool
-	if err := s.pool.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM operators WHERE login = $1)", login).Scan(&exists); err != nil {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
 		return err
 	}
-	if exists {
-		return nil
+	defer tx.Rollback(ctx)
+
+	// Serialize first-owner bootstrap across concurrent Control Plane instances.
+	if _, err := tx.Exec(ctx, "SELECT pg_advisory_xact_lock($1)", bootstrapOwnerAdvisoryLockID); err != nil {
+		return err
 	}
+	var activeOwnerExists bool
+	if err := tx.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM operators WHERE role = 'owner' AND status = 'active')").Scan(&activeOwnerExists); err != nil {
+		return err
+	}
+	if activeOwnerExists {
+		// Bootstrap credentials are a one-time creation path, never an owner-provisioning API.
+		return tx.Commit(ctx)
+	}
+
 	hash, err := hashPassword(password)
 	if err != nil {
 		return err
 	}
-	_, err = s.pool.Exec(ctx, `
+	var createdID string
+	err = tx.QueryRow(ctx, `
 		INSERT INTO operators (login, password_hash, role, status)
 		VALUES ($1, $2, 'owner', 'active')
 		ON CONFLICT (login) DO NOTHING
-	`, login, hash)
-	return err
+		RETURNING id::text
+	`, login, hash).Scan(&createdID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ErrBootstrapLoginConflict
+	}
+	if err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
 }
 
 func (s *PostgresStore) CreateSession(ctx context.Context, operatorID string, tokenHash []byte, expiresAt time.Time) error {
@@ -411,10 +433,11 @@ func (s *PostgresStore) RetryVPNDeviceProvisioning(
 	defer tx.Rollback(ctx)
 
 	var device VPNDevice
+	var userStatus string
 	var nodeReady bool
 	err = tx.QueryRow(ctx, `
 		SELECT d.id::text, d.user_id::text, d.device_ref, d.device_name, d.platform,
-		       d.status, d.created_at, COALESCE(d.last_error, ''),
+		       d.status, u.status, d.created_at, COALESCE(d.last_error, ''),
 		       p.id::text, p.node_id::text, p.public_key, host(p.assigned_ipv4),
 		       COALESCE(host(p.assigned_ipv6), ''), n.public_key, n.endpoint_host,
 		       n.endpoint_port, p.status,
@@ -432,13 +455,14 @@ func (s *PostgresStore) RetryVPNDeviceProvisioning(
 		           false
 		       )
 		FROM vpn_devices d
+		JOIN vpn_users u ON u.id = d.user_id
 		JOIN wireguard_peers p ON p.device_id = d.id
 		JOIN vpn_nodes n ON n.id = p.node_id
 		WHERE d.id = $1::uuid AND d.user_id = $2::uuid
-		FOR UPDATE OF d, p
+		FOR UPDATE OF d, p, u
 	`, deviceID, userID).Scan(
 		&device.ID, &device.UserID, &device.DeviceRef, &device.DeviceName,
-		&device.Platform, &device.Status, &device.CreatedAt, &device.LastError,
+		&device.Platform, &device.Status, &userStatus, &device.CreatedAt, &device.LastError,
 		&device.Peer.ID, &device.Peer.NodeID, &device.Peer.PublicKey,
 		&device.Peer.AssignedIPv4, &device.Peer.AssignedIPv6,
 		&device.Peer.ServerPublicKey, &device.Peer.EndpointHost,
@@ -449,6 +473,9 @@ func (s *PostgresStore) RetryVPNDeviceProvisioning(
 	}
 	if err != nil {
 		return VPNDevice{}, false, err
+	}
+	if userStatus != "active" {
+		return VPNDevice{}, false, ErrUserNotActive
 	}
 
 	// Make retries safe under duplicate taps and concurrent HTTP requests.
@@ -646,6 +673,20 @@ func (s *PostgresStore) EnrollCustomerVPNDevice(
 		return VPNDevice{}, false, err
 	}
 	defer tx.Rollback(ctx)
+
+	// Revalidate account status inside the same transaction before an idempotency
+	// replay can return a previously stored device response.
+	var userStatus string
+	if err := tx.QueryRow(ctx, `
+		SELECT status FROM vpn_users WHERE id = $1::uuid FOR UPDATE
+	`, userID).Scan(&userStatus); errors.Is(err, pgx.ErrNoRows) {
+		return VPNDevice{}, false, ErrVPNUserNotFound
+	} else if err != nil {
+		return VPNDevice{}, false, err
+	}
+	if userStatus != "active" {
+		return VPNDevice{}, false, ErrUserNotActive
+	}
 
 	if _, err := tx.Exec(ctx, `
 		DELETE FROM client_device_idempotency_records
@@ -1378,7 +1419,10 @@ func markExpiredNodeCommandSubjects(ctx context.Context, tx pgx.Tx, nodeID strin
 	return err
 }
 
-func (s *PostgresStore) AcknowledgeNodeCommand(ctx context.Context, nodeID, commandID, status, errorCode string) error {
+func (s *PostgresStore) AcknowledgeNodeCommand(ctx context.Context, nodeID, commandID string, attempt int, status, errorCode string) error {
+	if attempt < 1 || attempt > 10 {
+		return errors.New("invalid node command acknowledgement attempt")
+	}
 	if status != "succeeded" && status != "failed" {
 		return errors.New("invalid node command acknowledgement status")
 	}
@@ -1393,17 +1437,18 @@ func (s *PostgresStore) AcknowledgeNodeCommand(ctx context.Context, nodeID, comm
 	defer tx.Rollback(ctx)
 
 	var currentStatus string
+	var currentAttempt int
 	var currentError *string
 	var leaseExpiresAt *time.Time
 	var expiresAt time.Time
 	var commandType string
 	var commandPayload []byte
 	err = tx.QueryRow(ctx, `
-		SELECT status, last_error, lease_expires_at, expires_at, command_type, payload
+		SELECT status, attempts, last_error, lease_expires_at, expires_at, command_type, payload
 		FROM node_commands
 		WHERE id = $1::uuid AND node_id = $2::uuid
 		FOR UPDATE
-	`, commandID, nodeID).Scan(&currentStatus, &currentError, &leaseExpiresAt, &expiresAt, &commandType, &commandPayload)
+	`, commandID, nodeID).Scan(&currentStatus, &currentAttempt, &currentError, &leaseExpiresAt, &expiresAt, &commandType, &commandPayload)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return ErrNodeCommandNotFound
 	}
@@ -1411,6 +1456,11 @@ func (s *PostgresStore) AcknowledgeNodeCommand(ctx context.Context, nodeID, comm
 		return err
 	}
 
+	// Fence acknowledgements to the exact lease attempt. Delayed workers cannot
+	// complete or fail a command after it has been leased again.
+	if currentAttempt != attempt {
+		return ErrNodeCommandConflict
+	}
 	if currentStatus == status {
 		currentCode := ""
 		if currentError != nil {

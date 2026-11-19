@@ -18,6 +18,7 @@ type NodeAPI struct {
 }
 
 type nodeAckRequest struct {
+	Attempt   int    "json:\"attempt\""
 	Status    string "json:\"status\""
 	ErrorCode string "json:\"error_code,omitempty\""
 }
@@ -121,6 +122,10 @@ func (a *NodeAPI) handleAcknowledge(w http.ResponseWriter, r *http.Request) {
 	}
 	input.Status = strings.TrimSpace(input.Status)
 	input.ErrorCode = strings.TrimSpace(input.ErrorCode)
+	if input.Attempt < 1 || input.Attempt > 10 {
+		writeError(w, http.StatusBadRequest, "invalid_acknowledgement", "شماره تلاش فرمان معتبر نیست", requestIDFrom(r))
+		return
+	}
 	if input.Status != "succeeded" && input.Status != "failed" {
 		writeError(w, http.StatusBadRequest, "invalid_acknowledgement", "وضعیت پاسخ نود معتبر نیست", requestIDFrom(r))
 		return
@@ -132,7 +137,7 @@ func (a *NodeAPI) handleAcknowledge(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 	defer cancel()
-	err := a.store.AcknowledgeNodeCommand(ctx, node.ID, commandID, input.Status, input.ErrorCode)
+	err := a.store.AcknowledgeNodeCommand(ctx, node.ID, commandID, input.Attempt, input.Status, input.ErrorCode)
 	switch {
 	case err == nil:
 		writeJSON(w, http.StatusOK, map[string]string{"status": "acknowledged"})

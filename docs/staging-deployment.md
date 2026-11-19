@@ -4,7 +4,7 @@ This runbook prepares an isolated staging environment. It is not approval to dep
 
 ## Network layout and trust boundaries
 
-- Admin/browser traffic: HTTPS reverse proxy -> `127.0.0.1:8080` (Control Plane HTTP listener).
+- Admin/browser traffic: HTTPS ALB -> private Control Plane EC2 target on TCP `8080`. The service binds to `0.0.0.0:8080` on the private instance; its security group must allow TCP/8080 only from the dedicated ALB security group.
 - Node-agent traffic: VPN node -> TCP `8443` (separate mTLS listener). Restrict this port to the exact staging node source IPs, or bind to a private VPC address when available.
 - PostgreSQL: private network only; allow access from the Control Plane host only.
 - WireGuard data plane: UDP on the configured WireGuard listen port at the VPN node. Do not expose the Control Plane admin port to the Internet.
@@ -52,11 +52,12 @@ Requirements before startup:
 - A dedicated PostgreSQL database and least-privilege role.
 - PostgreSQL TLS validation with `sslmode=verify-full`; the hostname in the connection URL must match the database certificate.
 - Exact browser origin(s) in `ZEUS_ALLOWED_ORIGINS`; do not use `*`.
+- `ZEUS_TRUSTED_PROXY_CIDRS` set to the actual dedicated ALB subnet CIDRs. Production startup fails if this is empty; never use an unrestricted `/0` range.
 - A deployed Cognito User Pool and its exact issuer/client ID outputs if automatic customer registration is enabled.
 - A server certificate and matching private key for the node mTLS listener. The private key must be a regular file owned by `zeus`, mode `0600`, because the service checks for owner-only permissions. The certificate and client-CA bundle must be readable by `zeus`. The `/etc/zeus` and `/etc/zeus/node-listener` directories must be traversable by the `zeus` group; keep the environment file root-only.
 - A firewall rule for TCP `8443` allowing only the registered staging node source IPs. Prefer a private VPC address in `ZEUS_NODE_HTTP_ADDR` instead of `0.0.0.0:8443` when possible.
 
-Use a TLS reverse proxy for the admin API and route it to `127.0.0.1:8080`. Do not publish port 8080 directly.
+Terminate public HTTPS at the ALB and route to the private Control Plane target on TCP `8080`. Do not assign a public IP to the Control Plane instance or allow TCP/8080 from arbitrary sources; the target security group must accept it only from the ALB security group.
 
 ## 2A. Prepare customer identity (Cognito)
 
@@ -90,7 +91,7 @@ sudo journalctl -u zeus-migrate -n 100 --no-pager
 
 Do not point this command at an unrelated database. The application does not auto-migrate schema at startup.
 
-For the first startup only, uncomment both bootstrap variables in the environment file and supply a unique strong password. Start the service, confirm the owner account was created, then immediately remove both bootstrap variables and restart the service. The bootstrap operation does not overwrite an existing login.
+For the first startup only, uncomment both bootstrap variables in the environment file and supply a unique strong password. Start the service, confirm the owner account was created, then immediately remove both bootstrap variables and restart the service. The bootstrap operation is serialized across Control Plane instances. It does not overwrite an existing login; if the requested login is occupied while no active owner exists, startup fails with an explicit conflict instead of silently proceeding without an owner.
 
 ## 4. Start and verify the Control Plane
 

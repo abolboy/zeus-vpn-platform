@@ -326,20 +326,108 @@ func TestPostgresStoreIntegration(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	login := "ci-" + newRequestID()
-	if err := store.EnsureBootstrapOperator(ctx, login, "ci-owner-password-123"); err != nil {
-		t.Fatal(err)
-	}
-	operator, err := store.FindOperatorByLogin(ctx, login)
+	hasOwner, err := store.HasActiveOwner(ctx)
 	if err != nil {
 		t.Fatal(err)
+	}
+	var operator Operator
+	if !hasOwner {
+		login := "ci-" + newRequestID()
+		if err := store.EnsureBootstrapOperator(ctx, login, "ci-owner-password-123"); err != nil {
+			t.Fatal(err)
+		}
+		operator, err = store.FindOperatorByLogin(ctx, login)
+		if err != nil {
+			t.Fatal(err)
+		}
+	} else {
+		err = store.pool.QueryRow(ctx, `
+			SELECT id::text, login, role, status, password_hash
+			FROM operators
+			WHERE role = 'owner' AND status = 'active'
+			ORDER BY created_at, id
+			LIMIT 1
+		`).Scan(&operator.ID, &operator.Login, &operator.Role, &operator.Status, &operator.PasswordHash)
+		if err != nil {
+			t.Fatal(err)
+		}
 	}
 	if operator.Role != "owner" || operator.Status != "active" {
 		t.Fatalf("unexpected seeded operator: %+v", operator)
 	}
-	hasOwner, err := store.HasActiveOwner(ctx)
-	if err != nil || !hasOwner {
-		t.Fatalf("active owner check failed: hasOwner=%v err=%v", hasOwner, err)
+	originalPasswordHash := operator.PasswordHash
+
+	// Bootstrap must never create another owner after the first active owner exists.
+	secondLogin := "ci-second-owner-" + newRequestID()
+	if err := store.EnsureBootstrapOperator(ctx, secondLogin, "ci-second-owner-password-456"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.FindOperatorByLogin(ctx, secondLogin); !errors.Is(err, pgx.ErrNoRows) {
+		t.Fatalf("one-time bootstrap created a second owner: lookup error=%v", err)
+	}
+	// Re-running bootstrap for an existing owner must not replace its password.
+	if err := store.EnsureBootstrapOperator(ctx, operator.Login, "ci-replacement-password-789"); err != nil {
+		t.Fatal(err)
+	}
+	unchangedOperator, err := store.FindOperatorByLogin(ctx, operator.Login)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if unchangedOperator.PasswordHash != originalPasswordHash {
+		t.Fatal("bootstrap unexpectedly changed the existing owner password hash")
+	}
+
+	// A disabled account occupying the bootstrap login must fail explicitly
+	// when no active owner exists; it must not silently leave the service ownerless.
+	rows, err := store.pool.Query(ctx, `
+		UPDATE operators
+		SET status = 'disabled'
+		WHERE role = 'owner' AND status = 'active'
+		RETURNING id::text
+	`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var deactivatedOwnerIDs []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			rows.Close()
+			t.Fatal(err)
+		}
+		deactivatedOwnerIDs = append(deactivatedOwnerIDs, id)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		t.Fatal(err)
+	}
+	rows.Close()
+	if len(deactivatedOwnerIDs) == 0 {
+		t.Fatal("expected at least one active owner for bootstrap conflict test")
+	}
+	defer func() {
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cleanupCancel()
+		for _, id := range deactivatedOwnerIDs {
+			if _, err := store.pool.Exec(cleanupCtx, "UPDATE operators SET status = 'active' WHERE id::text = $1", id); err != nil {
+				t.Errorf("restore active owner %s after bootstrap conflict test: %v", id, err)
+			}
+		}
+	}()
+	if err := store.EnsureBootstrapOperator(ctx, operator.Login, "ci-collision-password-789"); !errors.Is(err, ErrBootstrapLoginConflict) {
+		t.Fatalf("bootstrap login collision error = %v, want ErrBootstrapLoginConflict", err)
+	}
+	collisionOperator, err := store.FindOperatorByLogin(ctx, operator.Login)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if collisionOperator.Status != "disabled" || collisionOperator.PasswordHash != originalPasswordHash {
+		t.Fatalf("bootstrap collision changed existing account: status=%s hash_changed=%v", collisionOperator.Status, collisionOperator.PasswordHash != originalPasswordHash)
+	}
+	for _, id := range deactivatedOwnerIDs {
+		if _, err := store.pool.Exec(ctx, "UPDATE operators SET status = 'active' WHERE id::text = $1", id); err != nil {
+			t.Fatalf("restore active owner %s after bootstrap conflict assertion: %v", id, err)
+		}
 	}
 	_, tokenHash, err := generateSessionToken()
 	if err != nil {
@@ -628,13 +716,13 @@ func TestPostgresStoreIntegration(t *testing.T) {
 	if _, err := store.LeaseNodeCommand(ctx, nodeID, 45*time.Second); !errors.Is(err, ErrNoNodeCommand) {
 		t.Fatalf("second poll error=%v, want ErrNoNodeCommand while lease is active", err)
 	}
-	if err := store.AcknowledgeNodeCommand(ctx, nodeID, commandID, "succeeded", ""); err != nil {
+	if err := store.AcknowledgeNodeCommand(ctx, nodeID, commandID, command.Attempt, "succeeded", ""); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.AcknowledgeNodeCommand(ctx, nodeID, commandID, "succeeded", ""); err != nil {
+	if err := store.AcknowledgeNodeCommand(ctx, nodeID, commandID, command.Attempt, "succeeded", ""); err != nil {
 		t.Fatalf("replayed acknowledgement should be idempotent: %v", err)
 	}
-	if err := store.AcknowledgeNodeCommand(ctx, nodeID, commandID, "failed", "wg_apply_failed"); !errors.Is(err, ErrNodeCommandConflict) {
+	if err := store.AcknowledgeNodeCommand(ctx, nodeID, commandID, command.Attempt, "failed", "wg_apply_failed"); !errors.Is(err, ErrNodeCommandConflict) {
 		t.Fatalf("conflicting acknowledgement error=%v, want ErrNodeCommandConflict", err)
 	}
 	var commandStatus string
@@ -643,6 +731,40 @@ func TestPostgresStoreIntegration(t *testing.T) {
 	}
 	if commandStatus != "succeeded" {
 		t.Fatalf("node command status=%s, want succeeded", commandStatus)
+	}
+
+	// Acknowledgements from an expired lease must not alter a later attempt.
+	var staleCommandID string
+	if err := store.pool.QueryRow(ctx, `
+		INSERT INTO node_commands (node_id, created_by_operator_id, command_type, payload, request_hash, idempotency_key, expires_at)
+		VALUES ($1::uuid, $2::uuid, 'peer.ensure', $3::jsonb, $4, $5, now() + interval '5 minutes')
+		RETURNING id::text
+	`, nodeID, operator.ID, string(commandPayload), commandHash[:], newRequestID()).Scan(&staleCommandID); err != nil {
+		t.Fatal(err)
+	}
+	firstLease, err := store.LeaseNodeCommand(ctx, nodeID, 45*time.Second)
+	if err != nil || firstLease.ID != staleCommandID || firstLease.Attempt != 1 {
+		t.Fatalf("first test lease=%+v err=%v", firstLease, err)
+	}
+	if _, err := store.pool.Exec(ctx, `
+		UPDATE node_commands
+		SET lease_expires_at = now() - interval '1 second'
+		WHERE id = $1::uuid AND status = 'leased'
+	`, staleCommandID); err != nil {
+		t.Fatal(err)
+	}
+	secondLease, err := store.LeaseNodeCommand(ctx, nodeID, 45*time.Second)
+	if err != nil || secondLease.ID != staleCommandID || secondLease.Attempt != 2 {
+		t.Fatalf("second test lease=%+v err=%v", secondLease, err)
+	}
+	if err := store.AcknowledgeNodeCommand(ctx, nodeID, staleCommandID, firstLease.Attempt, "succeeded", ""); !errors.Is(err, ErrNodeCommandConflict) {
+		t.Fatalf("stale attempt acknowledgement error=%v, want ErrNodeCommandConflict", err)
+	}
+	if err := store.AcknowledgeNodeCommand(ctx, nodeID, staleCommandID, secondLease.Attempt, "succeeded", ""); err != nil {
+		t.Fatalf("current attempt acknowledgement failed: %v", err)
+	}
+	if err := store.AcknowledgeNodeCommand(ctx, nodeID, staleCommandID, secondLease.Attempt, "succeeded", ""); err != nil {
+		t.Fatalf("current attempt replay should be idempotent: %v", err)
 	}
 
 	var deviceUserID string
@@ -746,7 +868,7 @@ func TestPostgresStoreIntegration(t *testing.T) {
 	if err != nil || deviceCommand.Type != "peer.ensure" {
 		t.Fatalf("device peer.ensure command lease failed: command=%+v err=%v", deviceCommand, err)
 	}
-	if err := store.AcknowledgeNodeCommand(ctx, nodeID, deviceCommand.ID, "succeeded", ""); err != nil {
+	if err := store.AcknowledgeNodeCommand(ctx, nodeID, deviceCommand.ID, deviceCommand.Attempt, "succeeded", ""); err != nil {
 		t.Fatal(err)
 	}
 	devices, err = store.ListVPNDevices(ctx, deviceUserID)
@@ -778,7 +900,7 @@ func TestPostgresStoreIntegration(t *testing.T) {
 	if err != nil || removeCommand.Type != "peer.remove" {
 		t.Fatalf("device peer.remove command lease failed: command=%+v err=%v", removeCommand, err)
 	}
-	if err := store.AcknowledgeNodeCommand(ctx, nodeID, removeCommand.ID, "succeeded", ""); err != nil {
+	if err := store.AcknowledgeNodeCommand(ctx, nodeID, removeCommand.ID, removeCommand.Attempt, "succeeded", ""); err != nil {
 		t.Fatal(err)
 	}
 	devices, err = store.ListVPNDevices(ctx, deviceUserID)
@@ -804,6 +926,45 @@ func TestPostgresStoreIntegration(t *testing.T) {
 	if replacementDevice.Peer.AssignedIPv4 != device.Peer.AssignedIPv4 ||
 		replacementDevice.Peer.AssignedIPv6 != device.Peer.AssignedIPv6 {
 		t.Fatalf("released node addresses were not reused: old=%+v new=%+v", device.Peer, replacementDevice.Peer)
+	}
+
+	// Self-service enrollment idempotency must not bypass a later account suspension.
+	var selfServiceUserID string
+	if err := store.pool.QueryRow(ctx, `
+		INSERT INTO vpn_users (display_name, max_devices)
+		VALUES ('ZEUS Self-Service Idempotency User', 2)
+		RETURNING id::text
+	`).Scan(&selfServiceUserID); err != nil {
+		t.Fatal(err)
+	}
+	selfServiceInput := CreateDeviceInput{
+		DeviceRef: "ci-self-service-device-0001",
+		DeviceName: "Self-Service Android",
+		Platform: "android",
+		PublicKey: "CwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc=",
+	}
+	selfServiceHash := sha256.Sum256([]byte("self-service-idempotency-v1"))
+	selfServiceKey := newRequestID()
+	if _, replayed, err := store.EnrollCustomerVPNDevice(
+		ctx, selfServiceUserID, selfServiceKey, selfServiceHash[:], selfServiceInput, newRequestID(), nil,
+	); err != nil || replayed {
+		t.Fatalf("initial self-service enrollment failed: replayed=%v err=%v", replayed, err)
+	}
+	if _, replayed, err := store.EnrollCustomerVPNDevice(
+		ctx, selfServiceUserID, selfServiceKey, selfServiceHash[:], selfServiceInput, newRequestID(), nil,
+	); err != nil || !replayed {
+		t.Fatalf("active self-service idempotency replay failed: replayed=%v err=%v", replayed, err)
+	}
+	if _, err := store.pool.Exec(ctx, "UPDATE vpn_users SET status='suspended' WHERE id=$1::uuid", selfServiceUserID); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := store.EnrollCustomerVPNDevice(
+		ctx, selfServiceUserID, selfServiceKey, selfServiceHash[:], selfServiceInput, newRequestID(), nil,
+	); !errors.Is(err, ErrUserNotActive) {
+		t.Fatalf("suspended self-service idempotency replay error=%v, want ErrUserNotActive", err)
+	}
+	if _, err := store.pool.Exec(ctx, "UPDATE vpn_users SET status='active' WHERE id=$1::uuid", selfServiceUserID); err != nil {
+		t.Fatal(err)
 	}
 
 	// Issue a one-time enrollment code from the authenticated admin API.
@@ -966,20 +1127,41 @@ func TestPostgresStoreIntegration(t *testing.T) {
 		if command.Type != "peer.ensure" {
 			t.Fatalf("unexpected command before enrolled peer.ensure: %+v", command)
 		}
-		if err := store.AcknowledgeNodeCommand(ctx, enrolledDevice.Peer.NodeID, command.ID, "succeeded", ""); err != nil {
+		if err := store.AcknowledgeNodeCommand(ctx, enrolledDevice.Peer.NodeID, command.ID, command.Attempt, "succeeded", ""); err != nil {
 			t.Fatalf("acknowledge prior peer.ensure command %s: %v", command.ID, err)
 		}
 	}
 	if leasedEnsure.ID != ensureCommandID {
 		t.Fatalf("could not lease the expected peer.ensure command %s", ensureCommandID)
 	}
-	if err := store.AcknowledgeNodeCommand(ctx, enrolledDevice.Peer.NodeID, leasedEnsure.ID, "failed", "wg_apply_failed"); err != nil {
+	if err := store.AcknowledgeNodeCommand(ctx, enrolledDevice.Peer.NodeID, leasedEnsure.ID, leasedEnsure.Attempt, "failed", "wg_apply_failed"); err != nil {
 		t.Fatalf("record failed peer.ensure: %v", err)
 	}
 	failedDevice, err := store.GetCustomerVPNDevice(ctx, enrollmentUserID, enrolledDevice.ID)
 	if err != nil || failedDevice.Status != "error" || failedDevice.Peer.Status != "error" ||
 		failedDevice.LastError != "wg_apply_failed" {
 		t.Fatalf("failed provisioning state was not recorded: device=%+v err=%v", failedDevice, err)
+	}
+
+	// A consumed enrollment code must not bypass a later customer suspension.
+	if _, err := store.pool.Exec(ctx, `
+		UPDATE vpn_users SET status = 'suspended' WHERE id = $1::uuid
+	`, enrollmentUserID); err != nil {
+		t.Fatalf("suspend enrolled customer fixture: %v", err)
+	}
+	suspendedRetry := httptest.NewRequest(http.MethodPost, "/v1/client/devices/"+enrolledDevice.ID+"/retry", nil)
+	suspendedRetry.Header.Set("Authorization", "EnrollmentCode "+enrollmentCode.Code)
+	suspendedRetryResponse := httptest.NewRecorder()
+	handler.ServeHTTP(suspendedRetryResponse, suspendedRetry)
+	if suspendedRetryResponse.Code != http.StatusForbidden ||
+		!bytes.Contains(suspendedRetryResponse.Body.Bytes(), []byte("customer_account_inactive")) {
+		t.Fatalf("suspended customer retry status=%d body=%s, want 403 customer_account_inactive",
+			suspendedRetryResponse.Code, suspendedRetryResponse.Body.String())
+	}
+	if _, err := store.pool.Exec(ctx, `
+		UPDATE vpn_users SET status = 'active' WHERE id = $1::uuid
+	`, enrollmentUserID); err != nil {
+		t.Fatalf("restore enrolled customer fixture: %v", err)
 	}
 
 	// The consumed invite code authorizes retry only for its bound device.
@@ -1032,7 +1214,7 @@ func TestPostgresStoreIntegration(t *testing.T) {
 		t.Fatalf("retry command changed the original peer identity or addresses: payload=%s err=%v",
 			retryCommand.Payload, err)
 	}
-	if err := store.AcknowledgeNodeCommand(ctx, enrolledDevice.Peer.NodeID, retryCommand.ID, "succeeded", ""); err != nil {
+	if err := store.AcknowledgeNodeCommand(ctx, enrolledDevice.Peer.NodeID, retryCommand.ID, retryCommand.Attempt, "succeeded", ""); err != nil {
 		t.Fatalf("acknowledge retried peer.ensure: %v", err)
 	}
 	activeDevice, err := store.GetCustomerVPNDevice(ctx, enrollmentUserID, enrolledDevice.ID)

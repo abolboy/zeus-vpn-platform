@@ -19,7 +19,7 @@ Create the first owner only by setting both variables for the first startup:
     ZEUS_BOOTSTRAP_ADMIN_LOGIN=owner
     ZEUS_BOOTSTRAP_ADMIN_PASSWORD=<a unique password of at least 14 bytes>
 
-The bootstrap command creates the owner if the login does not already exist. It does not reset or overwrite an existing account. Remove the bootstrap password from the process environment after the first successful startup.
+The bootstrap command creates exactly one first active owner under a PostgreSQL advisory lock. If an active owner already exists, it is a no-op; if the requested login is already occupied while no active owner exists, startup fails explicitly instead of silently leaving the system without an owner. It never resets or overwrites an existing account. Remove the bootstrap password from the process environment after the first successful startup.
 
 Start the API:
 
@@ -30,6 +30,7 @@ Optional settings:
 - ZEUS_VERSION: reported build version.
 - ZEUS_ENV=production: requires a database URL using sslmode=verify-full.
 - ZEUS_ALLOWED_ORIGINS: comma-separated exact browser origins; no wildcard is accepted.
+- ZEUS_TRUSTED_PROXY_CIDRS: comma-separated CIDRs for the immediate trusted load-balancer peers only. Required in production; never set this to `0.0.0.0/0` or `::/0`.
 - ZEUS_OIDC_ISSUER and ZEUS_OIDC_CLIENT_ID: configure together to enable self-service customer enrollment through a verified OIDC identity provider. The app client is a public native client; no client secret belongs in the Android app.
 
 ## Customer self-service identity
@@ -86,10 +87,10 @@ Do not register a node for client provisioning until its endpoint, server public
 - Passwords use Argon2id (64 MiB, 3 iterations, 2 lanes).
 - Raw session tokens are never stored; only SHA-256 hashes are persisted.
 - Sessions expire after 8 hours and logout revokes them.
-- Login attempts are throttled per remote IP and Argon2 work is concurrency-bounded.
+- Login attempts are throttled per client IP and Argon2 work is concurrency-bounded. Forwarded client IPs are accepted only when the direct peer belongs to `ZEUS_TRUSTED_PROXY_CIDRS`; otherwise the direct peer address is used.
 - Errors do not reveal whether an operator login exists.
 - API roles are checked server-side.
-- The service does not trust forwarded client-IP headers.
+- The service does not trust forwarded client-IP headers from arbitrary peers; `X-Forwarded-For` is used only behind explicitly configured trusted proxy CIDRs.
 - CORS is deny-by-default and only allows explicitly configured origins.
 - Client WireGuard private keys remain on client devices; node private keys remain on nodes; the Control Plane stores public keys only.
 - Production PostgreSQL connections require sslmode=verify-full. Admin HTTP must be behind a TLS reverse proxy, and the application listener should remain private.

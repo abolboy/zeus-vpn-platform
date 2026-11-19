@@ -9,6 +9,7 @@ import (
 
 var (
 	ErrCustomerIdentityNotVerified = errors.New("customer identity is not verified")
+	ErrBootstrapLoginConflict   = errors.New("bootstrap login already exists but no active owner exists")
 	ErrIdempotencyConflict     = errors.New("idempotency key was already used with a different request")
 	ErrVPNUserNotFound         = errors.New("VPN user not found")
 	ErrNodeNotFound            = errors.New("VPN node not found")
@@ -165,7 +166,7 @@ type ClientDeviceRetryStore interface {
 type NodeAgentStore interface {
 	FindNodeByCertFingerprint(context.Context, []byte) (NodeIdentity, error)
 	LeaseNodeCommand(context.Context, string, time.Duration) (NodeCommand, error)
-	AcknowledgeNodeCommand(context.Context, string, string, string, string) error
+	AcknowledgeNodeCommand(context.Context, string, string, int, string, string) error
 }
 
 type NodeAgentCertificate struct {

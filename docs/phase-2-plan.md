@@ -21,8 +21,9 @@ Deliver authenticated multi-user management while keeping the already-working pr
 - [x] PostgreSQL connection pool/readiness checks.
 - [x] Argon2id password hashing and opaque random 256-bit sessions (only SHA-256 token hashes stored).
 - [x] Eight-hour expiry and server-side revocation.
-- [x] First-owner bootstrap that never overwrites an existing account.
+- [x] One-time first-owner bootstrap serialized with a PostgreSQL advisory lock; it does not create a second active owner or overwrite an existing password.
 - [x] Exact-origin CORS, security headers, bounded JSON bodies, request IDs, structured errors.
+- [x] Client IP and IP-based rate-limit attribution trust X-Forwarded-For only from configured ALB subnet CIDRs.
 - [x] Login throttling and bounded concurrent password verification.
 - [x] Server-side role checks.
 - [x] PostgreSQL integration tests, race detector, and static analysis in CI.
@@ -84,7 +85,7 @@ Deliver authenticated multi-user management while keeping the already-working pr
 ## Current status
 - Current delivery chain: PR #21 (customer lifecycle/node-agent integration) → PR #22 (process-level mTLS enrollment test) → PR #23 (isolated staging architecture) → PR #24 (AWS staging foundation) → PR #26 (database runtime/migration role separation). All five PRs remain Draft and unmerged; preserve this merge order.
 - PR #25 was closed as superseded, not merged. PR #26 is its synchronized replacement: it adds a dedicated Secrets Manager secret and PostgreSQL login for `zeus_migrator`, keeps `zeus_app` away from schema CREATE, revokes CREATE from PUBLIC, limits runtime sequences to USAGE/SELECT (no UPDATE/setval), separates systemd environment files, and blocks IMDS access from service cgroups.
-- PR #26 implementation head `ed4fb2242cb80450f094476f02d0a759fb1086ed` passed all CI before this documentation-only update: Android debug build/unit tests, Go Control Plane tests and vet, PostgreSQL migrations run twice as `zeus_migrator`, runtime-role privilege checks (including denied DDL and sequence UPDATE), VPN node-agent tests and vet, web-admin lifecycle tests/build, repository checks, and CloudFormation linting. These checks do not prove a live AWS deployment or a real VPN tunnel. These checks do not prove a live AWS deployment or a real VPN tunnel.
+- PR #26 is covered by CI for Android debug build/unit tests, Go Control Plane tests and vet, PostgreSQL migrations run twice as `zeus_migrator`, runtime-role privilege checks (including denied DDL, excess table grants, and sequence UPDATE), VPN node-agent tests and vet, web-admin lifecycle tests/build, repository checks, and CloudFormation linting. CI must be green on the latest head before any merge decision. These checks do not prove a live AWS deployment or a real VPN tunnel.
 - The default Android build has no Control Plane URL/OIDC values. Automatic customer registration requires a deployed HTTPS Control Plane and matching Cognito provider outputs.
 - Staging systemd units and environment examples are templates only; they have not been installed on any host. Node mutations remain disabled by default.
 - Blocked on AWS account/CloudShell activation and a separately approved staging deployment: create/inspect the isolated stack, deploy Cognito and PostgreSQL, install binaries/systemd units, establish public TLS and private mTLS, enroll the staging node, run real peer add/remove, and verify VPN egress/DNS/IPv6.

@@ -57,9 +57,26 @@ jobs:
           GRANT CONNECT ON DATABASE zeus_test TO zeus_migrator, zeus_app;
           REVOKE CREATE ON SCHEMA public FROM PUBLIC;
           GRANT USAGE, CREATE ON SCHEMA public TO zeus_migrator;
+          CREATE TABLE public.zeus_preexisting_privilege_probe (id BIGSERIAL PRIMARY KEY);
+          GRANT ALL PRIVILEGES ON TABLE public.zeus_preexisting_privilege_probe TO zeus_app;
+          GRANT ALL PRIVILEGES ON SEQUENCE public.zeus_preexisting_privilege_probe_id_seq TO zeus_app;
+          REVOKE ALL PRIVILEGES ON SCHEMA public FROM zeus_app;
           GRANT USAGE ON SCHEMA public TO zeus_app;
+          REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA public FROM zeus_app;
+          REVOKE ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public FROM zeus_app;
+          REVOKE ALL PRIVILEGES ON ALL FUNCTIONS IN SCHEMA public FROM zeus_app;
+          GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO zeus_app;
+          GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO zeus_app;
+          GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA public TO zeus_app;
+          DROP TABLE public.zeus_preexisting_privilege_probe;
           ALTER ROLE zeus_migrator SET search_path = public;
           ALTER ROLE zeus_app SET search_path = public;
+          ALTER DEFAULT PRIVILEGES FOR ROLE zeus_migrator IN SCHEMA public
+            REVOKE ALL ON TABLES FROM zeus_app;
+          ALTER DEFAULT PRIVILEGES FOR ROLE zeus_migrator IN SCHEMA public
+            REVOKE ALL ON SEQUENCES FROM zeus_app;
+          ALTER DEFAULT PRIVILEGES FOR ROLE zeus_migrator IN SCHEMA public
+            REVOKE ALL ON FUNCTIONS FROM zeus_app;
           ALTER DEFAULT PRIVILEGES FOR ROLE zeus_migrator IN SCHEMA public
             GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO zeus_app;
           ALTER DEFAULT PRIVILEGES FOR ROLE zeus_migrator IN SCHEMA public
@@ -94,6 +111,15 @@ jobs:
                 SELECT 1 FROM pg_sequences s
                 WHERE s.schemaname = 'public'
                   AND has_sequence_privilege(current_user, format('%I.%I', s.schemaname, s.sequencename), 'UPDATE')
+              )
+              AND NOT EXISTS (
+                SELECT 1 FROM pg_tables t
+                WHERE t.schemaname = 'public'
+                  AND (
+                    has_table_privilege(current_user, format('%I.%I', t.schemaname, t.tablename), 'TRUNCATE')
+                    OR has_table_privilege(current_user, format('%I.%I', t.schemaname, t.tablename), 'REFERENCES')
+                    OR has_table_privilege(current_user, format('%I.%I', t.schemaname, t.tablename), 'TRIGGER')
+                  )
               )
               AND NOT EXISTS (
                 SELECT 1 FROM pg_roles

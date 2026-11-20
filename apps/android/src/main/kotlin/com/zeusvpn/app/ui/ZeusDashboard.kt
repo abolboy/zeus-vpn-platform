@@ -2,6 +2,8 @@ package com.zeusvpn.app.ui
 
 import android.app.Activity
 import android.content.ContentResolver
+import android.content.Context
+import android.content.pm.PackageManager
 import android.content.Intent
 import android.net.Uri
 import android.net.VpnService
@@ -19,6 +21,8 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -55,6 +59,8 @@ import com.zeusvpn.app.network.ClientEnrollmentRepository
 import com.zeusvpn.app.network.CustomerIdentityRepository
 import com.zeusvpn.app.network.NetworkCondition
 import com.zeusvpn.app.network.NetworkMonitor
+import com.zeusvpn.app.network.SplitTunnelMode
+import com.zeusvpn.app.network.SplitTunnelPolicy
 import com.zeusvpn.app.network.TunnelConnectivityChecker
 import com.zeusvpn.app.network.TunnelConnectivityResult
 import com.zeusvpn.app.network.TunnelProbeFailure
@@ -123,6 +129,8 @@ fun ZeusDashboard() {
     var manualProbeRequest by remember { mutableIntStateOf(0) }
     var connectAfterProvisioning by remember { mutableStateOf(false) }
     var pendingResumeAttempted by remember { mutableStateOf(false) }
+    var showSplitTunnelDialog by remember { mutableStateOf(false) }
+    var splitTunnelNotice by remember { mutableStateOf<SplitTunnelNotice?>(null) }
     val enrollmentGate = remember { AtomicBoolean(false) }
 
     val network by produceState(NetworkCondition.UNKNOWN, monitor) {
@@ -133,6 +141,12 @@ fun ZeusDashboard() {
     }
     val tunnelDesired by produceState(false, settings) {
         settings.tunnelDesired.collect { value = it }
+    }
+    val splitTunnelPolicy by produceState(SplitTunnelPolicy.DEFAULT, settings) {
+        settings.splitTunnelPolicy.collect { value = it }
+    }
+    val installedApps by produceState(emptyList<LaunchableApp>(), context) {
+        value = withContext(Dispatchers.IO) { loadLaunchableApps(context) }
     }
     val trafficStats by produceState(WireGuardTrafficStats.EMPTY, wireGuard, wireGuardState) {
         if (wireGuardState != WireGuardState.ENGINE_UP) {
@@ -191,13 +205,17 @@ fun ZeusDashboard() {
                 // Persist the user's intent before starting the tunnel so a process
                 // death during startup does not lose an explicit connection request.
                 settings.setTunnelDesired(true)
-                wireGuard.connect()
+                wireGuard.connect(settings.loadSplitTunnelPolicy())
                 wireGuardMessage = connectedMessage
             } catch (_: MissingWireGuardProfileException) {
                 settings.setTunnelDesired(false)
                 profileSaved = false
                 wireGuardMessage = missingProfileMessage
-            } catch (_: Exception) {
+            } catch (error: IllegalArgumentException) {
+                settings.setTunnelDesired(false)
+                wireGuardMessage = error.message ?: connectionFailedMessage
+            } catch (error: Exception) {
+                if (error is CancellationException) throw error
                 settings.setTunnelDesired(false)
                 wireGuardMessage = connectionFailedMessage
             }
@@ -231,12 +249,17 @@ fun ZeusDashboard() {
                         }
                         try {
                             wireGuardMessage = "شبکه در دسترس است؛ در حال برقراری مجدد تونل..."
-                            wireGuard.connect()
+                            wireGuard.connect(settings.loadSplitTunnelPolicy())
                             wireGuardMessage = "اتصال پس از بازگشت شبکه برقرار شد."
                             failedAttempts = 0
                         } catch (cancelled: CancellationException) {
                             throw cancelled
-                        } catch (_: Exception) {
+                        } catch (error: IllegalArgumentException) {
+                            settings.setTunnelDesired(false)
+                            wireGuardMessage = error.message ?: "تنظیم مسیریابی برنامه‌ها معتبر نیست؛ آن را بررسی کنید."
+                            return@collectLatest
+                        } catch (error: Exception) {
+                            if (error is CancellationException) throw error
                             failedAttempts += 1
                             wireGuardMessage = "اتصال مجدد انجام نشد؛ تلاش بعدی با فاصلهٔ کنترل‌شده انجام می‌شود."
                             delay(TunnelReconnectPolicy.delayAfterFailure(failedAttempts - 1))
@@ -265,7 +288,8 @@ fun ZeusDashboard() {
             try {
                 wireGuard.disconnect()
                 wireGuardMessage = disconnectedMessage
-            } catch (_: Exception) {
+            } catch (error: Exception) {
+                if (error is CancellationException) throw error
                 wireGuardMessage = connectionFailedMessage
             }
         }
@@ -281,7 +305,8 @@ fun ZeusDashboard() {
                 profileSetupMessage = profileSavedMessage
             } catch (_: InvalidWireGuardProfileException) {
                 wireGuardMessage = invalidProfileMessage
-            } catch (_: Exception) {
+            } catch (error: Exception) {
+                if (error is CancellationException) throw error
                 wireGuardMessage = invalidProfileMessage
             }
         }
@@ -295,7 +320,8 @@ fun ZeusDashboard() {
                 profileSaved = false
                 profileDraft = ""
                 profileSetupMessage = profileDeletedMessage
-            } catch (_: Exception) {
+            } catch (error: Exception) {
+                if (error is CancellationException) throw error
                 wireGuardMessage = connectionFailedMessage
             }
         }
@@ -331,6 +357,7 @@ fun ZeusDashboard() {
                         connectAfterProvisioning = false
                         enrollmentMessage = error.message ?: "ثبت دستگاه انجام نشد."
                     } catch (error: Exception) {
+                        if (error is CancellationException) throw error
                         connectAfterProvisioning = false
                         enrollmentMessage = error.message ?: "ثبت انجام نشد؛ تلاش امن برای ادامه روی همین گوشی نگهداری شده است."
                     } finally {
@@ -362,6 +389,7 @@ fun ZeusDashboard() {
                         performEnrollment(idToken, "")
                     }
                 } catch (error: Exception) {
+                    if (error is CancellationException) throw error
                     connectAfterProvisioning = false
                     authMessage = error.message ?: "ورود امن انجام نشد."
                 }
@@ -379,6 +407,7 @@ fun ZeusDashboard() {
                 try {
                     customerSignInLauncher.launch(identity.createAuthorizationIntent())
                 } catch (error: Exception) {
+                    if (error is CancellationException) throw error
                     authBusy = false
                     authMessage = error.message ?: "صفحهٔ ورود در دسترس نیست."
                 }
@@ -405,6 +434,7 @@ fun ZeusDashboard() {
                     val idToken = identity.freshIdToken()
                     performEnrollment(idToken, "")
                 } catch (error: Exception) {
+                    if (error is CancellationException) throw error
                     customerSignedIn = identity.hasStoredSession()
                     authMessage = error.message ?: "نشست حساب منقضی شده است؛ دوباره وارد شوید."
                 }
@@ -433,6 +463,7 @@ fun ZeusDashboard() {
                 try {
                     performEnrollment(identity.freshIdToken(), "")
                 } catch (error: Exception) {
+                    if (error is CancellationException) throw error
                     customerSignedIn = identity.hasStoredSession()
                     authMessage = error.message ?: "برای ادامهٔ ثبت دستگاه دوباره وارد حساب شوید."
                 }
@@ -500,7 +531,8 @@ fun ZeusDashboard() {
                     profileSetupMessage = profileSavedMessage
                 } catch (_: InvalidWireGuardProfileException) {
                     wireGuardMessage = invalidProfileMessage
-                } catch (_: Exception) {
+                } catch (error: Exception) {
+                    if (error is CancellationException) throw error
                     wireGuardMessage = "فایل انتخاب‌شده قابل خواندن یا معتبر نیست."
                 } finally {
                     profileImportBusy = false
@@ -668,7 +700,42 @@ fun ZeusDashboard() {
                             onEnabledChange = { enabled ->
                                 scope.launch { settings.setAutoReconnectEnabled(enabled) }
                             },
+                            splitTunnelPolicy = splitTunnelPolicy,
+                            onEditSplitTunnel = { showSplitTunnelDialog = true },
                         )
+                        splitTunnelNotice?.takeIf { it.message.isNotBlank() }?.let { notice ->
+                            InlineNotice(notice.message, if (notice.isSuccess) Positive else Warning)
+                        }
+                        if (showSplitTunnelDialog) {
+                            SplitTunnelDialog(
+                                currentPolicy = splitTunnelPolicy,
+                                applications = installedApps,
+                                onDismiss = { showSplitTunnelDialog = false },
+                                onApply = { updatedPolicy ->
+                                    scope.launch {
+                                        try {
+                                            settings.setSplitTunnelPolicy(updatedPolicy)
+                                            showSplitTunnelDialog = false
+                                            splitTunnelNotice = SplitTunnelNotice(
+                                                message = if (wireGuardState == WireGuardState.ENGINE_UP) {
+                                                    "قانون مسیریابی ذخیره شد؛ برای اعمال آن تونل را قطع و دوباره وصل کنید."
+                                                } else {
+                                                    "قانون مسیریابی ذخیره شد و در اتصال بعدی اعمال می‌شود."
+                                                },
+                                                isSuccess = true,
+                                            )
+                                        } catch (cancelled: CancellationException) {
+                                            throw cancelled
+                                        } catch (_: Exception) {
+                                            splitTunnelNotice = SplitTunnelNotice(
+                                                message = "ذخیرهٔ قانون مسیریابی انجام نشد؛ فضای ذخیره‌سازی دستگاه را بررسی و دوباره تلاش کنید.",
+                                                isSuccess = false,
+                                            )
+                                        }
+                                    }
+                                },
+                            )
+                        }
                     }
                 }
             }
@@ -1574,6 +1641,8 @@ private fun CustomerAccountCard(
 private fun SettingsCard(
     enabled: Boolean,
     onEnabledChange: (Boolean) -> Unit,
+    splitTunnelPolicy: SplitTunnelPolicy,
+    onEditSplitTunnel: () -> Unit,
 ) {
     PanelCard {
         Row(
@@ -1600,7 +1669,196 @@ private fun SettingsCard(
                 ),
             )
         }
+        HorizontalDivider(color = DividerColor)
+        Text("مسیریابی برنامه‌ها", color = MainText, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+        Text(
+            when (splitTunnelPolicy.mode) {
+                SplitTunnelMode.ALL -> "همهٔ برنامه‌ها از تونل VPN عبور می‌کنند."
+                SplitTunnelMode.INCLUDE_SELECTED -> "${splitTunnelPolicy.packageNames.size} برنامهٔ انتخاب‌شده از VPN عبور می‌کنند."
+                SplitTunnelMode.EXCLUDE_SELECTED -> "${splitTunnelPolicy.packageNames.size} برنامهٔ انتخاب‌شده مستقیم به اینترنت وصل می‌شوند."
+            },
+            color = SecondaryText,
+            style = MaterialTheme.typography.bodySmall,
+            lineHeight = 18.sp,
+        )
+        OutlinedButton(
+            onClick = onEditSplitTunnel,
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(13.dp),
+            border = androidx.compose.foundation.BorderStroke(1.dp, DividerColor),
+        ) {
+            Text("تنظیم برنامه‌های عبوری از VPN")
+        }
     }
+}
+
+
+private data class SplitTunnelNotice(val message: String, val isSuccess: Boolean)
+
+private data class LaunchableApp(
+    val packageName: String,
+    val label: String,
+)
+
+private fun loadLaunchableApps(context: Context): List<LaunchableApp> {
+    val packageManager = context.packageManager
+    val launcherIntent = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER)
+    @Suppress("DEPRECATION")
+    return packageManager.queryIntentActivities(launcherIntent, PackageManager.MATCH_ALL)
+        .mapNotNull { resolveInfo ->
+            val activityInfo = resolveInfo.activityInfo ?: return@mapNotNull null
+            val packageName = activityInfo.packageName
+            if (packageName == context.packageName) return@mapNotNull null
+            val label = resolveInfo.loadLabel(packageManager)?.toString()?.takeIf { it.isNotBlank() }
+                ?: packageName
+            LaunchableApp(packageName, label)
+        }
+        .distinctBy { it.packageName }
+        .sortedBy { it.label.lowercase(Locale.getDefault()) }
+}
+
+@Composable
+private fun SplitTunnelDialog(
+    currentPolicy: SplitTunnelPolicy,
+    applications: List<LaunchableApp>,
+    onDismiss: () -> Unit,
+    onApply: (SplitTunnelPolicy) -> Unit,
+) {
+    var mode by remember(currentPolicy) { mutableStateOf(currentPolicy.mode) }
+    var selectedPackages by remember(currentPolicy) { mutableStateOf(currentPolicy.packageNames) }
+    var search by remember { mutableStateOf("") }
+    var validationMessage by remember { mutableStateOf("") }
+
+    val visibleApps = remember(applications, search) {
+        applications.filter {
+            search.isBlank() ||
+                it.label.contains(search, ignoreCase = true) ||
+                it.packageName.contains(search, ignoreCase = true)
+        }
+    }
+    val visiblePackageNames = remember(applications) {
+        applications.mapTo(mutableSetOf()) { it.packageName }
+    }
+    val unavailableSelectedPackages = remember(selectedPackages, visiblePackageNames) {
+        selectedPackages.filterNot { it in visiblePackageNames }
+    }
+    val unavailableApps = remember(unavailableSelectedPackages, search) {
+        unavailableSelectedPackages
+            .filter { search.isBlank() || it.contains(search, ignoreCase = true) }
+            .sorted()
+            .map { LaunchableApp(it, "در فهرست فعلی Android قابل‌مشاهده نیست") }
+    }
+    val selectableApps = remember(visibleApps, unavailableApps) {
+        unavailableApps + visibleApps
+    }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("مسیریابی برنامه‌ها", color = MainText, fontWeight = FontWeight.Bold) },
+        text = {
+            Column(
+                modifier = Modifier.fillMaxWidth().heightIn(max = 560.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                Text("مشخص کن کدام برنامه‌ها از تونل عبور کنند.", color = SecondaryText, style = MaterialTheme.typography.bodySmall)
+                listOf(
+                    SplitTunnelMode.ALL to "همهٔ برنامه‌ها از VPN",
+                    SplitTunnelMode.INCLUDE_SELECTED to "فقط برنامه‌های انتخاب‌شده از VPN",
+                    SplitTunnelMode.EXCLUDE_SELECTED to "برنامه‌های انتخاب‌شده خارج از VPN",
+                ).forEach { (option, label) ->
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        RadioButton(
+                            selected = mode == option,
+                            onClick = { mode = option; validationMessage = "" },
+                        )
+                        Text(label, color = MainText, style = MaterialTheme.typography.bodySmall)
+                    }
+                }
+                if (mode != SplitTunnelMode.ALL) {
+                    OutlinedTextField(
+                        value = search,
+                        onValueChange = { search = it },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true,
+                        label = { Text("جست‌وجوی برنامه") },
+                    )
+                    Text(
+                        "انتخاب‌شده: ${selectedPackages.size} از حداکثر ${SplitTunnelPolicy.MAX_APPLICATIONS}",
+                        color = SecondaryText,
+                        style = MaterialTheme.typography.labelSmall,
+                    )
+                    if (applications.isEmpty() && unavailableSelectedPackages.isEmpty()) {
+                        Text(
+                            "برنامهٔ قابل‌نمایشی پیدا نشد. فهرست برنامه‌های دارای آیکون اجرا از Android خوانده می‌شود.",
+                            color = Warning,
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                    } else {
+                        LazyColumn(
+                            modifier = Modifier.fillMaxWidth().heightIn(max = 250.dp),
+                        ) {
+                            items(selectableApps, key = { it.packageName }) { app ->
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                ) {
+                                    Checkbox(
+                                        checked = app.packageName in selectedPackages,
+                                        onCheckedChange = { checked ->
+                                            selectedPackages = if (checked) {
+                                                if (selectedPackages.size >= SplitTunnelPolicy.MAX_APPLICATIONS) {
+                                                    validationMessage = "حداکثر ۱۰۰ برنامه را می‌توان انتخاب کرد."
+                                                    selectedPackages
+                                                } else {
+                                                    selectedPackages + app.packageName
+                                                }
+                                            } else {
+                                                validationMessage = ""
+                                                selectedPackages - app.packageName
+                                            }
+                                        },
+                                    )
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Text(app.label, color = MainText, style = MaterialTheme.typography.bodyMedium)
+                                        Text(app.packageName, color = MutedText, style = MaterialTheme.typography.labelSmall)
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                if (validationMessage.isNotBlank()) {
+                    Text(validationMessage, color = Warning, style = MaterialTheme.typography.bodySmall)
+                }
+                Text(
+                    "تغییرات هنگام اتصال بعدی اعمال می‌شوند. این قابلیت مسیر برنامه‌ها را در Android تنظیم می‌کند؛ به‌تنهایی فیلترینگ را دور نمی‌زند.",
+                    color = MutedText,
+                    style = MaterialTheme.typography.labelSmall,
+                    lineHeight = 16.sp,
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(
+                onClick = {
+                    val policy = SplitTunnelPolicy(
+                        mode = mode,
+                        packageNames = if (mode == SplitTunnelMode.ALL) emptySet() else selectedPackages,
+                    )
+                    try {
+                        policy.validate()
+                        onApply(policy)
+                    } catch (error: IllegalArgumentException) {
+                        validationMessage = error.message ?: "تنظیم انتخاب‌شده معتبر نیست."
+                    }
+                },
+            ) { Text("ذخیره") }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("انصراف") } },
+        containerColor = Panel,
+        titleContentColor = MainText,
+        textContentColor = SecondaryText,
+    )
 }
 
 @Composable

@@ -109,12 +109,12 @@ export default function App() {
 
   async function checkControlPlane() {
     setApiStatus('checking')
-    setApiMessage('در حال بررسی اتصال کنترل‌پلین')
+    setApiMessage('در حال بررسی پاسخ API')
     const result = await getControlPlaneHealth()
     setApiStatus(result.state)
     setApiMessage(result.message)
-    if (result.state === 'online') toast('ارتباط با Control Plane برقرار است؛ فقط سلامت سرویس تأیید شد.')
-    else if (result.state === 'offline') toast('Control Plane پاسخ معتبر نداد.')
+    if (result.state === 'online') toast('API پاسخ سلامت معتبر داد؛ آمادگی پایگاه داده و دسترسی مدیریتی جداگانه بررسی می‌شوند.')
+    else if (result.state === 'offline') toast('بررسی سلامت API موفق نبود؛ جزئیات وضعیت نمایش داده می‌شود.')
     else toast('نشانی API تنظیم نشده است.')
   }
 
@@ -183,7 +183,7 @@ export default function App() {
         status: node.status,
         ip: node.endpoint_host + ':' + node.endpoint_port,
       }))
-    : servers
+    : []
 
   useEffect(() => {
     try { window.localStorage.setItem('zeus.theme', theme) } catch { /* Browser storage is optional. */ }
@@ -794,7 +794,7 @@ export default function App() {
         {loginError && <div className="login-error" role="alert">{loginError}</div>}
         <button className="button primary login-submit" disabled={loginBusy}>{loginBusy ? 'در حال بررسی...' : 'ورود امن به ZEUS'}</button>
         <div className="login-security"><i /> نشست کوتاه‌مدت · رمزنگاری‌شده · بدون ذخیره توکن در مرورگر</div>
-        <div className="login-health"><span className={`live-indicator api-${apiStatus}`}><i /> {apiStatus === 'online' ? 'API پاسخ‌گوست' : apiStatus === 'offline' ? 'API در دسترس نیست' : 'در حال بررسی API'}</span><button type="button" onClick={checkControlPlane}>بررسی اتصال</button></div>
+        <div className="login-health"><span className={`live-indicator api-${apiStatus}`}><i /> {apiStatus === 'online' ? 'API پاسخ‌گوست' : apiStatus === 'offline' ? 'بررسی سلامت API ناموفق است' : 'در حال بررسی API'}</span><button type="button" onClick={checkControlPlane}>بررسی اتصال</button></div>
       </form>
     </div>
   }
@@ -805,12 +805,12 @@ export default function App() {
       <div className="brand"><div className="brand-mark">Z</div><div><b>ZEUS</b><small>CONTROL CENTER <span>v0.1</span></small></div></div>
       <div className="workspace"><span className="workspace-dot" /> محیط آزمایشی <span className="chevron">⌄</span></div>
       <div className="nav-caption">مدیریت اصلی</div>
-      <nav>{nav.map(([id, icon, label]) => <button key={id} className={page === id ? 'nav-item selected' : 'nav-item'} onClick={() => setPage(id)}><span className="nav-icon">{icon}</span><span>{label}</span>{id === 'activity' && <em>۳</em>}</button>)}</nav>
-      <div className="sidebar-bottom"><div className="support-card"><span className="support-orb">✦</span><b>مرکز راهنما</b><p>راهنمای مدیریت ZEUS و وضعیت سرویس‌ها</p><button onClick={() => toast('راهنمای کامل در مرحله مستندسازی قرار دارد.')}>مشاهده راهنما <span>←</span></button></div><div className="profile"><div className="avatar">A</div><div><b>مدیر ZEUS</b><small>دسترسی مدیرکل</small></div><button aria-label="منوی حساب" onClick={() => toast('حساب نمایشی مدیر')}>•••</button></div></div>
+      <nav>{nav.map(([id, icon, label]) => <button key={id} className={page === id ? 'nav-item selected' : 'nav-item'} onClick={() => setPage(id)}><span className="nav-icon">{icon}</span><span>{label}</span></button>)}</nav>
+      <div className="sidebar-bottom"><div className="support-card"><span className="support-orb">✦</span><b>مرکز راهنما</b><p>راهنمای مدیریت ZEUS و وضعیت سرویس‌ها</p><button onClick={() => toast('راهنمای کامل در مرحله مستندسازی قرار دارد.')}>مشاهده راهنما <span>←</span></button></div><div className="profile"><div className="avatar">{operator ? operator.login.slice(0, 1).toUpperCase() : 'Z'}</div><div><b>{operator?.login || 'حالت پیش‌نمایش'}</b><small>{operator ? operator.role : 'بدون نشست مدیریتی'}</small></div>{operator && <button aria-label="خروج از حساب" onClick={signOut}>خروج</button>}</div></div>
     </aside>
 
     <main className="main">
-      <header className="topbar"><div className="crumb">ZEUS <span>/</span> {activePage}</div><div className="top-actions"><span className={`live-indicator api-${apiStatus}`}><i /> {apiStatus === "online" ? "Control Plane متصل" : apiStatus === "offline" ? "Control Plane قطع" : apiStatus === "checking" ? "در حال بررسی API" : "API تنظیم نشده"}</span>{operator && <span className="auth-user-chip">{operator.login} · {operator.role}</span>}<button className="icon-btn" aria-label="اعلان‌ها" onClick={() => setPage('activity')}>♧<b className="notification-dot" /></button><button className="language-btn" onClick={() => toast('رابط فارسی فعال است؛ زبان انگلیسی در برنامه توسعه قرار دارد.')}>فا <span>⌄</span></button></div></header>
+      <header className="topbar"><div className="crumb">ZEUS <span>/</span> {activePage}</div><div className="top-actions"><span className={`live-indicator api-${apiStatus}`}><i /> {apiStatus === "online" ? "API پاسخ‌گوست" : apiStatus === "offline" ? "بررسی سلامت API ناموفق است" : apiStatus === "checking" ? "در حال بررسی API" : "API تنظیم نشده"}</span>{operator && <span className="auth-user-chip">{operator.login} · {operator.role}</span>}<button className="icon-btn" aria-label="گزارش رویدادها" onClick={() => setPage('activity')}>♧</button><button className="language-btn" onClick={() => toast('رابط فارسی فعال است؛ زبان انگلیسی در برنامه توسعه قرار دارد.')}>فا <span>⌄</span></button></div></header>
 
       <section className="page-head"><div><div className="eyebrow"><span /> SYSTEM OVERVIEW / ۰۱</div><h1>{page === 'overview' ? 'مرکز فرماندهی' : activePage}<span className="heading-glow">.</span></h1><p>{page === 'overview' ? 'نمای زنده از زیرساخت، کاربران و سلامت شبکه ZEUS' : 'مدیریت و پایش بخش ' + activePage + ' در پنل ZEUS'}</p></div><div className="head-actions"><button className="button secondary" onClick={checkControlPlane}>↻ بررسی API</button>{!isControlPlaneConfigured && <button className="button primary" onClick={() => { setPage('servers'); setShowServerForm(true) }}>＋ افزودن سرور</button>}</div></section>
 
@@ -823,7 +823,7 @@ export default function App() {
           <h2>زیرساختت، زیر کنترل تو.</h2>
           <p>نمایی متمرکز از وضعیت پلتفرم، همراه با ابزارهای مدیریت و پایش در یک فضای یکپارچه.</p>
           <div className="hero-meta">
-            <span className={`health-chip api-${apiStatus}`}><i /> {apiStatus === 'online' ? 'کنترل‌پلین پاسخ‌گوست' : apiStatus === 'offline' ? 'ارتباط با کنترل‌پلین برقرار نیست' : apiStatus === 'checking' ? 'در حال بررسی اتصال' : 'اتصال API پیکربندی نشده'}</span>
+            <span className={`health-chip api-${apiStatus}`}><i /> {apiStatus === 'online' ? 'API پاسخ‌گوست' : apiStatus === 'offline' ? 'بررسی سلامت API ناموفق است' : apiStatus === 'checking' ? 'در حال بررسی اتصال' : 'اتصال API پیکربندی نشده'}</span>
             <span className="hero-date">{todayLabel}</span>
           </div>
         </div>
@@ -846,6 +846,7 @@ export default function App() {
       </section>
        <section className="content-grid"><article className="panel glass server-panel"><div className="panel-heading"><div><h2>وضعیت سرورها</h2><p>{hasLiveControlPlane ? 'موجودی واقعی نودها؛ بار و تأخیر تا اتصال عامل مانیتورینگ گزارش نمی‌شود.' : 'دادهٔ واقعی پس از پیکربندی Control Plane در این بخش نمایش داده می‌شود.'}</p></div><button className="text-link" onClick={() => setPage('servers')}>همه سرورها ←</button></div>
        <div className="server-list">{overviewServerRows.slice(0,3).map(server => <div className="server-row" key={server.id}><div className="server-symbol">⌘</div><div className="server-info"><b>{server.name}</b><small>{server.region} · {server.protocol}</small></div><div className="server-load"><div className="load-label"><span>بار سرور</span><b>{server.load == null ? '—' : server.load + '%'}</b></div><div className="progress"><i style={{ width: (server.load || 0) + '%' }} /></div></div><Status value={server.status} /></div>)}
+       {!hasLiveControlPlane && <div className="empty">برای جلوگیری از نمایش دادهٔ نمونه، فهرست سرورها تا اتصال و ورود به Control Plane خالی می‌ماند.</div>}
        {hasLiveControlPlane && remoteNodesState === 'loading' && <div className="empty">در حال دریافت نودهای واقعی...</div>}
        {hasLiveControlPlane && remoteNodesState === 'loaded' && remoteNodes.length === 0 && <div className="empty">هنوز نودی در Control Plane ثبت نشده است.</div>}
        {hasLiveControlPlane && remoteNodesState === 'error' && <div className="remote-users-error">{remoteNodesError}</div>}
@@ -1094,9 +1095,11 @@ export default function App() {
         <div className="devices-empty">طرح‌های STARTER، PRO و ULTRA که قبلاً در صفحه نمایش داده می‌شدند نمونهٔ نمایشی بودند و به‌عنوان محصول قابل خرید یا اشتراک فعال حذف شدند. پیش از فعال‌سازی این بخش باید سیاست واقعی قیمت، مدت، حجم، تمدید و درگاه پرداخت تعیین و در سرور enforce شود.</div>
       </section>}
 
-      {page === 'activity' && <section className="panel glass full-panel"><div className="panel-heading"><div><h2>گزارش رویدادها</h2><p>رخدادهای نمونه؛ لاگ واقعی هنوز به پنل متصل نیست</p></div><span className="live-indicator"><i/> DEMO LOG</span></div><div className="devices-empty">گزارش ممیزی هنوز endpoint خواندنی در Control Plane ندارد؛ رویداد نمونه یا ساختگی نمایش داده نمی‌شود.</div></section>}
+      {page === 'activity' && <section className="panel glass full-panel"><div className="panel-heading"><div><h2>گزارش رویدادها</h2><p>گزارش ممیزی هنوز از API ارائه نمی‌شود</p></div><span className="live-indicator"><i/> DEMO LOG</span></div><div className="devices-empty">گزارش ممیزی هنوز endpoint خواندنی در Control Plane ندارد؛ رویداد نمونه یا ساختگی نمایش داده نمی‌شود.</div></section>}
 
-      {page === 'settings' && <section className="panel glass full-panel settings-panel"><div className="panel-heading"><div><h2>تنظیمات پنل</h2><p>ترجیحات رابط کاربری و رفتار نمایشی</p></div></div><div className="setting-row"><span><b>بروزرسانی خودکار رابط</b><small>در صورت فعال بودن، نودها و کاربران هر ۳۰ ثانیه از API تازه می‌شوند؛ فهرست دستگاه یا گواهیِ بازشده نیز بروزرسانی می‌شود.</small></span><button className={autoRefresh?'switch on':'switch'} onClick={()=>setAutoRefresh(v=>!v)} aria-label="تغییر بروزرسانی خودکار"><i/></button></div><div className="setting-row"><span><b>وضعیت Control Plane</b><small>{apiMessage} — این بررسی فقط GET /healthz را می‌خواند و به معنی اتصال داده‌های مدیریتی نیست.</small></span><button className="button secondary" onClick={checkControlPlane}>بررسی دوباره</button></div><div className="setting-row"><span><b>حالت فشرده</b><small>کاهش فاصله‌ها برای نمایش اطلاعات بیشتر.</small></span><button className={compact?'switch on':'switch'} onClick={()=>setCompact(v=>!v)} aria-label="تغییر حالت فشرده"><i/></button></div><div className="setting-row"><span><b>پوسته فعلی</b><small>{themes.find(t=>t.id===theme).name}</small></span><button className="button secondary" onClick={()=>setTheme(themes[(themes.findIndex(t=>t.id===theme)+1)%themes.length].id)}>تغییر پوسته</button></div><div className="notice-box">امنیت: این نسخه به API واقعی، احراز هویت یا داده تولیدی متصل نیست. پیش از اتصال عمومی باید ورود امن، نقش‌ها، CSRF/CORS، اعتبارسنجی ورودی و ثبت ممیزی پیاده‌سازی شوند.</div></section>}
+      {page === 'settings' && <section className="panel glass full-panel settings-panel"><div className="panel-heading"><div><h2>تنظیمات پنل</h2><p>ترجیحات رابط کاربری و رفتار نمایشی</p></div></div><div className="setting-row"><span><b>بروزرسانی خودکار رابط</b><small>در صورت فعال بودن، نودها و کاربران هر ۳۰ ثانیه از API تازه می‌شوند؛ فهرست دستگاه یا گواهیِ بازشده نیز بروزرسانی می‌شود.</small></span><button className={autoRefresh?'switch on':'switch'} onClick={()=>setAutoRefresh(v=>!v)} aria-label="تغییر بروزرسانی خودکار"><i/></button></div><div className="setting-row"><span><b>وضعیت Control Plane</b><small>{apiMessage} — این بررسی فقط GET /healthz را می‌خواند و به معنی اتصال داده‌های مدیریتی نیست.</small></span><button className="button secondary" onClick={checkControlPlane}>بررسی دوباره</button></div><div className="setting-row"><span><b>حالت فشرده</b><small>کاهش فاصله‌ها برای نمایش اطلاعات بیشتر.</small></span><button className={compact?'switch on':'switch'} onClick={()=>setCompact(v=>!v)} aria-label="تغییر حالت فشرده"><i/></button></div><div className="setting-row"><span><b>پوسته فعلی</b><small>{themes.find(t=>t.id===theme).name}</small></span><button className="button secondary" onClick={()=>setTheme(themes[(themes.findIndex(t=>t.id===theme)+1)%themes.length].id)}>تغییر پوسته</button></div><div className="notice-box">{isControlPlaneConfigured && operator
+          ? 'نشست مدیریتی با Control Plane برقرار است. با این حال، گزارش ممیزی، ترافیک و متریک‌های نود هنوز به API این پنل متصل نشده‌اند؛ وضعیت سلامت API به‌تنهایی آمادگی کامل همهٔ بخش‌ها را ثابت نمی‌کند.'
+          : 'پنل در حالت پیش‌نمایش است و نشست مدیریتی یا دادهٔ تولیدی فعال ندارد. برای استفادهٔ عملیاتی باید API، ورود امن، نقش‌ها، اعتبارسنجی و گزارش ممیزی به‌طور کامل پیکربندی و آزموده شوند.'}</div></section>}
 
       {isControlPlaneConfigured && remoteUsersState === 'error' && <div className="remote-users-error" role="alert">{remoteUsersError}</div>}
       <footer className="footer"><span>© ۲۰۲۶ ZEUS VPN PLATFORM</span><span>ساخته‌شده برای کنترل دقیق‌تر <i>✦</i></span><span className="footer-version">FRONTEND PREVIEW 0.1.0</span></footer>

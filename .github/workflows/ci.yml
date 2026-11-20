@@ -122,6 +122,138 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
+
+  android-package-visibility:
+    name: Android Package Visibility emulator test
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-java@77dd5b2ce225ea11469928ac317850245a74ae78 # v6.2.0
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: gradle
+      - name: Install Android SDK and API 35 emulator image
+        run: |
+          export ANDROID_HOME="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}}"
+          sdkmanager_path="$(find "$ANDROID_HOME/cmdline-tools" -type f -name sdkmanager -print -quit)"
+          test -n "$sdkmanager_path"
+          tools_directory="$(dirname "$sdkmanager_path")"
+          echo "$tools_directory" >> "$GITHUB_PATH"
+          echo "$ANDROID_HOME/platform-tools" >> "$GITHUB_PATH"
+          echo "$ANDROID_HOME/emulator" >> "$GITHUB_PATH"
+          export PATH="$tools_directory:$ANDROID_HOME/platform-tools:$ANDROID_HOME/emulator:$PATH"
+          yes | "$sdkmanager_path" --licenses >/dev/null
+          "$sdkmanager_path" --install "platform-tools" "platforms;android-36" "build-tools;36.0.0" "emulator" "system-images;android-35;google_apis;x86_64"
+      - name: Grant runner access to KVM
+        run: |
+          sdk_root="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}}"
+          if [[ ! -c /dev/kvm ]]; then
+            echo "::error::GitHub runner does not expose the KVM device required by the x86_64 Android emulator."
+            exit 1
+          fi
+          sudo chown "$USER" /dev/kvm
+          test -r /dev/kvm
+          test -w /dev/kvm
+          "$sdk_root/emulator/emulator" -accel-check
+
+      - name: Create isolated emulator
+        run: |
+          if ! timeout 300s bash -c '
+            set -euo pipefail
+            export ANDROID_HOME="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}}"
+            export ANDROID_SDK_ROOT="$ANDROID_HOME"
+            export ANDROID_AVD_HOME="$HOME/.android/avd"
+            mkdir -p "$ANDROID_AVD_HOME"
+
+            if ! printf "no\\n" | timeout 90s avdmanager --verbose create avd --force -n zeus-api35 -k "system-images;android-35;google_apis;x86_64" --device "pixel_2" > zeus-avdmanager.log 2>&1; then
+              cat zeus-avdmanager.log
+              exit 1
+            fi
+            test -s "$ANDROID_AVD_HOME/zeus-api35.ini"
+            test -f "$ANDROID_AVD_HOME/zeus-api35.avd/config.ini"
+            avdmanager list avd | tee zeus-avd-list.log
+
+            emulator -avd zeus-api35 -no-window -no-audio -no-boot-anim -gpu swiftshader_indirect -no-snapshot-save > zeus-emulator.log 2>&1 &
+            timeout 180s adb wait-for-device
+            boot_completed=""
+            for attempt in $(seq 1 60); do
+              if boot_completed="$(timeout 2s adb shell getprop sys.boot_completed | tr -d "\\r")" && [[ "$boot_completed" == "1" ]]; then
+                break
+              fi
+              sleep 3
+            done
+            test "$boot_completed" = "1"
+            adb shell settings put global window_animation_scale 0
+            adb shell settings put global transition_animation_scale 0
+            adb shell settings put global animator_duration_scale 0
+          '; then
+            echo "Android AVD creation and boot did not complete within the 5-minute deadline."
+            adb devices -l || true
+            timeout 15s adb logcat -d -t 300 > zeus-logcat.txt 2>&1 || true
+            tail -n 200 zeus-avdmanager.log || true
+            tail -n 200 zeus-avd-list.log || true
+            tail -n 200 zeus-emulator.log || true
+            exit 1
+          fi
+      - name: Generate a distinct fixture signing key
+        run: |
+          keytool -genkeypair -v -keystore "$RUNNER_TEMP/zeus-fixture.jks" -storepass fixture-only-password -alias fixture -keypass fixture-only-password -dname "CN=ZEUS Package Visibility Fixture" -keyalg RSA -keysize 2048 -validity 2
+      - name: Build target app, instrumentation APK, and hidden fixture
+        run: |
+          ./gradlew --no-daemon \
+            -PFIXTURE_KEYSTORE_PATH="$RUNNER_TEMP/zeus-fixture.jks" \
+            -PFIXTURE_KEYSTORE_PASSWORD=fixture-only-password \
+            :apps:android:assembleDebug \
+            :apps:android:assembleDebugAndroidTest \
+            :apps:android-visibility-fixture:assembleDebug
+      - name: Install fixture and target APKs
+        run: |
+          fixture_apk="$(find apps/android-visibility-fixture/build/outputs/apk/debug -maxdepth 1 -type f -name '*.apk' -print -quit)"
+          target_apk="$(find apps/android/build/outputs/apk/debug -maxdepth 1 -type f -name '*.apk' -print -quit)"
+          if [[ -z "$fixture_apk" || -z "$target_apk" ]]; then
+            echo "::error::Expected fixture or target APK was not produced."
+            find apps/android-visibility-fixture/build/outputs/apk apps/android/build/outputs/apk -type f -name '*.apk' -print || true
+            exit 1
+          fi
+          echo "Installing fixture APK: $fixture_apk"
+          adb install -r "$fixture_apk"
+          echo "Installing target APK: $target_apk"
+          adb install -r "$target_apk"
+          fixture_path="$(adb shell pm path com.zeusvpn.visibilityfixture | tr -d '\r')"
+          target_path="$(adb shell pm path com.zeusvpn.app.diagnostics | tr -d '\r')"
+          test -n "$fixture_path"
+          test -n "$target_path"
+          echo "Installed fixture: $fixture_path"
+          echo "Installed target: $target_path"
+      - name: Run real PackageManager visibility instrumentation test
+        run: |
+          android_test_apk="$(find apps/android/build/outputs/apk/androidTest/debug -maxdepth 1 -type f -name '*.apk' -print -quit)"
+          if [[ -z "$android_test_apk" ]]; then
+            echo "::error::Android instrumentation APK was not produced."
+            find apps/android/build/outputs/apk -type f -name '*.apk' -print || true
+            exit 1
+          fi
+          echo "Installing instrumentation APK: $android_test_apk"
+          adb install -r "$android_test_apk"
+          set -o pipefail
+          adb shell am instrument -w -e class com.zeusvpn.app.vpn.PackageVisibilityInstrumentedTest com.zeusvpn.app.diagnostics.test/androidx.test.runner.AndroidJUnitRunner | tee zeus-instrumentation.log
+          grep -Fq 'OK (1 test)' zeus-instrumentation.log
+      - name: Upload emulator diagnostics on failure
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: zeus-package-visibility-emulator-diagnostics
+          path: |
+            zeus-avdmanager.log
+            zeus-avd-list.log
+            zeus-emulator.log
+            zeus-logcat.txt
+            zeus-instrumentation.log
+          if-no-files-found: ignore
+          retention-days: 7
+
   vpn-node:
     name: VPN node agent and executor tests
     runs-on: ubuntu-latest

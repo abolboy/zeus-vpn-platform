@@ -794,7 +794,7 @@ export default function App() {
         {loginError && <div className="login-error" role="alert">{loginError}</div>}
         <button className="button primary login-submit" disabled={loginBusy}>{loginBusy ? 'در حال بررسی...' : 'ورود امن به ZEUS'}</button>
         <div className="login-security"><i /> نشست کوتاه‌مدت · رمزنگاری‌شده · بدون ذخیره توکن در مرورگر</div>
-        <div className="login-health"><span className={`live-indicator api-${apiStatus}`}><i /> {apiStatus === 'online' ? 'API پاسخ‌گوست' : apiStatus === 'offline' ? 'API در دسترس نیست' : 'در حال بررسی API'}</span><button type="button" onClick={checkControlPlane}>بررسی اتصال</button></div>
+        <div className="login-health"><span className={`live-indicator api-${apiStatus}`}><i /> {apiStatus === 'online' ? 'API پاسخ‌گوست' : apiStatus === 'offline' ? 'بررسی سلامت API ناموفق است' : 'در حال بررسی API'}</span><button type="button" onClick={checkControlPlane}>بررسی اتصال</button></div>
       </form>
     </div>
   }

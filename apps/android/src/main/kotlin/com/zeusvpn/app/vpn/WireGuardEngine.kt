@@ -4,7 +4,6 @@ import android.content.Context
 import com.wireguard.android.backend.GoBackend
 import com.wireguard.android.backend.Tunnel
 import com.zeusvpn.app.data.EncryptedWireGuardConfigStore
-import com.zeusvpn.app.network.SplitTunnelMode
 import com.zeusvpn.app.network.SplitTunnelPolicy
 import com.zeusvpn.app.network.SplitTunnelProfilePolicy
 import kotlinx.coroutines.Dispatchers
@@ -196,28 +195,12 @@ class WireGuardEngine private constructor(context: Context) {
         }
     }
 
-    private fun validateInstalledApplications(policy: SplitTunnelPolicy): SplitTunnelPolicy {
-        policy.validate()
-        if (policy.mode == SplitTunnelMode.ALL) return SplitTunnelPolicy.DEFAULT
-
-        val unavailablePackages = policy.packageNames.filterNot { packageName ->
+    private fun validateInstalledApplications(policy: SplitTunnelPolicy): SplitTunnelPolicy =
+        InstalledApplicationPolicyValidator.validate(policy) { packageName ->
             runCatching {
                 appContext.packageManager.getApplicationInfo(packageName, 0)
             }.isSuccess
-        }.sorted()
-
-        if (unavailablePackages.isNotEmpty()) {
-            val shownPackages = unavailablePackages.take(5).joinToString(", ")
-            val remainingCount = unavailablePackages.size - minOf(unavailablePackages.size, 5)
-            val remainingMessage = if (remainingCount > 0) " و $remainingCount مورد دیگر" else ""
-            throw IllegalArgumentException(
-                "برخی برنامه‌های انتخاب‌شده نصب نیستند یا در Android قابل‌مشاهده نیستند: " +
-                    "$shownPackages$remainingMessage. تنظیم مسیریابی را بازبینی کنید.",
-            )
         }
-
-        return policy
-    }
 
     private fun syncBackendStateLocked(): WireGuardState {
         val actualState = backend.getState(tunnel).toAppState()

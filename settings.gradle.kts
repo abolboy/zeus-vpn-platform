@@ -11,3 +11,4 @@ dependencyResolutionManagement {
 }
 rootProject.name = "zeus-vpn-platform"
 include(":apps:android")
+include(":apps:android-visibility-fixture")

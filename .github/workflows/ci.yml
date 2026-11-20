@@ -150,13 +150,26 @@ jobs:
         run: |
           echo "no" | avdmanager create avd -n zeus-api35 -k "system-images;android-35;google_apis;x86_64" --device "pixel_2"
           emulator -avd zeus-api35 -no-window -no-audio -no-boot-anim -gpu swiftshader_indirect -no-snapshot-save > zeus-emulator.log 2>&1 &
-          adb wait-for-device
+          if ! timeout 180s adb wait-for-device; then
+            echo "Timed out waiting for the Android emulator device."
+            adb devices -l || true
+            tail -n 200 zeus-emulator.log || true
+            exit 1
+          fi
+          boot_completed=""
           for attempt in $(seq 1 60); do
-            boot_completed="$(adb shell getprop sys.boot_completed | tr -d '\r')"
-            if [[ "$boot_completed" == "1" ]]; then break; fi
+            if boot_completed="$(timeout 15s adb shell getprop sys.boot_completed | tr -d '\r')" && [[ "$boot_completed" == "1" ]]; then
+              break
+            fi
             sleep 5
           done
-          test "$boot_completed" = "1"
+          if [[ "$boot_completed" != "1" ]]; then
+            echo "Android emulator did not report sys.boot_completed=1 within 5 minutes."
+            adb devices -l || true
+            timeout 15s adb logcat -d -t 300 > zeus-logcat.txt 2>&1 || true
+            tail -n 200 zeus-emulator.log || true
+            exit 1
+          fi
           adb shell settings put global window_animation_scale 0
           adb shell settings put global transition_animation_scale 0
           adb shell settings put global animator_duration_scale 0
@@ -194,6 +207,7 @@ jobs:
           name: zeus-package-visibility-emulator-diagnostics
           path: |
             zeus-emulator.log
+            zeus-logcat.txt
             zeus-instrumentation.log
           if-no-files-found: ignore
           retention-days: 7

@@ -149,13 +149,25 @@ jobs:
       - name: Create isolated emulator
         run: |
           if ! timeout 300s bash -c '
-            set -e
-            echo "no" | avdmanager create avd -n zeus-api35 -k "system-images;android-35;google_apis;x86_64" --device "pixel_2"
+            set -euo pipefail
+            export ANDROID_HOME="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}}"
+            export ANDROID_SDK_ROOT="$ANDROID_HOME"
+            export ANDROID_AVD_HOME="$HOME/.android/avd"
+            mkdir -p "$ANDROID_AVD_HOME"
+
+            if ! printf "no\\n" | timeout 90s avdmanager --verbose create avd --force -n zeus-api35 -k "system-images;android-35;google_apis;x86_64" --device "pixel_2" > zeus-avdmanager.log 2>&1; then
+              cat zeus-avdmanager.log
+              exit 1
+            fi
+            test -s "$ANDROID_AVD_HOME/zeus-api35.ini"
+            test -f "$ANDROID_AVD_HOME/zeus-api35.avd/config.ini"
+            avdmanager list avd | tee zeus-avd-list.log
+
             emulator -avd zeus-api35 -no-window -no-audio -no-boot-anim -gpu swiftshader_indirect -no-snapshot-save > zeus-emulator.log 2>&1 &
             timeout 180s adb wait-for-device
             boot_completed=""
             for attempt in $(seq 1 60); do
-              if boot_completed="$(timeout 2s adb shell getprop sys.boot_completed | tr -d "\r")" && [[ "$boot_completed" == "1" ]]; then
+              if boot_completed="$(timeout 2s adb shell getprop sys.boot_completed | tr -d "\\r")" && [[ "$boot_completed" == "1" ]]; then
                 break
               fi
               sleep 3
@@ -165,9 +177,11 @@ jobs:
             adb shell settings put global transition_animation_scale 0
             adb shell settings put global animator_duration_scale 0
           '; then
-            echo "Android emulator setup and boot did not complete within the 5-minute deadline."
+            echo "Android AVD creation and boot did not complete within the 5-minute deadline."
             adb devices -l || true
             timeout 15s adb logcat -d -t 300 > zeus-logcat.txt 2>&1 || true
+            tail -n 200 zeus-avdmanager.log || true
+            tail -n 200 zeus-avd-list.log || true
             tail -n 200 zeus-emulator.log || true
             exit 1
           fi
@@ -204,6 +218,8 @@ jobs:
         with:
           name: zeus-package-visibility-emulator-diagnostics
           path: |
+            zeus-avdmanager.log
+            zeus-avd-list.log
             zeus-emulator.log
             zeus-logcat.txt
             zeus-instrumentation.log

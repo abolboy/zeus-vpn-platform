@@ -146,6 +146,18 @@ jobs:
           export PATH="$tools_directory:$ANDROID_HOME/platform-tools:$ANDROID_HOME/emulator:$PATH"
           yes | "$sdkmanager_path" --licenses >/dev/null
           "$sdkmanager_path" --install "platform-tools" "platforms;android-36" "build-tools;36.0.0" "emulator" "system-images;android-35;google_apis;x86_64"
+      - name: Grant runner access to KVM
+        run: |
+          sdk_root="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}}"
+          if [[ ! -c /dev/kvm ]]; then
+            echo "::error::GitHub runner does not expose the KVM device required by the x86_64 Android emulator."
+            exit 1
+          fi
+          sudo chown "$USER" /dev/kvm
+          test -r /dev/kvm
+          test -w /dev/kvm
+          "$sdk_root/emulator/emulator" -accel-check
+
       - name: Create isolated emulator
         run: |
           if ! timeout 300s bash -c '

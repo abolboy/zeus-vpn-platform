@@ -141,7 +141,7 @@ jobs:
       - name: Create isolated emulator
         run: |
           echo "no" | avdmanager create avd -n zeus-api35 -k "system-images;android-35;google_apis;x86_64" --device "pixel_2"
-          emulator -avd zeus-api35 -no-window -no-audio -no-boot-anim -gpu swiftshader_indirect -no-snapshot-save > "$RUNNER_TEMP/zeus-emulator.log" 2>&1 &
+          emulator -avd zeus-api35 -no-window -no-audio -no-boot-anim -gpu swiftshader_indirect -no-snapshot-save > zeus-emulator.log 2>&1 &
           adb wait-for-device
           for attempt in $(seq 1 60); do
             boot_completed="$(adb shell getprop sys.boot_completed | tr -d '\r')"
@@ -177,40 +177,16 @@ jobs:
         run: |
           adb install -r apps/android/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk
           set -o pipefail
-          adb shell am instrument -w -e class com.zeusvpn.app.vpn.PackageVisibilityInstrumentedTest com.zeusvpn.app.diagnostics.test/androidx.test.runner.AndroidJUnitRunner | tee "$RUNNER_TEMP/zeus-instrumentation.log"
-          grep -Eq '^OK \([0-9]+ tests?\)    name: VPN node agent and executor tests
-    runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: services/vpn-node
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
-        with:
-          go-version: '1.27.4'
-          cache-dependency-path: services/vpn-node/go.mod
-      - name: Verify Go formatting
-        run: |
-          files="$(gofmt -l .)"
-          if [[ -n "$files" ]]; then
-            echo "Files requiring gofmt:"
-            echo "$files"
-            gofmt -d $files
-            exit 1
-          fi
-      - name: Test
-        run: go test -race ./...
-      - name: Vet
-        run: go vet ./...
- "$RUNNER_TEMP/zeus-instrumentation.log"
+          adb shell am instrument -w -e class com.zeusvpn.app.vpn.PackageVisibilityInstrumentedTest com.zeusvpn.app.diagnostics.test/androidx.test.runner.AndroidJUnitRunner | tee zeus-instrumentation.log
+          grep -Fq 'OK (1 test)' zeus-instrumentation.log
       - name: Upload emulator diagnostics on failure
         if: failure()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: zeus-package-visibility-emulator-diagnostics
           path: |
-            ${{ runner.temp }}/zeus-emulator.log
-            ${{ runner.temp }}/zeus-instrumentation.log
+            zeus-emulator.log
+            zeus-instrumentation.log
           if-no-files-found: ignore
           retention-days: 7
 

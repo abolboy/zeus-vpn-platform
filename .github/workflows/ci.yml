@@ -210,8 +210,17 @@ jobs:
             :apps:android-visibility-fixture:assembleDebug
       - name: Install fixture and target APKs
         run: |
-          adb install -r apps/android-visibility-fixture/build/outputs/apk/debug/android-visibility-fixture-debug.apk
-          adb install -r apps/android/build/outputs/apk/debug/app-debug.apk
+          fixture_apk="$(find apps/android-visibility-fixture/build/outputs/apk/debug -maxdepth 1 -type f -name '*.apk' -print -quit)"
+          target_apk="$(find apps/android/build/outputs/apk/debug -maxdepth 1 -type f -name '*.apk' -print -quit)"
+          if [[ -z "$fixture_apk" || -z "$target_apk" ]]; then
+            echo "::error::Expected fixture or target APK was not produced."
+            find apps/android-visibility-fixture/build/outputs/apk apps/android/build/outputs/apk -type f -name '*.apk' -print || true
+            exit 1
+          fi
+          echo "Installing fixture APK: $fixture_apk"
+          adb install -r "$fixture_apk"
+          echo "Installing target APK: $target_apk"
+          adb install -r "$target_apk"
           fixture_path="$(adb shell pm path com.zeusvpn.visibilityfixture | tr -d '\r')"
           target_path="$(adb shell pm path com.zeusvpn.app.diagnostics | tr -d '\r')"
           test -n "$fixture_path"
@@ -220,7 +229,14 @@ jobs:
           echo "Installed target: $target_path"
       - name: Run real PackageManager visibility instrumentation test
         run: |
-          adb install -r apps/android/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk
+          android_test_apk="$(find apps/android/build/outputs/apk/androidTest/debug -maxdepth 1 -type f -name '*.apk' -print -quit)"
+          if [[ -z "$android_test_apk" ]]; then
+            echo "::error::Android instrumentation APK was not produced."
+            find apps/android/build/outputs/apk -type f -name '*.apk' -print || true
+            exit 1
+          fi
+          echo "Installing instrumentation APK: $android_test_apk"
+          adb install -r "$android_test_apk"
           set -o pipefail
           adb shell am instrument -w -e class com.zeusvpn.app.vpn.PackageVisibilityInstrumentedTest com.zeusvpn.app.diagnostics.test/androidx.test.runner.AndroidJUnitRunner | tee zeus-instrumentation.log
           grep -Fq 'OK (1 test)' zeus-instrumentation.log

@@ -158,10 +158,10 @@ jobs:
           fi
           boot_completed=""
           for attempt in $(seq 1 60); do
-            if boot_completed="$(timeout 15s adb shell getprop sys.boot_completed | tr -d '\r')" && [[ "$boot_completed" == "1" ]]; then
+            if boot_completed="$(timeout 2s adb shell getprop sys.boot_completed | tr -d '\r')" && [[ "$boot_completed" == "1" ]]; then
               break
             fi
-            sleep 5
+            sleep 3
           done
           if [[ "$boot_completed" != "1" ]]; then
             echo "Android emulator did not report sys.boot_completed=1 within 5 minutes."

@@ -122,3 +122,8 @@ These must be resolved from repository and deployment evidence before coding the
 - How existing invitation-only devices transition to device-bound gateway authentication.
 
 Until these decisions and tests are complete, the existing embedded-Tor branch is a development foundation only; it is not server-enforced access control.
+
+
+## AWS platform decision (2026-11-22)
+
+AWS is selected by the user as the hosting platform. This resolves the platform choice but does not establish the account, region, EC2 target, VPC, security groups, or access path. The exact deployment placement remains pending read-only inventory. Prefer an isolated Tor systemd service alongside WireGuard only if capacity and failure-domain checks pass; otherwise use a separate EC2 instance. WireGuard must remain unchanged. See [tor-aws-gateway-deployment.md](tor-aws-gateway-deployment.md).

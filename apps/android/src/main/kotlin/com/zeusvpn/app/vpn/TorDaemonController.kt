@@ -10,6 +10,7 @@ import android.os.Build
 import android.os.IBinder
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.sync.Mutex
@@ -47,12 +48,12 @@ class TorDaemonController(context: Context) {
 
     val state: StateFlow<TorDaemonState> = mutableState
 
-    private var torService: TorService? = null
+    @Volatile private var torService: TorService? = null
     private var serviceConnection: ServiceConnection? = null
     private var statusReceiver: BroadcastReceiver? = null
     private var isBound = false
-    private var circuitReadyReceived = false
-    private var startup: CompletableDeferred<TorSocksEndpoint>? = null
+    @Volatile private var circuitReadyReceived = false
+    @Volatile private var startup: CompletableDeferred<Unit>? = null
 
     suspend fun start(timeoutMillis: Long = DEFAULT_START_TIMEOUT_MILLIS): TorSocksEndpoint =
         withContext(Dispatchers.IO) {
@@ -71,7 +72,7 @@ class TorDaemonController(context: Context) {
 
                 mutableState.value = TorDaemonState.STARTING
                 circuitReadyReceived = false
-                val ready = CompletableDeferred<TorSocksEndpoint>()
+                val ready = CompletableDeferred<Unit>()
                 startup = ready
 
                 try {
@@ -80,8 +81,21 @@ class TorDaemonController(context: Context) {
                         bindTorService()
                     }
 
-                    val endpoint = withTimeoutOrNull(timeoutMillis) { ready.await() }
-                        ?: throw TorStartupException("Tor did not establish its first circuit before the timeout")
+                    val endpoint = withTimeoutOrNull(timeoutMillis) {
+                        ready.await()
+                        while (true) {
+                            if (mutableState.value == TorDaemonState.FAILED) {
+                                throw TorStartupException("Tor failed before its SOCKS endpoint became available")
+                            }
+                            val port = torService?.socksPort ?: -1
+                            if (port in VALID_SOCKS_PORT_RANGE) {
+                                return@withTimeoutOrNull TorSocksEndpoint(LOOPBACK_HOST, port)
+                            }
+                            delay(SOCKS_PORT_POLL_INTERVAL_MILLIS)
+                        }
+                        @Suppress("UNREACHABLE_CODE")
+                        throw TorStartupException("Tor SOCKS endpoint polling stopped unexpectedly")
+                    } ?: throw TorStartupException("Tor did not establish a usable SOCKS endpoint before the timeout")
 
                     mutableState.value = TorDaemonState.READY
                     endpoint
@@ -135,9 +149,12 @@ class TorDaemonController(context: Context) {
                             }
                             TorService.STATUS_STOPPING, TorService.STATUS_OFF -> {
                                 when (mutableState.value) {
-                                    TorDaemonState.STARTING -> startup?.completeExceptionally(
-                                        TorStartupException("Tor stopped before a usable circuit was established"),
-                                    )
+                                    TorDaemonState.STARTING -> {
+                                        mutableState.value = TorDaemonState.FAILED
+                                        startup?.completeExceptionally(
+                                            TorStartupException("Tor stopped before a usable circuit was established"),
+                                        )
+                                    }
                                     TorDaemonState.READY -> mutableState.value = TorDaemonState.FAILED
                                     else -> Unit
                                 }
@@ -149,11 +166,10 @@ class TorDaemonController(context: Context) {
                             ?.take(MAX_ERROR_MESSAGE_LENGTH)
                             ?.takeIf(String::isNotBlank)
                         val message = detail ?: "Tor reported an error"
-                        if (mutableState.value == TorDaemonState.READY) {
+                        if (mutableState.value == TorDaemonState.STARTING || mutableState.value == TorDaemonState.READY) {
                             mutableState.value = TorDaemonState.FAILED
-                        } else {
-                            startup?.completeExceptionally(TorStartupException(message))
                         }
+                        startup?.completeExceptionally(TorStartupException(message))
                     }
                 }
             }
@@ -183,9 +199,10 @@ class TorDaemonController(context: Context) {
             override fun onServiceDisconnected(name: ComponentName) {
                 torService = null
                 when (mutableState.value) {
-                    TorDaemonState.STARTING -> startup?.completeExceptionally(
-                        TorStartupException("Tor service disconnected during startup"),
-                    )
+                    TorDaemonState.STARTING -> {
+                        mutableState.value = TorDaemonState.FAILED
+                        startup?.completeExceptionally(TorStartupException("Tor service disconnected during startup"))
+                    }
                     TorDaemonState.READY -> mutableState.value = TorDaemonState.FAILED
                     else -> Unit
                 }
@@ -193,19 +210,17 @@ class TorDaemonController(context: Context) {
 
             override fun onBindingDied(name: ComponentName) {
                 torService = null
-                if (mutableState.value == TorDaemonState.READY) {
+                if (mutableState.value == TorDaemonState.STARTING || mutableState.value == TorDaemonState.READY) {
                     mutableState.value = TorDaemonState.FAILED
-                } else {
-                    startup?.completeExceptionally(TorStartupException("Tor service binding died"))
                 }
+                startup?.completeExceptionally(TorStartupException("Tor service binding died"))
             }
 
             override fun onNullBinding(name: ComponentName) {
-                if (mutableState.value == TorDaemonState.READY) {
+                if (mutableState.value == TorDaemonState.STARTING || mutableState.value == TorDaemonState.READY) {
                     mutableState.value = TorDaemonState.FAILED
-                } else {
-                    startup?.completeExceptionally(TorStartupException("Tor service returned a null binding"))
                 }
+                startup?.completeExceptionally(TorStartupException("Tor service returned a null binding"))
             }
         }
         serviceConnection = connection
@@ -218,13 +233,12 @@ class TorDaemonController(context: Context) {
     }
 
     private fun completeStartupIfReady() {
-        if (!circuitReadyReceived) return
-        val port = torService?.socksPort ?: return
-        if (port !in VALID_SOCKS_PORT_RANGE) {
-            startup?.completeExceptionally(TorStartupException("Tor reported an invalid SOCKS port"))
-            return
+        if (circuitReadyReceived) {
+            // TorService can announce its first circuit just before its control
+            // thread publishes the SOCKS port. start() polls that port under the
+            // same bounded timeout instead of failing on this ordering race.
+            startup?.complete(Unit)
         }
-        startup?.complete(TorSocksEndpoint(LOOPBACK_HOST, port))
     }
 
     private fun cleanupBinding() {
@@ -252,6 +266,7 @@ class TorDaemonController(context: Context) {
         const val MIN_START_TIMEOUT_MILLIS = 15_000L
         const val MAX_START_TIMEOUT_MILLIS = 300_000L
         const val MAX_ERROR_MESSAGE_LENGTH = 240
+        const val SOCKS_PORT_POLL_INTERVAL_MILLIS = 100L
         val VALID_SOCKS_PORT_RANGE = 1..65_535
     }
 }

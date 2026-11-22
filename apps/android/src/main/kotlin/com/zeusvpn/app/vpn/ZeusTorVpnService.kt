@@ -42,10 +42,20 @@ enum class TorVpnServiceState {
  */
 object TorVpnServiceStatus {
     private val mutableState = MutableStateFlow(TorVpnServiceState.STOPPED)
+    private val mutableRestartRequired = MutableStateFlow(false)
     val state: StateFlow<TorVpnServiceState> = mutableState
+    val restartRequired: StateFlow<Boolean> = mutableRestartRequired
 
     internal fun set(value: TorVpnServiceState) {
         mutableState.value = value
+    }
+
+    internal fun requireProcessRestart() {
+        mutableRestartRequired.value = true
+    }
+
+    internal fun clearRestartRequirement() {
+        mutableRestartRequired.value = false
     }
 }
 
@@ -98,6 +108,11 @@ class ZeusTorVpnService : VpnService() {
             return@withLock
         }
 
+        if (TorVpnServiceStatus.restartRequired.value) {
+            TorVpnServiceStatus.set(TorVpnServiceState.FAILED)
+            updateNotification("برای بازیابی امن، برنامه را کامل ببندید و دوباره اجرا کنید")
+            return@withLock
+        }
         TorVpnServiceStatus.set(TorVpnServiceState.STARTING)
         updateNotification("در حال راه‌اندازی Tor و تونل شبکه")
 
@@ -123,7 +138,8 @@ class ZeusTorVpnService : VpnService() {
                 stopForeground(STOP_FOREGROUND_REMOVE)
                 stopSelf()
             } else {
-                updateNotification("خطای توقف موتور؛ منابع شبکه برای جلوگیری از نشت حفظ شده‌اند")
+                TorVpnServiceStatus.requireProcessRestart()
+                updateNotification("خطای توقف موتور؛ برنامه را کامل ببندید و دوباره اجرا کنید")
             }
         }
     }
@@ -147,14 +163,16 @@ class ZeusTorVpnService : VpnService() {
             val hevStopped = runCatching { HevTun2SocksRuntime.stop() }
             if (hevStopped.isFailure) {
                 TorVpnServiceStatus.set(TorVpnServiceState.FAILED)
-                updateNotification("توقف موتور تأیید نشد؛ منابع برای جلوگیری از نشت حفظ شده‌اند")
+                TorVpnServiceStatus.requireProcessRestart()
+                updateNotification("توقف موتور تأیید نشد؛ برنامه را کامل ببندید و دوباره اجرا کنید")
                 return
             }
 
             val torStopped = runCatching { torController?.stop() }
             if (torStopped.isFailure) {
                 TorVpnServiceStatus.set(TorVpnServiceState.FAILED)
-                updateNotification("تونل بسته شد؛ آزادسازی سرویس Tor نیازمند بازیابی است")
+                TorVpnServiceStatus.requireProcessRestart()
+                updateNotification("تونل بسته شد؛ برای بازیابی برنامه را کامل ببندید و دوباره اجرا کنید")
                 stopForeground(STOP_FOREGROUND_REMOVE)
                 stopSelf(startId)
                 return
@@ -231,8 +249,10 @@ class ZeusTorVpnService : VpnService() {
                 if (hevStopped && torStopped) {
                     torController = null
                     TorVpnServiceStatus.set(TorVpnServiceState.STOPPED)
+                    TorVpnServiceStatus.clearRestartRequirement()
                 } else {
                     TorVpnServiceStatus.set(TorVpnServiceState.FAILED)
+                    TorVpnServiceStatus.requireProcessRestart()
                 }
                 serviceScope.cancel()
                 cleanupScope.cancel()

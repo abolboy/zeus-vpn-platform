@@ -41,10 +41,22 @@ class TorStartupException(message: String, cause: Throwable? = null) : Exception
  * This class exposes a local SOCKS endpoint. It does not route Android device
  * traffic through Tor and must not be presented as a connected VPN by itself.
  */
-internal fun parseTorSocksPort(value: String?): Int {
-    val listener = value?.trim()?.trim('"') ?: return -1
-    val port = listener.substringAfterLast(':').toIntOrNull() ?: return -1
-    return port.takeIf { it in 1..65_535 } ?: -1
+internal fun parseTorSocksEndpoint(value: String?): TorSocksEndpoint? {
+    val listener = value?.trim()?.trim('"') ?: return null
+    val separator = listener.lastIndexOf(':')
+    if (separator <= 0) return null
+
+    val host = listener.substring(0, separator).removeSurrounding("[", "]")
+    val loopbackHost = when (host) {
+        "127.0.0.1" -> "127.0.0.1"
+        "::1" -> "::1"
+        else -> return null
+    }
+    val port = listener.substring(separator + 1).toIntOrNull()
+        ?.takeIf { it in 1..65_535 }
+        ?: return null
+
+    return TorSocksEndpoint(loopbackHost, port)
 }
 
 class TorDaemonController(context: Context) {
@@ -68,9 +80,9 @@ class TorDaemonController(context: Context) {
             }
 
             operationMutex.withLock {
-                val existingPort = torService?.socksPort ?: -1
-                if (mutableState.value == TorDaemonState.READY && existingPort in VALID_SOCKS_PORT_RANGE) {
-                    return@withLock TorSocksEndpoint(LOOPBACK_HOST, existingPort)
+                val existingEndpoint = torService?.let(::readLiveSocksEndpoint)
+                if (mutableState.value == TorDaemonState.READY && existingEndpoint != null) {
+                    return@withLock existingEndpoint
                 }
                 if (isBound || statusReceiver != null) {
                     withContext(Dispatchers.Main.immediate) { cleanupBinding() }
@@ -93,9 +105,9 @@ class TorDaemonController(context: Context) {
                             if (mutableState.value == TorDaemonState.FAILED) {
                                 throw TorStartupException("Tor failed before its SOCKS endpoint became available")
                             }
-                            val port = torService?.let(::readLiveSocksPort) ?: -1
-                            if (port in VALID_SOCKS_PORT_RANGE) {
-                                return@withTimeoutOrNull TorSocksEndpoint(LOOPBACK_HOST, port)
+                            val endpoint = torService?.let(::readLiveSocksEndpoint)
+                            if (endpoint != null) {
+                                return@withTimeoutOrNull endpoint
                             }
                             delay(SOCKS_PORT_POLL_INTERVAL_MILLIS)
                         }
@@ -278,12 +290,10 @@ class TorDaemonController(context: Context) {
     }
 
     private companion object {
-        const val LOOPBACK_HOST = "127.0.0.1"
         const val DEFAULT_START_TIMEOUT_MILLIS = 180_000L
         const val MIN_START_TIMEOUT_MILLIS = 15_000L
         const val MAX_START_TIMEOUT_MILLIS = 300_000L
         const val MAX_ERROR_MESSAGE_LENGTH = 240
         const val SOCKS_PORT_POLL_INTERVAL_MILLIS = 100L
-        val VALID_SOCKS_PORT_RANGE = 1..65_535
     }
 }

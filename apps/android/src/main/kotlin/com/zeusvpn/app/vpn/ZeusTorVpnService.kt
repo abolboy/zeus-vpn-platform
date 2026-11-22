@@ -148,7 +148,10 @@ class ZeusTorVpnService : VpnService() {
         val hevStopped = runCatching { HevTun2SocksRuntime.stop() }.isSuccess
         if (!hevStopped) return false
         val torStopped = withContext(NonCancellable) { runCatching { controller.stop() }.isSuccess }
-        if (torStopped) torController = null
+        if (torStopped) {
+            torController = null
+            TorVpnServiceStatus.clearRestartRequirement()
+        }
         return torStopped
     }
 

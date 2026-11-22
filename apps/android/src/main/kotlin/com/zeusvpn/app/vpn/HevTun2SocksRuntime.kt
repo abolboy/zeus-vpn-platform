@@ -147,9 +147,9 @@ object HevTun2SocksRuntime {
 
     /**
      * Stops and joins the native worker before releasing the caller-owned TUN fd.
-     * If the native join fails, descriptor ownership is retained permanently for
- * this process: upstream JNI clears its joinable flag even when pthread_join
- * fails, so a second stop call cannot prove that the native worker has exited.
+     * If the native join fails or JNI throws, descriptor ownership is retained
+ * permanently for this process: upstream JNI clears its joinable flag even when
+ * pthread_join fails, and an exception leaves worker termination unknown.
      */
     suspend fun stop() = withContext(NonCancellable + Dispatchers.IO) {
         mutex.withLock {
@@ -164,12 +164,16 @@ object HevTun2SocksRuntime {
                 return@withLock
             }
 
-            if (!TProxyService.TProxyStopService()) {
-                // Upstream JNI clears its joinable flag even if pthread_join fails.
-                // Do not call stop again or close the descriptor on an unconfirmed join.
+            val stopAttempt = attemptHevNativeStop {
+                TProxyService.TProxyStopService()
+            }
+            if (!stopAttempt.confirmed) {
+                // A false result or a JNI/linkage exception leaves worker termination
+                // unconfirmed. Never retry or close the borrowed TUN descriptor.
                 shutdownUnconfirmed = true
                 throw IllegalStateException(
                     "Hev native shutdown could not be confirmed; TUN descriptor retained until process exit",
+                    stopAttempt.failure,
                 )
             }
 
@@ -211,3 +215,19 @@ internal fun shouldRetainTunDescriptorAfterStartFailure(
     nativeCallEntered: Boolean,
     nativeCallReturned: Boolean,
 ): Boolean = nativeCallEntered && !nativeCallReturned
+
+
+internal data class HevStopAttempt(
+    val confirmed: Boolean,
+    val failure: Throwable? = null,
+)
+
+/** Treat both a negative JNI result and a JNI/linkage exception as unconfirmed stop. */
+internal fun attemptHevNativeStop(stop: () -> Boolean): HevStopAttempt =
+    try {
+        HevStopAttempt(confirmed = stop())
+    } catch (error: Exception) {
+        HevStopAttempt(confirmed = false, failure = error)
+    } catch (error: LinkageError) {
+        HevStopAttempt(confirmed = false, failure = error)
+    }

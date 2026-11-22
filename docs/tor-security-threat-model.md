@@ -35,6 +35,8 @@ Critical: no ZEUS-owned VpnService host currently consumes TorVpnTunnelPolicy. A
 
 High: current app UID exclusion bypasses ZEUS app traffic. Investigate socket protection. Do not claim all-device coverage while bypass remains.
 
+High: the existing TunnelConnectivityChecker uses Proxy.NO_PROXY and makes HTTPS requests from the ZEUS app process. Under the current Tor policy that excludes the ZEUS UID, this probe would use the physical network, not the Tor SOCKS path. It must not be reused as proof of Tor connectivity. Add a SOCKS5 remote-domain probe through the loopback Tor listener and validate the observed exit path; never report Connected from a direct app-process HTTPS check.
+
 High: IPv6 SOCKS behavior and UDP fail-closed behavior are not verified. Configuration alone is insufficient.
 
 High: current enrollment endpoint provisions WireGuard peers. Use the Tor-specific API; never send dummy keys or weaken public-key validation.

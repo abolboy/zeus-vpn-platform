@@ -1,15 +1,14 @@
 package com.zeusvpn.app.vpn
 
-import android.content.BroadcastReceiver
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
-import android.content.IntentFilter
 import android.content.ServiceConnection
-import android.os.Build
 import android.os.IBinder
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -71,9 +70,7 @@ class TorDaemonController(context: Context) {
 
     @Volatile private var torService: TorService? = null
     private var serviceConnection: ServiceConnection? = null
-    private var statusReceiver: BroadcastReceiver? = null
     private var isBound = false
-    @Volatile private var circuitReadyReceived = false
     @Volatile private var startup: CompletableDeferred<Unit>? = null
 
     suspend fun start(timeoutMillis: Long = DEFAULT_START_TIMEOUT_MILLIS): TorSocksEndpoint =
@@ -87,18 +84,15 @@ class TorDaemonController(context: Context) {
                 if (mutableState.value == TorDaemonState.READY && existingEndpoint != null) {
                     return@withLock existingEndpoint
                 }
-                if (isBound || statusReceiver != null) {
                     withContext(Dispatchers.Main.immediate) { cleanupBinding() }
                 }
 
                 mutableState.value = TorDaemonState.STARTING
-                circuitReadyReceived = false
                 val ready = CompletableDeferred<Unit>()
                 startup = ready
 
                 try {
                     withContext(Dispatchers.Main.immediate) {
-                        registerStatusReceiver()
                         bindTorService()
                     }
 
@@ -114,7 +108,6 @@ class TorDaemonController(context: Context) {
                             if (service != null &&
                                 isTorCircuitEstablished(service.getInfo("status/circuit-established"))
                             ) {
-                                circuitReadyReceived = true
                                 ready.complete(Unit)
                             } else {
                                 delay(CIRCUIT_STATUS_POLL_INTERVAL_MILLIS)
@@ -138,9 +131,13 @@ class TorDaemonController(context: Context) {
 
                     mutableState.value = TorDaemonState.READY
                     endpoint
+                } catch (cancelled: CancellationException) {
+                    withContext(NonCancellable + Dispatchers.Main.immediate) { cleanupBinding() }
+                    mutableState.value = TorDaemonState.STOPPED
+                    throw cancelled
                 } catch (error: Exception) {
                     mutableState.value = TorDaemonState.FAILED
-                    withContext(Dispatchers.Main.immediate) { cleanupBinding() }
+                    withContext(NonCancellable + Dispatchers.Main.immediate) { cleanupBinding() }
                     throw error
                 } finally {
                     startup = null
@@ -165,60 +162,6 @@ class TorDaemonController(context: Context) {
                 withContext(Dispatchers.Main.immediate) { cleanupBinding() }
                 mutableState.value = TorDaemonState.STOPPED
             }
-        }
-    }
-
-    private fun registerStatusReceiver() {
-        val filter = IntentFilter().apply {
-            addAction(TorService.ACTION_STATUS)
-            addAction(TorService.ACTION_ERROR)
-        }
-        val receiver = object : BroadcastReceiver() {
-            override fun onReceive(context: Context, intent: Intent) {
-                if (intent.getStringExtra(TorService.EXTRA_SERVICE_PACKAGE_NAME) != appContext.packageName) {
-                    return
-                }
-
-                when (intent.action) {
-                    TorService.ACTION_STATUS -> {
-                        when (intent.getStringExtra(TorService.EXTRA_STATUS)) {
-                            TorService.STATUS_ON -> {
-                                circuitReadyReceived = true
-                                completeStartupIfReady()
-                            }
-                            TorService.STATUS_STOPPING, TorService.STATUS_OFF -> {
-                                when (mutableState.value) {
-                                    TorDaemonState.STARTING -> {
-                                        mutableState.value = TorDaemonState.FAILED
-                                        startup?.completeExceptionally(
-                                            TorStartupException("Tor stopped before a usable circuit was established"),
-                                        )
-                                    }
-                                    TorDaemonState.READY -> mutableState.value = TorDaemonState.FAILED
-                                    else -> Unit
-                                }
-                            }
-                        }
-                    }
-                    TorService.ACTION_ERROR -> {
-                        val detail = intent.getStringExtra(Intent.EXTRA_TEXT)
-                            ?.take(MAX_ERROR_MESSAGE_LENGTH)
-                            ?.takeIf(String::isNotBlank)
-                        val message = detail ?: "Tor reported an error"
-                        if (mutableState.value == TorDaemonState.STARTING || mutableState.value == TorDaemonState.READY) {
-                            mutableState.value = TorDaemonState.FAILED
-                        }
-                        startup?.completeExceptionally(TorStartupException(message))
-                    }
-                }
-            }
-        }
-        statusReceiver = receiver
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            appContext.registerReceiver(receiver, filter, Context.RECEIVER_NOT_EXPORTED)
-        } else {
-            @Suppress("DEPRECATION")
-            appContext.registerReceiver(receiver, filter)
         }
     }
 
@@ -274,22 +217,7 @@ class TorDaemonController(context: Context) {
     private fun readLiveSocksEndpoint(service: TorService): TorSocksEndpoint? =
         parseTorSocksEndpoint(service.getInfo("net/listeners/socks"))
 
-    private fun completeStartupIfReady() {
-        if (circuitReadyReceived) {
-            // TorService can announce its first circuit just before its control
-            // thread publishes the SOCKS port. start() polls that port under the
-            // same bounded timeout instead of failing on this ordering race.
-            startup?.complete(Unit)
-        }
-    }
-
     private fun cleanupBinding() {
-        val receiver = statusReceiver
-        statusReceiver = null
-        if (receiver != null) {
-            runCatching { appContext.unregisterReceiver(receiver) }
-        }
-
         val connection = serviceConnection
         serviceConnection = null
         if (isBound && connection != null) {
@@ -299,14 +227,12 @@ class TorDaemonController(context: Context) {
             isBound = false
         }
         torService = null
-        circuitReadyReceived = false
     }
 
     private companion object {
         const val DEFAULT_START_TIMEOUT_MILLIS = 180_000L
         const val MIN_START_TIMEOUT_MILLIS = 15_000L
         const val MAX_START_TIMEOUT_MILLIS = 300_000L
-        const val MAX_ERROR_MESSAGE_LENGTH = 240
         const val CIRCUIT_STATUS_POLL_INTERVAL_MILLIS = 500L
         const val SOCKS_PORT_POLL_INTERVAL_MILLIS = 100L
     }

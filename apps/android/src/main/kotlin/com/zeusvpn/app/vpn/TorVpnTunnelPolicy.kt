@@ -32,7 +32,7 @@ internal object TorVpnTunnelPolicy {
      * loop back into their own TUN. Consequently, ZEUS app traffic is outside
      * the Tor tunnel and this limitation must be disclosed in the UI.
      */
-    @Throws(java package android.content.pm.PackageManager.NameNotFoundException::class)
+    @Throws(android.content.pm.PackageManager.NameNotFoundException::class)
     fun applyTo(builder: VpnService.Builder, packageName: String) {
         require(packageName.isNotBlank()) { "ZEUS package name must not be blank" }
 

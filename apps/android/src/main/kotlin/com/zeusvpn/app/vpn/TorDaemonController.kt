@@ -1,0 +1,238 @@
+package com.zeusvpn.app.vpn
+
+import android.content.BroadcastReceiver
+import android.content.ComponentName
+import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
+import android.content.ServiceConnection
+import android.os.Build
+import android.os.IBinder
+import androidx.core.content.ContextCompat
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.TimeoutCancellationException
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
+import org.torproject.jni.TorService
+
+data class TorSocksEndpoint(
+    val host: String,
+    val port: Int,
+)
+
+enum class TorDaemonState {
+    STOPPED,
+    STARTING,
+    READY,
+    STOPPING,
+    FAILED,
+}
+
+class TorStartupException(message: String, cause: Throwable? = null) : Exception(message, cause)
+
+/**
+ * Owns the embedded TorService binding and reports readiness only after Tor
+ * announces that its first circuit is established and a valid SOCKS port exists.
+ *
+ * This class exposes a local SOCKS endpoint. It does not route Android device
+ * traffic through Tor and must not be presented as a connected VPN by itself.
+ */
+class TorDaemonController(context: Context) {
+    private val appContext = context.applicationContext
+    private val operationMutex = Mutex()
+    private val mutableState = MutableStateFlow(TorDaemonState.STOPPED)
+
+    val state: StateFlow<TorDaemonState> = mutableState
+
+    private var torService: TorService? = null
+    private var serviceConnection: ServiceConnection? = null
+    private var statusReceiver: BroadcastReceiver? = null
+    private var isBound = false
+    private var circuitReadyReceived = false
+    private var startup: CompletableDeferred<TorSocksEndpoint>? = null
+
+    suspend fun start(timeoutMillis: Long = DEFAULT_START_TIMEOUT_MILLIS): TorSocksEndpoint =
+        withContext(Dispatchers.IO) {
+            require(timeoutMillis in MIN_START_TIMEOUT_MILLIS..MAX_START_TIMEOUT_MILLIS) {
+                "Tor startup timeout is outside the supported range"
+            }
+
+            operationMutex.withLock {
+                val existingPort = torService?.socksPort ?: -1
+                if (mutableState.value == TorDaemonState.READY && existingPort in VALID_SOCKS_PORT_RANGE) {
+                    return@withLock TorSocksEndpoint(LOOPBACK_HOST, existingPort)
+                }
+                if (isBound || statusReceiver != null) {
+                    cleanupBinding()
+                }
+
+                mutableState.value = TorDaemonState.STARTING
+                circuitReadyReceived = false
+                val ready = CompletableDeferred<TorSocksEndpoint>()
+                startup = ready
+
+                try {
+                    withContext(Dispatchers.Main.immediate) {
+                        registerStatusReceiver()
+                        bindTorService()
+                    }
+
+                    val endpoint = withTimeoutOrNull(timeoutMillis) { ready.await() }
+                        ?: throw TorStartupException("Tor did not establish its first circuit before the timeout")
+
+                    mutableState.value = TorDaemonState.READY
+                    endpoint
+                } catch (error: Exception) {
+                    mutableState.value = TorDaemonState.FAILED
+                    withContext(Dispatchers.Main.immediate) { cleanupBinding() }
+                    throw error
+                } finally {
+                    startup = null
+                }
+            }
+        }
+
+    /**
+     * Unbinds the app from TorService. TorService.onDestroy() requests native
+     * Tor shutdown when this was the final binding. The library does not expose
+     * a completion future for native process exit, so STOPPED means the Android
+     * service binding was released, not that native shutdown was independently
+     * observed to completion.
+     */
+    suspend fun stop() = withContext(Dispatchers.IO) {
+        operationMutex.withLock {
+            mutableState.value = TorDaemonState.STOPPING
+            startup?.completeExceptionally(TorStartupException("Tor startup was stopped"))
+            withContext(Dispatchers.Main.immediate) { cleanupBinding() }
+            mutableState.value = TorDaemonState.STOPPED
+        }
+    }
+
+    private fun registerStatusReceiver() {
+        val filter = IntentFilter().apply {
+            addAction(TorService.ACTION_STATUS)
+            addAction(TorService.ACTION_ERROR)
+        }
+        val receiver = object : BroadcastReceiver() {
+            override fun onReceive(context: Context, intent: Intent) {
+                if (intent.getStringExtra(TorService.EXTRA_SERVICE_PACKAGE_NAME) != appContext.packageName) {
+                    return
+                }
+
+                when (intent.action) {
+                    TorService.ACTION_STATUS -> {
+                        when (intent.getStringExtra(TorService.EXTRA_STATUS)) {
+                            TorService.STATUS_ON -> {
+                                circuitReadyReceived = true
+                                completeStartupIfReady()
+                            }
+                            TorService.STATUS_STOPPING, TorService.STATUS_OFF -> {
+                                if (mutableState.value == TorDaemonState.STARTING) {
+                                    startup?.completeExceptionally(
+                                        TorStartupException("Tor stopped before a usable circuit was established"),
+                                    )
+                                }
+                            }
+                        }
+                    }
+                    TorService.ACTION_ERROR -> {
+                        val detail = intent.getStringExtra(Intent.EXTRA_TEXT)
+                            ?.take(MAX_ERROR_MESSAGE_LENGTH)
+                            ?.takeIf(String::isNotBlank)
+                        startup?.completeExceptionally(
+                            TorStartupException(detail ?: "Tor reported a startup error"),
+                        )
+                    }
+                }
+            }
+        }
+        statusReceiver = receiver
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            appContext.registerReceiver(receiver, filter, Context.RECEIVER_NOT_EXPORTED)
+        } else {
+            @Suppress("DEPRECATION")
+            appContext.registerReceiver(receiver, filter)
+        }
+    }
+
+    private fun bindTorService() {
+        val connection = object : ServiceConnection {
+            override fun onServiceConnected(name: ComponentName, binder: IBinder) {
+                val localBinder = binder as? TorService.LocalBinder
+                val connectedService = localBinder?.service
+                if (connectedService == null) {
+                    startup?.completeExceptionally(TorStartupException("Tor service returned an unexpected binder"))
+                    return
+                }
+                torService = connectedService
+                completeStartupIfReady()
+            }
+
+            override fun onServiceDisconnected(name: ComponentName) {
+                torService = null
+                if (mutableState.value == TorDaemonState.STARTING) {
+                    startup?.completeExceptionally(TorStartupException("Tor service disconnected during startup"))
+                }
+            }
+
+            override fun onBindingDied(name: ComponentName) {
+                torService = null
+                startup?.completeExceptionally(TorStartupException("Tor service binding died"))
+            }
+
+            override fun onNullBinding(name: ComponentName) {
+                startup?.completeExceptionally(TorStartupException("Tor service returned a null binding"))
+            }
+        }
+        serviceConnection = connection
+        val intent = Intent(appContext, TorService::class.java)
+        isBound = appContext.bindService(intent, connection, Context.BIND_AUTO_CREATE)
+        if (!isBound) {
+            serviceConnection = null
+            throw TorStartupException("Android refused to bind the embedded Tor service")
+        }
+    }
+
+    private fun completeStartupIfReady() {
+        if (!circuitReadyReceived) return
+        val port = torService?.socksPort ?: return
+        if (port !in VALID_SOCKS_PORT_RANGE) {
+            startup?.completeExceptionally(TorStartupException("Tor reported an invalid SOCKS port"))
+            return
+        }
+        startup?.complete(TorSocksEndpoint(LOOPBACK_HOST, port))
+    }
+
+    private fun cleanupBinding() {
+        val receiver = statusReceiver
+        statusReceiver = null
+        if (receiver != null) {
+            runCatching { appContext.unregisterReceiver(receiver) }
+        }
+
+        val connection = serviceConnection
+        serviceConnection = null
+        if (isBound && connection != null) {
+            isBound = false
+            runCatching { appContext.unbindService(connection) }
+        } else {
+            isBound = false
+        }
+        torService = null
+        circuitReadyReceived = false
+    }
+
+    private companion object {
+        const val LOOPBACK_HOST = "127.0.0.1"
+        const val DEFAULT_START_TIMEOUT_MILLIS = 180_000L
+        const val MIN_START_TIMEOUT_MILLIS = 15_000L
+        const val MAX_START_TIMEOUT_MILLIS = 300_000L
+        const val MAX_ERROR_MESSAGE_LENGTH = 240
+        val VALID_SOCKS_PORT_RANGE = 1..65_535
+    }
+}

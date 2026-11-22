@@ -62,7 +62,12 @@ class TorClientEnrollmentRepository(context: Context) {
         invitationCode: String? = null,
         deviceName: String = Build.MODEL.orEmpty(),
     ): TorClientEnrollmentResult = withContext(Dispatchers.IO) {
-        val cleanInvitation = invitationCode.orEmpty().trim()
+        val suppliedInvitation = invitationCode.orEmpty().trim()
+        val safeName = deviceName.filterNot { it.isISOControl() }.trim()
+            .take(80).ifBlank { "Android device" }
+        val existingPending = loadPending()
+        val cleanInvitation = suppliedInvitation.ifBlank { existingPending?.invitationCode.orEmpty() }
+
         if (cleanInvitation.isNotEmpty() && !isTorInvitationCodeShapeValid(cleanInvitation)) {
             throw TorClientEnrollmentException(
                 "enrollment_code_invalid",
@@ -76,9 +81,7 @@ class TorClientEnrollmentRepository(context: Context) {
             )
         }
 
-        val safeName = deviceName.filterNot { it.isISOControl() }.trim()
-            .take(80).ifBlank { "Android device" }
-        val pending = loadPending() ?: PendingTorEnrollment(
+        val pending = existingPending ?: PendingTorEnrollment(
             invitationCode = cleanInvitation,
             deviceRef = UUID.randomUUID().toString(),
             deviceName = safeName,

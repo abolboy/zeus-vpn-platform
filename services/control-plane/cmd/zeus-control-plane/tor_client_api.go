@@ -187,7 +187,10 @@ func (a *API) handleTorClientEnrollment(w http.ResponseWriter, r *http.Request) 
 		writeError(w, http.StatusBadRequest, "invalid_request", "اطلاعات ثبت دستگاه Tor معتبر نیست", requestID)
 		return
 	}
-	requestHash := sha256.Sum256(requestBody)
+	hashInput := make([]byte, 0, len(requestBody)+len(invitationHash))
+	hashInput = append(hashInput, requestBody...)
+	hashInput = append(hashInput, invitationHash...)
+	requestHash := sha256.Sum256(hashInput)
 	device, replayed, err := store.EnrollTorClientDevice(
 		r.Context(), userID, invitationHash, idempotencyKey, requestHash[:],
 		CreateTorClientDeviceInput{

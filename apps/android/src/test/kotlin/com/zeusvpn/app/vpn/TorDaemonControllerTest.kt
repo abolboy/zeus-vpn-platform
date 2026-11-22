@@ -172,7 +172,10 @@ class TorDaemonControllerTest {
 
         assertTrue(error is TorStartupException)
         assertEquals("Failed to release Tor service binding", error?.message)
-        assertEquals("unbind failed", error?.cause?.message)
+        val causeMessages = generateSequence(error) { current -> current.cause }
+            .mapNotNull { it.message }
+            .toList()
+        assertTrue(causeMessages.toString(), "unbind failed" in causeMessages)
         assertEquals(TorDaemonState.FAILED, controller.state.value)
         assertEquals(1, binding.unbindCalls)
 

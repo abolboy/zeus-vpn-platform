@@ -62,11 +62,13 @@ The handler requires an active account. Current response entitlement is `active`
 
 GET /v1/client/tor/devices/{deviceID}
 - Bearer OIDC: resolve account from verified issuer+subject and scope query to that account.
+- Rate limit: 30 requests per source IP per minute.
 - EnrollmentCode is not accepted for status reads; use the verified account session.
 - Foreign and unknown IDs both return 404 device_not_found.
 
 POST /v1/client/tor/devices/{deviceID}/revoke
 - Bearer OIDC only; account-scoped mutation.
+- Rate limit: 30 requests per source IP per minute.
 - Idempotent; already-revoked device returns 200.
 - Revoked device cannot be reactivated by replaying old idempotency key or invitation.
 
@@ -110,7 +112,7 @@ Use existing safe error envelope and request ID. Never return SQL, stack traces,
 - Scope every read/write to authenticated account in SQL.
 - Use per-account idempotency request hashes and lock account row before quota check.
 - Hash invitation codes at rest; redact Authorization headers; never log tokens/codes.
-- Enrollment body is capped at 8 KiB and decoded with strict JSON validation; enrollment requests are rate-limited by source IP and audit events are recorded.
+- Enrollment body is capped at 8 KiB and decoded with strict JSON validation; enrollment, status and revocation requests are rate-limited by source IP and audit events are recorded.
 - Revocation is atomic; replay cannot restore revoked state.
 - Tor SOCKS/control ports remain loopback-only.
 

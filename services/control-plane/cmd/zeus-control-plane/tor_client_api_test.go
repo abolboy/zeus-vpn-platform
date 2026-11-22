@@ -64,3 +64,36 @@ func TestValidTorClientVersion(t *testing.T) {
 		}
 	}
 }
+
+func TestTorClientEnrollmentFailsClosedWhenCustomerOIDCIsNotConfigured(t *testing.T) {
+	handler := newTestAPI(t, newFakeControlStore(Operator{
+		ID: "8e09c3da-fbac-4b34-9ad0-090e1f8d4c47",
+		Login: "owner", Role: "owner", Status: "active",
+	}))
+	body := []byte(`{"device_ref":"8e09c3da-fbac-4b34-9ad0-090e1f8d4c47","device_name":"ZEUS Android","platform":"android","client_version":"1.0.0"}`)
+	request := httptest.NewRequest(http.MethodPost, "/v1/client/tor/devices", bytes.NewReader(body))
+	request.Header.Set("Authorization", "Bearer not-a-real-token")
+	request.Header.Set("Idempotency-Key", "8e09c3da-fbac-4b34-9ad0-090e1f8d4c47")
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusServiceUnavailable ||
+		!strings.Contains(response.Body.String(), "customer_identity_not_configured") {
+		t.Fatalf("status=%d body=%s; expected fail-closed OIDC configuration error", response.Code, response.Body.String())
+	}
+}
+
+func TestTorClientEnrollmentRequiresIdempotencyKey(t *testing.T) {
+	handler := newTestAPI(t, newFakeControlStore(Operator{
+		ID: "8e09c3da-fbac-4b34-9ad0-090e1f8d4c47",
+		Login: "owner", Role: "owner", Status: "active",
+	}))
+	body := []byte(`{"device_ref":"8e09c3da-fbac-4b34-9ad0-090e1f8d4c47","device_name":"ZEUS Android","platform":"android","client_version":"1.0.0"}`)
+	request := httptest.NewRequest(http.MethodPost, "/v1/client/tor/devices", bytes.NewReader(body))
+	request.Header.Set("Authorization", "Bearer not-a-real-token")
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusBadRequest ||
+		!strings.Contains(response.Body.String(), "idempotency_key_required") {
+		t.Fatalf("status=%d body=%s; expected idempotency key validation", response.Code, response.Body.String())
+	}
+}

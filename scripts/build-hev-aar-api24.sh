@@ -40,11 +40,26 @@ trap cleanup EXIT
 
 ndk_build="$ANDROID_NDK_HOME/ndk-build"
 printf 'Building Hev 2.20.0 for Android API 24 with NDK %s\n' "$ANDROID_NDK_HOME"
+build_log="$tmp_dir/ndk-build.log"
 (
   cd "$HEV_SOURCE_DIR"
   "$ndk_build" clean APP_PLATFORM=android-24 APP_ABI="${ABIS[*]}"
-  "$ndk_build" APP_MODULES=hev-socks5-tunnel APP_PLATFORM=android-24 APP_ABI="${ABIS[*]}" APP_LDFLAGS=-Wl,--no-undefined -j"$(getconf _NPROCESSORS_ONLN)"
+  if ! "$ndk_build" APP_MODULES=hev-socks5-tunnel APP_PLATFORM=android-24 APP_ABI="${ABIS[*]}" APP_LDFLAGS=-Wl,--no-undefined V=1 -j"$(getconf _NPROCESSORS_ONLN)" > "$build_log" 2>&1; then
+    tail -n 160 "$build_log" >&2
+    exit 1
+  fi
 )
+for target in armv7a-linux-androideabi24 aarch64-linux-android24 i686-linux-android24 x86_64-linux-android24; do
+  grep -Fq -- "--target=$target" "$build_log" || {
+    echo "The native build did not prove the API 24 compiler target: $target" >&2
+    tail -n 120 "$build_log" >&2
+    exit 1
+  }
+done
+grep -Fq -- "-Wl,--no-undefined" "$build_log" || {
+  echo "The native link did not use --no-undefined; refusing an incomplete symbol audit" >&2
+  exit 1
+}
 
 llvm_readelf="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-readelf"
 [[ -x "$llvm_readelf" ]] || { echo "llvm-readelf not found in NDK" >&2; exit 1; }

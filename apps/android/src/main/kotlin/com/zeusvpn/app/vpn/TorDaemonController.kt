@@ -221,7 +221,11 @@ class TorDaemonController internal constructor(
                     return@withLock existingEndpoint
                 }
                 if (isBound) {
-                    withContext(mainDispatcher) { cleanupBinding() }
+                    val cleanupError = withContext(mainDispatcher) { cleanupBinding() }
+                    if (cleanupError != null) {
+                        mutableState.value = TorDaemonState.FAILED
+                        throw TorStartupException("Failed to release the previous Tor service binding", cleanupError)
+                    }
                 }
 
                 stopRequested = false
@@ -271,12 +275,18 @@ class TorDaemonController internal constructor(
                     mutableState.value = TorDaemonState.READY
                     endpoint
                 } catch (cancelled: CancellationException) {
-                    withContext(NonCancellable + mainDispatcher) { cleanupBinding() }
-                    mutableState.value = TorDaemonState.STOPPED
+                    val cleanupError = withContext(NonCancellable + mainDispatcher) { cleanupBinding() }
+                    if (cleanupError != null) {
+                        cancelled.addSuppressed(cleanupError)
+                        mutableState.value = TorDaemonState.FAILED
+                    } else {
+                        mutableState.value = TorDaemonState.STOPPED
+                    }
                     throw cancelled
                 } catch (error: Exception) {
+                    val cleanupError = withContext(NonCancellable + mainDispatcher) { cleanupBinding() }
+                    if (cleanupError != null) error.addSuppressed(cleanupError)
                     mutableState.value = TorDaemonState.FAILED
-                    withContext(NonCancellable + mainDispatcher) { cleanupBinding() }
                     throw error
                 } finally {
                     startup = null
@@ -296,7 +306,11 @@ class TorDaemonController internal constructor(
         withContext(Dispatchers.IO) {
             operationMutex.withLock {
                 mutableState.value = TorDaemonState.STOPPING
-                withContext(mainDispatcher) { cleanupBinding() }
+                val cleanupError = withContext(mainDispatcher) { cleanupBinding() }
+                if (cleanupError != null) {
+                    mutableState.value = TorDaemonState.FAILED
+                    throw TorStartupException("Failed to release Tor service binding", cleanupError)
+                }
                 mutableState.value = TorDaemonState.STOPPED
             }
         }
@@ -361,12 +375,18 @@ class TorDaemonController internal constructor(
     private fun readLiveSocksEndpoint(service: TorServiceApi): TorSocksEndpoint? =
         parseTorSocksEndpoint(service.getInfo("net/listeners/socks"))
 
-    private fun cleanupBinding() {
+    private fun cleanupBinding(): Exception? {
+        var cleanupError: Exception? = null
         if (isBound) {
             isBound = false
-            runCatching { serviceBinding.unbind() }
+            try {
+                serviceBinding.unbind()
+            } catch (error: Exception) {
+                cleanupError = error
+            }
         }
         torService = null
+        return cleanupError
     }
 
     private companion object {

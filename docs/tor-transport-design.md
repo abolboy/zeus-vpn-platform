@@ -1,26 +1,26 @@
 # ZEUS Tor transport integration design
 
-**Status:** Proposed implementation plan; not a functioning Tor VPN yet.  
+**Status:** Superseded architecture record; Tor is the sole Android client VPN engine by product decision (2026-11-22). Implementation is incomplete; this is not yet a functioning Tor VPN.  
 **Implementation:** PR #28 on `feat/android-tor-transport-pr27`.  
-**Scope:** Android client only. WireGuard remains the default transport and is not removed or modified on servers.
+**Scope:** Android client only. Remove the WireGuard Android backend after the Tor-only service passes acceptance gates. Server-side WireGuard node/control-plane support remains unchanged.
 
 ## Decision
 
-Add Tor as a second, user-selectable transport. Do not run two Android VPN interfaces concurrently. A single transport coordinator owns the connection state and enforces exclusive ownership of Android's `VpnService` TUN interface.
+Tor is the only supported Android VPN transport in the final ZEUS client. Do not implement a WireGuard/Tor selector or parallel engine modes. A ZEUS-owned `VpnService` must own the connection state and the single Android TUN interface.
 
-- WireGuard mode continues to use the existing official `GoBackend`.
+- Remove the Android `GoBackend` dependency and app-side WireGuard engine/profile UI after replacing their provisioning and connection flows with the Tor-only design.
 - Tor mode runs an embedded Tor daemon and exposes a loopback SOCKS5 endpoint.
 - A dedicated, audited TUN-to-SOCKS adapter is required to route Android app traffic into that SOCKS endpoint. The Tor daemon alone is only a local proxy; it does not transparently tunnel all device traffic.
-- The Tor adapter must be integrated into ZEUS's single VPN-service lifecycle, not by starting Orbot's independent VPN service alongside WireGuard. The pinned WireGuard AAR (`1.0.20260102`) contributes `GoBackend.VpnService`. Inspection of the upstream `GoBackend` implementation confirms that `GoBackend` is final, its static VPN-service future is private, `setStateInternal()` starts the hard-coded `GoBackend.VpnService` class, and the backend itself establishes the TUN and detaches its descriptor directly into `wgTurnOn()`. There is no public API to hand that TUN to another engine. **Architecture decision: use a controlled fork of the pinned WireGuard backend as the shared VPN host**, rather than registering a second VPN service or attempting a subclass-only bridge. The fork must preserve the existing WireGuard engine behavior while exposing one serialized TUN-owner interface for either WireGuard or Hev. This fork is a design decision only; it has not yet been implemented or tested.
+- The Tor adapter must be integrated into ZEUS's single VPN-service lifecycle, not by starting Orbot's independent VPN service alongside WireGuard. The pinned WireGuard AAR (`1.0.20260102`) contributes `GoBackend.VpnService`. Inspection of the upstream `GoBackend` implementation confirms that `GoBackend` is final, its static VPN-service future is private, `setStateInternal()` starts the hard-coded `GoBackend.VpnService` class, and the backend itself establishes the TUN and detaches its descriptor directly into `wgTurnOn()`. There is no public API to hand that TUN to another engine. **Superseded:** the WireGuard fork is no longer the selected architecture. Implement a ZEUS-owned `VpnService` directly; do not retain or fork `GoBackend` merely as a host. This service and its TUN lifecycle are not yet implemented or tested.
 - Guardian Project's embedded `TorService` has no `VpnService.protect()` integration. Because it runs under the ZEUS app UID, the Tor VPN builder must exclude the ZEUS package from its TUN (or omit it from an allowlist) so Tor's own outbound sockets reach the physical network instead of looping into the TUN. This also means ZEUS app/control-plane traffic itself bypasses Tor by design. If product requirements later demand tunneling ZEUS's own app traffic, a reviewed per-socket protection hook in Tor's native layer is required.
 
 ## Android component boundaries
 
 1. `TransportCoordinator`: serializes connect, switch, disconnect, and recovery; stops and verifies the current owner before starting another.
-2. `VpnServiceHost`: the single manifest-declared Android VPN service; it owns consent/Always-on lifecycle and hands one TUN descriptor to exactly one engine. It will be provided by the controlled WireGuard backend fork; this host is not yet implemented.
+2. `ZeusVpnService`: the single manifest-declared Android VPN service; it owns consent/Always-on lifecycle and hands one TUN descriptor to Hev. It is not yet implemented.
 3. `TorDaemonController`: owns the embedded Tor daemon lifecycle, readiness, SOCKS endpoint discovery, error propagation, and bounded shutdown.
 4. `TorVpnEngine`: owns the TUN-to-SOCKS native adapter after `VpnServiceHost` transfers the TUN descriptor. It must not claim connected until Tor has a usable circuit and the adapter is forwarding.
-5. `WireGuardEngine`: remains the existing implementation and is called through the coordinator.
+5. No WireGuard Android engine exists in the final client. The server-side WireGuard node remains a separate, unchanged product component.
 6. UI state: `DISCONNECTED / STARTING / CONNECTED / STOPPING / FAILED`, with transport identity and a user-visible failure reason. Never infer internet reachability from daemon startup alone.
 
 ## Routing and leak-prevention requirements
@@ -90,6 +90,12 @@ Add Tor as a second, user-selectable transport. Do not run two Android VPN inter
 - Unit tests, Android build, instrumentation tests, emulator tests, and physical-device tests.
 - Independent external IP and DNS checks, IPv4/IPv6 leak checks, TCP/UDP behavior checks, network handover, process death, and battery/background behavior.
 - Keep the PR Draft until all applicable checks pass. No deployment or server-side changes are part of this work.
+
+## Superseded decisions
+
+- The earlier plan to keep WireGuard as the default Android transport is cancelled.
+- The earlier controlled-fork approach for `GoBackend` is cancelled. ZEUS will own its VPN service directly.
+- The earlier optional WireGuard/Tor transport selector is cancelled. Tor is the only Android VPN engine.
 
 ## Explicit non-goals
 

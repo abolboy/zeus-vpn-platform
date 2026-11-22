@@ -2,6 +2,7 @@ package com.zeusvpn.app.vpn
 
 import org.junit.Assert.assertTrue
 import org.junit.Assert.assertThrows
+import org.junit.Assert.assertFalse
 import org.junit.Test
 
 class HevTorTunnelConfigTest {
@@ -45,5 +46,23 @@ class HevTorTunnelConfigTest {
 
         assertTrue(config.contains("address: '::1'"))
         assertTrue(config.contains("port: 9150"))
+    }
+}
+
+
+class HevTunOwnershipDecisionTest {
+    @Test
+    fun retainsTunWhenJniStartThrowsAfterEntry() {
+        assertTrue(shouldRetainTunDescriptorAfterStartFailure(nativeCallEntered = true, nativeCallReturned = false))
+    }
+
+    @Test
+    fun releasesTunWhenFailureHappensBeforeJniEntry() {
+        assertFalse(shouldRetainTunDescriptorAfterStartFailure(nativeCallEntered = false, nativeCallReturned = false))
+    }
+
+    @Test
+    fun releasesTunWhenJniReturnsDefinitiveResult() {
+        assertFalse(shouldRetainTunDescriptorAfterStartFailure(nativeCallEntered = true, nativeCallReturned = true))
     }
 }

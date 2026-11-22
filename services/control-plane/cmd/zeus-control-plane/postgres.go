@@ -75,11 +75,11 @@ func (s *PostgresStore) Ping(ctx context.Context) error {
 		FROM information_schema.tables
 		WHERE table_schema = 'public'
 		  AND table_name = ANY($1::text[])
-	`, []string{"operators", "operator_sessions", "vpn_users", "vpn_nodes", "vpn_devices", "wireguard_peers", "audit_events", "idempotency_records", "node_commands", "vpn_user_enrollment_codes", "vpn_node_agent_certificates", "client_device_idempotency_records"}).Scan(&count)
+	`, []string{"operators", "operator_sessions", "vpn_users", "vpn_nodes", "vpn_devices", "wireguard_peers", "audit_events", "idempotency_records", "node_commands", "vpn_user_enrollment_codes", "vpn_node_agent_certificates", "client_device_idempotency_records", "tor_client_devices", "tor_client_enrollment_codes"}).Scan(&count)
 	if err != nil {
 		return err
 	}
-	if count != 12 {
+	if count != 14 {
 		return errors.New("database schema is not migrated")
 	}
 	var poolColumns int
@@ -756,9 +756,13 @@ func (s *PostgresStore) createVPNDeviceTx(ctx context.Context, tx pgx.Tx, actorI
 		}
 		var activeDevices int
 		if err := tx.QueryRow(ctx, `
-			SELECT count(*) FROM vpn_devices
-			WHERE user_id = $1::uuid
-			  AND status IN ('provisioning', 'active', 'revoking', 'error')
+			SELECT
+				(SELECT count(*) FROM vpn_devices
+				 WHERE user_id = $1::uuid
+				   AND status IN ('provisioning', 'active', 'revoking', 'error'))
+				+
+				(SELECT count(*) FROM tor_client_devices
+				 WHERE user_id = $1::uuid AND status = 'active')
 		`, userID).Scan(&activeDevices); err != nil {
 			return VPNDevice{}, err
 		}

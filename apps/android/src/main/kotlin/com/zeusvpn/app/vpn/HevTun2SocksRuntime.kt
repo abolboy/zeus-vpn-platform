@@ -4,6 +4,7 @@ import android.content.Context
 import android.os.ParcelFileDescriptor
 import hev.htproxy.TProxyService
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
@@ -110,8 +111,9 @@ object HevTun2SocksRuntime {
                     "The process-wide Hev native tunnel is already running"
                 }
 
-                config = writeConfig(context.applicationContext, endpoint)
-                val configPath = config.absolutePath
+                val createdConfig = writeConfig(context.applicationContext, endpoint)
+                config = createdConfig
+                val configPath = createdConfig.absolutePath
                 val tunFd = tun.fd
                 nativeCallEntered = true
                 val started = TProxyService.TProxyStartService(configPath, tunFd)
@@ -122,7 +124,7 @@ object HevTun2SocksRuntime {
                 }
 
                 activeTun = tun
-                activeConfig = config
+                activeConfig = createdConfig
             } catch (error: Throwable) {
                 if (shouldRetainTunDescriptorAfterStartFailure(nativeCallEntered, nativeCallReturned)) {
                     // JNI may have created a worker before throwing. Keep every resource

@@ -31,13 +31,15 @@ Status: Design review plus account-bound API/schema, Android Tor enrollment repo
 
 ## Severity-ranked release blockers
 
-Critical: no ZEUS-owned VpnService host currently consumes TorVpnTunnelPolicy. A helper is not a working VPN. Do not release or claim VPN protection until packet-level leak tests pass.
+Critical: the ZEUS-owned VpnService host now applies TorVpnTunnelPolicy and starts embedded Tor + Hev, but worker creation is not proof of packet forwarding. No independent remote-domain SOCKS probe or end-to-end TUN-to-SOCKS egress proof has passed. Do not release or claim VPN protection until packet-level leak tests pass.
 
 High: current app UID exclusion bypasses ZEUS app traffic. Investigate socket protection. Do not claim all-device coverage while bypass remains.
 
 High: the existing TunnelConnectivityChecker uses Proxy.NO_PROXY and makes HTTPS requests from the ZEUS app process. Under the current Tor policy that excludes the ZEUS UID, this probe would use the physical network, not the Tor SOCKS path. It must not be reused as proof of Tor connectivity. Add a SOCKS5 remote-domain probe through the loopback Tor listener and validate the observed exit path; never report Connected from a direct app-process HTTPS check.
 
 High: IPv6 SOCKS behavior and UDP fail-closed behavior are not verified. Configuration alone is insufficient.
+
+High: remote Tor-device revocation and account suspension are not enforced by the VPN service. The API exposes customer OIDC self-revoke but no administrator Tor-device revoke/list route; the service start path checks only the locally stored device ID and does not fetch current server status. Invitation-only enrollment cannot use status/revoke endpoints because those require OIDC. Treat remote revocation, inactive-account enforcement and entitlement expiry as NOT IMPLEMENTED until a server-backed policy is designed and tested.
 
 High: the Tor-specific account/device API, additive schema, and Android repository client are implemented in the feature branch, but UI/service integration, CI and database verification are pending. Existing /v1/client/enroll remains WireGuard-specific; never send dummy keys or weaken public-key validation.
 

@@ -14,6 +14,10 @@ Tor is the only supported Android VPN transport in the final ZEUS client. Do not
 - The Tor adapter must be integrated into ZEUS's single VPN-service lifecycle, not by starting Orbot's independent VPN service alongside WireGuard. The pinned WireGuard AAR (`1.0.20260102`) contributes `GoBackend.VpnService`. Inspection of the upstream `GoBackend` implementation confirms that `GoBackend` is final, its static VPN-service future is private, `setStateInternal()` starts the hard-coded `GoBackend.VpnService` class, and the backend itself establishes the TUN and detaches its descriptor directly into `wgTurnOn()`. There is no public API to hand that TUN to another engine. **Superseded:** the WireGuard fork is no longer the selected architecture. Implement a ZEUS-owned `VpnService` directly; do not retain or fork `GoBackend` merely as a host. This service and its TUN lifecycle are not yet implemented or tested.
 - Guardian Project's embedded `TorService` has no `VpnService.protect()` integration. Because it runs under the ZEUS app UID, the Tor VPN builder must exclude the ZEUS package from its TUN (or omit it from an allowlist) so Tor's own outbound sockets reach the physical network instead of looping into the TUN. This also means ZEUS app/control-plane traffic itself bypasses Tor by design. If product requirements later demand tunneling ZEUS's own app traffic, a reviewed per-socket protection hook in Tor's native layer is required.
 
+## API and enrollment boundary
+
+The existing Android enrollment and control-plane client APIs are WireGuard-peer-specific: Android generates a WireGuard key pair, submits its public key, polls for peer activation, and constructs a WireGuard profile. The Tor-only client must not reuse that flow or pretend a Tor circuit has a WireGuard peer. See [Tor-only API contract gap](tor-api-contract-gap.md) for the inspected endpoints, evidence, and the two product-contract options. No API or database migration is authorized or implemented by this review.
+
 ## Current implementation increment (2026-11-22)
 
 - Hev config now explicitly declares IPv4 `198.18.0.1` and IPv6 `fc00::1` TUN addresses.

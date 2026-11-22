@@ -12,6 +12,7 @@ Status: Tor API, additive schema, shared quota logic, Android Tor enrollment rep
 | API validation | Unknown fields including public_key/user_id/node_id | 400 strict-schema rejection | NOT RUN — test added |
 | API validation | Non-Android platform and invalid client version | 400 validation error | NOT RUN — tests added |
 | API security | Account A reads/revokes account B device | 404; no state change | NOT RUN |
+| API abuse control | Tor status/revoke over 30 requests per source IP per minute | 429 with Retry-After | NOT RUN — limiter added |
 | API reliability | Same idempotency key and body | Same device, replay header | NOT RUN |
 | API reliability | Same key, changed body | 409 idempotency_conflict | NOT RUN |
 | API concurrency | Parallel enrollment at max_devices | Never exceed quota across Tor + WG, with shared account-row lock | NOT RUN — SQL implemented; DB test pending |

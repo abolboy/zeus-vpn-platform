@@ -50,7 +50,8 @@ Add Tor as a second, user-selectable transport. Do not run two Android VPN inter
 - [x] Handle startup timeout, startup error, unexpected service stop, binding loss, and stop-during-start at the controller level.
 - [ ] Verify resolved AAR contents and release ABI packaging in an actual Android build.
 - [x] Remove the readiness race by waiting for Tor's first-circuit event and polling the live ControlPort `GETINFO net/listeners/socks` value under the startup deadline; accept loopback IPv4/IPv6 only (static review; build/runtime retest pending).
-- [x] Add unit regression cases for quoted IPv4/IPv6 loopback listeners and rejection of non-loopback or invalid endpoints (execution pending CI).
+- [x] Handle controller rebind to an already-running Tor daemon by polling `GETINFO status/circuit-established` because the original status broadcast is not replayed (static review; build/runtime retest pending).
+- [x] Add unit regression cases for circuit-established status parsing and quoted IPv4/IPv6 loopback listener parsing, including rejection of non-loopback or invalid endpoints (execution pending CI).
 - [ ] Test start, first-circuit readiness, stop-during-start, repeated start/stop, process recreation, and bounded native shutdown on an emulator/device.
 - Keep this gate explicitly labelled **local Tor proxy only**; no VPN-connected claim. The controller cannot independently observe completion of native Tor shutdown after unbinding.
 

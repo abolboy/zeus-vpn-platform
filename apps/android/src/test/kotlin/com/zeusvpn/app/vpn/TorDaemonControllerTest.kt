@@ -117,6 +117,47 @@ class TorDaemonControllerTest {
     }
 
     @Test
+    fun serviceErrorDuringStartupFailsImmediatelyAndReleasesBinding() = runBlocking {
+        val binding = FakeTorServiceBinding(circuitStatus = "0", socksEndpoint = null)
+        val controller = TorDaemonController(binding, DirectDispatcher)
+        val starting = async { runCatching { controller.start() } }
+
+        withTimeout(2_000) { binding.bound.await() }
+        binding.emitError("Tor native startup failed")
+
+        assertTrue(starting.await().isFailure)
+        assertEquals(TorDaemonState.FAILED, controller.state.value)
+        assertEquals(1, binding.unbindCalls)
+    }
+
+    @Test
+    fun unexpectedTorServiceStopDuringStartupFailsAndReleasesBinding() = runBlocking {
+        val binding = FakeTorServiceBinding(circuitStatus = "0", socksEndpoint = null)
+        val controller = TorDaemonController(binding, DirectDispatcher)
+        val starting = async { runCatching { controller.start() } }
+
+        withTimeout(2_000) { binding.bound.await() }
+        binding.emitServiceStopped("STOPPING")
+
+        assertTrue(starting.await().isFailure)
+        assertEquals(TorDaemonState.FAILED, controller.state.value)
+        assertEquals(1, binding.unbindCalls)
+    }
+
+    @Test
+    fun unexpectedTorServiceStopAfterReadinessMarksControllerFailed() = runBlocking {
+        val binding = FakeTorServiceBinding(circuitStatus = "1", socksEndpoint = "\\"127.0.0.1:9050\\"")
+        val controller = TorDaemonController(binding, DirectDispatcher)
+
+        assertEquals(TorSocksEndpoint("127.0.0.1", 9050), controller.start())
+        binding.listener?.onServiceStopped("STOPPING")
+
+        assertEquals(TorDaemonState.FAILED, controller.state.value)
+        controller.stop()
+        assertEquals(TorDaemonState.STOPPED, controller.state.value)
+    }
+
+    @Test
     fun repeatedStartAndStopRebindsExactlyOncePerSession() = runBlocking {
         val binding = FakeTorServiceBinding(circuitStatus = "1", socksEndpoint = "\"127.0.0.1:9050\"")
         val controller = TorDaemonController(binding, DirectDispatcher)
@@ -165,6 +206,14 @@ class TorDaemonControllerTest {
 
         override fun unbind() {
             unbindCalls += 1
+        }
+
+        fun emitError(message: String) {
+            listener?.onError(message)
+        }
+
+        fun emitServiceStopped(status: String) {
+            listener?.onServiceStopped(status)
         }
     }
 

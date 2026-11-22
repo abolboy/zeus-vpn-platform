@@ -147,9 +147,9 @@ private class AndroidTorServiceBinding(context: Context) : TorServiceBinding {
 
     override fun unbind() {
         val connection = serviceConnection
-        serviceConnection = null
         try {
             if (connection != null) appContext.unbindService(connection)
+            serviceConnection = null
         } finally {
             unregisterStatusReceiver()
         }
@@ -378,9 +378,9 @@ class TorDaemonController internal constructor(
     private fun cleanupBinding(): Exception? {
         var cleanupError: Exception? = null
         if (isBound) {
-            isBound = false
             try {
                 serviceBinding.unbind()
+                isBound = false
             } catch (error: Exception) {
                 cleanupError = error
             }

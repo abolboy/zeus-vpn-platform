@@ -83,6 +83,7 @@ class TorDaemonController(context: Context) {
                 val existingEndpoint = torService?.let(::readLiveSocksEndpoint)
                 if (mutableState.value == TorDaemonState.READY && existingEndpoint != null) {
                     return@withLock existingEndpoint
+                }
                 if (isBound) {
                     withContext(Dispatchers.Main.immediate) { cleanupBinding() }
                 }

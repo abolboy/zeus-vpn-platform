@@ -16,6 +16,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.cancelAndJoin
@@ -24,6 +25,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
 
 enum class TorVpnServiceState {
     STOPPED,
@@ -129,7 +131,7 @@ class ZeusTorVpnService : VpnService() {
     private suspend fun cleanupAfterFailedStart(controller: TorDaemonController): Boolean {
         val hevStopped = runCatching { HevTun2SocksRuntime.stop() }.isSuccess
         if (!hevStopped) return false
-        val torStopped = runCatching { controller.stop() }.isSuccess
+        val torStopped = withContext(NonCancellable) { runCatching { controller.stop() }.isSuccess }
         if (torStopped) torController = null
         return torStopped
     }
@@ -216,7 +218,28 @@ class ZeusTorVpnService : VpnService() {
     }
 
     override fun onDestroy() {
-        serviceScope.cancel()
+        if (TorVpnServiceStatus.state.value != TorVpnServiceState.STOPPED) {
+            val cleanupScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+            cleanupScope.launch {
+                runCatching { startJob?.cancelAndJoin() }
+                val hevStopped = runCatching { HevTun2SocksRuntime.stop() }.isSuccess
+                val torStopped = if (hevStopped) {
+                    runCatching { torController?.stop() }.isSuccess
+                } else {
+                    false
+                }
+                if (hevStopped && torStopped) {
+                    torController = null
+                    TorVpnServiceStatus.set(TorVpnServiceState.STOPPED)
+                } else {
+                    TorVpnServiceStatus.set(TorVpnServiceState.FAILED)
+                }
+                serviceScope.cancel()
+                cleanupScope.cancel()
+            }
+        } else {
+            serviceScope.cancel()
+        }
         super.onDestroy()
     }
 

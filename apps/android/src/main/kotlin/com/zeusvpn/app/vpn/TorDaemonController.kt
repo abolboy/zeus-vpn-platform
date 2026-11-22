@@ -66,7 +66,7 @@ class TorDaemonController(context: Context) {
                     return@withLock TorSocksEndpoint(LOOPBACK_HOST, existingPort)
                 }
                 if (isBound || statusReceiver != null) {
-                    cleanupBinding()
+                    withContext(Dispatchers.Main.immediate) { cleanupBinding() }
                 }
 
                 mutableState.value = TorDaemonState.STARTING
@@ -193,11 +193,19 @@ class TorDaemonController(context: Context) {
 
             override fun onBindingDied(name: ComponentName) {
                 torService = null
-                startup?.completeExceptionally(TorStartupException("Tor service binding died"))
+                if (mutableState.value == TorDaemonState.READY) {
+                    mutableState.value = TorDaemonState.FAILED
+                } else {
+                    startup?.completeExceptionally(TorStartupException("Tor service binding died"))
+                }
             }
 
             override fun onNullBinding(name: ComponentName) {
-                startup?.completeExceptionally(TorStartupException("Tor service returned a null binding"))
+                if (mutableState.value == TorDaemonState.READY) {
+                    mutableState.value = TorDaemonState.FAILED
+                } else {
+                    startup?.completeExceptionally(TorStartupException("Tor service returned a null binding"))
+                }
             }
         }
         serviceConnection = connection

@@ -174,6 +174,20 @@ func (s *PostgresStore) EnrollTorClientDevice(
 		}
 	}
 
+	var deviceRefExists bool
+	if err := tx.QueryRow(ctx, `
+		SELECT EXISTS (
+			SELECT 1 FROM vpn_devices WHERE user_id = $1::uuid AND device_ref = $2
+		) OR EXISTS (
+			SELECT 1 FROM tor_client_devices WHERE user_id = $1::uuid AND device_ref = $2
+		)
+	`, userID, input.DeviceRef).Scan(&deviceRefExists); err != nil {
+		return TorClientDevice{}, false, err
+	}
+	if deviceRefExists {
+		return TorClientDevice{}, false, ErrDeviceConflict
+	}
+
 	var activeDevices int
 	if err := tx.QueryRow(ctx, `
 		SELECT
@@ -198,7 +212,8 @@ func (s *PostgresStore) EnrollTorClientDevice(
 
 	device := TorClientDevice{
 		UserID: userID, DeviceRef: input.DeviceRef, DeviceName: input.DeviceName,
-		Platform: "android", ClientVersion: input.ClientVersion, Status: "active",
+		Platform: "android", ClientVersion: input.ClientVersion, Transport: "tor", Status: "active",
+		Entitlement: TorClientEntitlement{Status: "active"},
 	}
 	err = tx.QueryRow(ctx, `
 		INSERT INTO tor_client_devices
@@ -255,7 +270,7 @@ func (s *PostgresStore) EnrollTorClientDevice(
 }
 
 func (s *PostgresStore) GetTorClientDevice(ctx context.Context, userID, deviceID string) (TorClientDevice, error) {
-	var device TorClientDevice
+	device := TorClientDevice{Transport: "tor", Entitlement: TorClientEntitlement{Status: "active"}}
 	err := s.pool.QueryRow(ctx, `
 		SELECT id::text, user_id::text, device_ref, device_name, platform,
 		       client_version, status, created_at, updated_at, revoked_at
@@ -289,7 +304,7 @@ func (s *PostgresStore) RevokeTorClientDevice(ctx context.Context, userID, devic
 	} else if err != nil {
 		return TorClientDevice{}, err
 	}
-	var device TorClientDevice
+	device := TorClientDevice{Transport: "tor", Entitlement: TorClientEntitlement{Status: "active"}}
 	err = tx.QueryRow(ctx, `
 		UPDATE tor_client_devices
 		SET status = 'revoked', revoked_at = COALESCE(revoked_at, now()), updated_at = now()

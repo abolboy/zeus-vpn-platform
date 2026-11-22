@@ -12,6 +12,10 @@ ZEUS will use Tor as the primary and only Android VPN transport. The Android Wir
 
 This authorization applies to the **Android client engine and its packaged dependencies only**. It does not authorize deleting server-side WireGuard node support, changing VPS configuration, deleting peers, changing AWS resources, or altering production services.
 
+## Account and enrollment decision
+
+The Android Tor client is account-bound. Retain verified OIDC identity, account status, shared device limits, administrator-issued Tor invitations, and device revocation. Tor device registration is a transport-specific resource and must not create a WireGuard peer or require WireGuard key material. The API contract is defined in [tor-account-bound-api-v1.md](tor-account-bound-api-v1.md). Existing WireGuard enrollment routes remain intact for compatibility.
+
 ## Architecture decision
 
 Prefer a ZEUS-owned Android `VpnService` over a controlled fork of WireGuard's `GoBackend` if the product is Tor-only.
@@ -72,9 +76,10 @@ This is not a shortcut around VPN engineering. ZEUS must still correctly impleme
 - Remove the WireGuard Android dependency only after all references are migrated and tests pass.
 
 ### API Engineering
-- Preserve existing server/control-plane contracts unless the Android client demonstrably requires a change.
+- Add the documented Tor-specific account/device contract alongside existing WireGuard enrollment routes; do not weaken or repurpose the peer-provisioning API.
+- Enforce account-scoped authorization, shared device quotas, idempotency, invitation one-time use, and revocation atomically.
 - Ensure the client reports transport identity and truthful readiness; Tor daemon readiness alone must never be reported as VPN-connected.
-- Do not add server-side Tor endpoints or change provisioning contracts as part of this client-only migration.
+- Do not add server-side Tor relays or change node provisioning infrastructure.
 
 ### Android Kotlin
 - Implement `VpnService` with consent, foreground notification, sticky/Always-on cold-start behavior, service recreation, and safe stop.

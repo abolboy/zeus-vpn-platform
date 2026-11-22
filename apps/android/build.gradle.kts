@@ -60,6 +60,8 @@ dependencies {
     // Guardian Project's embedded Tor daemon. This is a local SOCKS proxy only;
     // device-wide VPN routing is implemented in a separate, reviewed data-plane layer.
     implementation("info.guardianproject:tor-android:0.4.9.17")
+    // Consume Guardian Project TorService's in-process-only status and error events.
+    implementation("androidx.localbroadcastmanager:localbroadcastmanager:1.1.0")
     coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.0.3")
     implementation("androidx.compose.foundation:foundation")
     implementation("androidx.compose.material3:material3")

@@ -3,6 +3,7 @@ package com.zeusvpn.app.vpn
 import org.junit.Assert.assertTrue
 import org.junit.Assert.assertThrows
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertSame
 import org.junit.Test
 
 class HevTorTunnelConfigTest {
@@ -64,5 +65,32 @@ class HevTunOwnershipDecisionTest {
     @Test
     fun releasesTunWhenJniReturnsDefinitiveResult() {
         assertFalse(shouldRetainTunDescriptorAfterStartFailure(nativeCallEntered = true, nativeCallReturned = true))
+    }
+}
+
+
+class HevNativeStopAttemptTest {
+    @Test
+    fun acceptsOnlyConfirmedNativeStop() {
+        assertTrue(attemptHevNativeStop { true }.confirmed)
+        assertFalse(attemptHevNativeStop { false }.confirmed)
+    }
+
+    @Test
+    fun retainsUnconfirmedStateWhenNativeStopThrowsException() {
+        val failure = IllegalStateException("JNI stop failed")
+        val attempt = attemptHevNativeStop { throw failure }
+
+        assertFalse(attempt.confirmed)
+        assertSame(failure, attempt.failure)
+    }
+
+    @Test
+    fun retainsUnconfirmedStateWhenNativeLibraryLinkageFails() {
+        val failure = UnsatisfiedLinkError("native stop symbol unavailable")
+        val attempt = attemptHevNativeStop { throw failure }
+
+        assertFalse(attempt.confirmed)
+        assertSame(failure, attempt.failure)
     }
 }

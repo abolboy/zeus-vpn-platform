@@ -1,7 +1,7 @@
 # ZEUS Tor device API contract v1
 
 Decision: Account-bound device registration; Tor transport is independent of WireGuard peer provisioning.
-Status: Architecture direction selected; API/database code not yet changed.
+Status: Initial API/database implementation added on the feature branch; CI and disposable-database verification pending. Android client integration is not implemented.
 
 ## Invariants
 
@@ -35,14 +35,14 @@ Request, maximum 16 KiB:
 }
 
 Validation:
-- device_ref: 16..128 characters, random per installation, unique within account across transport types.
+- device_ref: 16..128 characters, random per installation, unique within account across transport types; both enrollment transactions check both device tables while holding the same account-row lock.
 - device_name: 1..80 Unicode characters, existing display-name policy.
 - platform: initially android only.
 - client_version: bounded version/build string; reject control characters and oversized values.
 - Strict JSON decoding; reject unknown fields.
 - No public/private key, IP, node ID, endpoint, or account ID accepted.
 
-Success: 201 Created; identical replay returns 200 OK with Idempotency-Replayed: true; changed body under same key returns 409 idempotency_conflict.
+Success: 201 Created; an identical replay returns the original 201 response with Idempotency-Replayed: true; a changed request or invitation under the same key returns 409 idempotency_conflict.
 
 Response:
 {
@@ -62,7 +62,7 @@ Entitlement is derived from authoritative account state. Null expiry means no fi
 
 GET /v1/client/tor/devices/{deviceID}
 - Bearer OIDC: resolve account from verified issuer+subject and scope query to that account.
-- EnrollmentCode: permit only the hash consumed by this exact device and only during a bounded status window.
+- EnrollmentCode is not accepted for status reads; use the verified account session.
 - Foreign and unknown IDs both return 404 device_not_found.
 
 POST /v1/client/tor/devices/{deviceID}/revoke
@@ -116,7 +116,7 @@ Use existing safe error envelope and request ID. Never return SQL, stack traces,
 
 ## Rollout
 
-1. Add additive migration and store tests; no production migration in this branch.
+1. Additive migration 0008 and initial API/store implementation are in the feature branch; validate migration and quota concurrency against disposable PostgreSQL. No production migration in this branch.
 2. Add new endpoints alongside existing WireGuard routes.
 3. Add contract tests for OIDC, invitation, idempotency, quotas, ownership.
 4. Add Android Tor enrollment without changing existing UI until compile/test gates pass.

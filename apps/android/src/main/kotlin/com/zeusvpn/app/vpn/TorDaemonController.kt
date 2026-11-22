@@ -235,10 +235,10 @@ class TorDaemonController(context: Context) {
     private fun readLiveSocksPort(service: TorService): Int {
         val listener = service.getInfo("net/listeners/socks")
             ?.trim()
-            ?.removeSurrounding("\\\"")
+            ?.removeSurrounding("\"")
             ?: return -1
         return listener.substringAfterLast(':')
-            .trimEnd('\\\"', ']')
+            .trimEnd('"', ']')
             .toIntOrNull()
             ?: -1
     }

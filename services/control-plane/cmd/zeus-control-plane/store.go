@@ -123,18 +123,18 @@ type TorClientEntitlement struct {
 }
 
 type TorClientDevice struct {
-	ID          string               `json:"id"`
-	UserID      string               `json:"-"`
-	DeviceRef   string               `json:"device_ref"`
-	DeviceName  string               `json:"device_name"`
-	Platform    string               `json:"platform"`
-	ClientVersion string             `json:"-"`
-	Transport   string               `json:"transport"`
-	Status      string               `json:"status"`
-	CreatedAt   time.Time            `json:"created_at"`
-	UpdatedAt   time.Time            `json:"-"`
-	RevokedAt   *time.Time           `json:"-"`
-	Entitlement TorClientEntitlement `json:"entitlement"`
+	ID            string               `json:"id"`
+	UserID        string               `json:"-"`
+	DeviceRef     string               `json:"device_ref"`
+	DeviceName    string               `json:"device_name"`
+	Platform      string               `json:"platform"`
+	ClientVersion string               `json:"-"`
+	Transport     string               `json:"transport"`
+	Status        string               `json:"status"`
+	CreatedAt     time.Time            `json:"created_at"`
+	UpdatedAt     time.Time            `json:"-"`
+	RevokedAt     *time.Time           `json:"-"`
+	Entitlement   TorClientEntitlement `json:"entitlement"`
 }
 
 type TorClientStore interface {

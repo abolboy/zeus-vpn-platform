@@ -52,10 +52,16 @@ This is not a shortcut around VPN engineering. ZEUS must still correctly impleme
 3. Before deleting the WireGuard AAR, search every Android source, test, manifest, Gradle file, CI workflow, and packaging rule for imports, JNI/native assets, service declarations, profile formats, and UI assumptions. Record the exact removal set.
 4. The merged debug and release manifests must contain exactly one ZEUS-owned `android.net.VpnService` declaration and no WireGuard `GoBackend.VpnService` declaration.
 5. Tor mode must fail closed. There is no direct-network fallback after Tor is selected.
-6. First milestone is TCP-only. Tor does not provide SOCKS5 UDP ASSOCIATE; UDP must be dropped with no physical-network egress. IPv6 must be explicitly blocked until a verified Tor IPv6 path exists.
+6. First milestone is TCP-only. Tor does not provide SOCKS5 UDP ASSOCIATE; UDP must be dropped with no physical-network egress. The TUN plan is dual-stack (`198.18.0.1` / `fc00::1`) and must route both IPv4 and IPv6 defaults into TUN. Tor IPv6 SOCKS exit support remains unverified; unsupported IPv6 must fail inside the tunnel, never fall back to the physical network.
 7. DNS must use the reviewed fake-DNS/MapDNS mapping and Tor-side hostname resolution. No physical resolver fallback is permitted.
 8. The Tor daemon's own sockets must bypass the TUN to avoid loops. The ZEUS app UID is therefore excluded and is outside Tor protection.
 9. Keep server-side WireGuard node, control-plane, peer, database, and VPS code unchanged unless a separate approved decision requires otherwise.
+
+## Implementation increment recorded on 2026-11-22
+
+- Hev config now explicitly declares the matching IPv4 `198.18.0.1` and IPv6 `fc00::1` tunnel addresses.
+- `TorVpnTunnelPolicy` centralizes the future ZEUS `VpnService.Builder` plan: dual-stack interface addresses/default routes, fake-DNS server, MTU 1500, and exclusion of the ZEUS package to prevent Tor socket loops.
+- Unit tests cover the policy values. The service has not yet consumed this policy; this does not route live device traffic or prove IPv6 SOCKS exit behavior.
 
 ## Implementation sequence and specialist gates
 

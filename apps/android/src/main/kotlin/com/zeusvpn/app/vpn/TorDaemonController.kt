@@ -6,8 +6,8 @@ import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.content.ServiceConnection
-import android.os.Build
 import android.os.IBinder
+import androidx.localbroadcastmanager.content.LocalBroadcastManager
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineDispatcher
@@ -57,6 +57,7 @@ internal interface TorServiceBinding {
 
 private class AndroidTorServiceBinding(context: Context) : TorServiceBinding {
     private val appContext = context.applicationContext
+    private val localBroadcastManager = LocalBroadcastManager.getInstance(appContext)
     private var serviceConnection: ServiceConnection? = null
     private var statusReceiver: BroadcastReceiver? = null
 
@@ -119,12 +120,7 @@ private class AndroidTorServiceBinding(context: Context) : TorServiceBinding {
         }
 
         return try {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                appContext.registerReceiver(receiver, filter, Context.RECEIVER_NOT_EXPORTED)
-            } else {
-                @Suppress("DEPRECATION")
-                appContext.registerReceiver(receiver, filter)
-            }
+            localBroadcastManager.registerReceiver(receiver, filter)
             statusReceiver = receiver
             serviceConnection = connection
 
@@ -162,7 +158,7 @@ private class AndroidTorServiceBinding(context: Context) : TorServiceBinding {
     private fun unregisterStatusReceiver() {
         val receiver = statusReceiver ?: return
         statusReceiver = null
-        appContext.unregisterReceiver(receiver)
+        localBroadcastManager.unregisterReceiver(receiver)
     }
 }
 

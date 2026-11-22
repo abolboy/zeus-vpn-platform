@@ -47,3 +47,26 @@ Required commands (not yet executed for the current API changes):
 - Native compatibility: pinned CI for API 24/28/29 plus actual app runtime matrix.
 
 For every PASS record exact commit, command, environment, exit code, test count and logs. Unexecuted tests remain NOT RUN.
+
+
+## Additional acceptance gates for server-enforced access
+
+The following tests are required for the accepted gateway architecture. All are currently **BLOCKED / NOT RUN** because the gateway, grant API, admin routes, and device-bound invitation exchange have not been implemented.
+
+| Gate | Test | Expected result | Status |
+|---|---|---|---|
+| API | Request gateway grant for active device/account | Short-lived grant scoped to one device and gateway audience | BLOCKED — grant endpoint not implemented |
+| API | Request grant for revoked device, suspended account, expired entitlement | Denied with stable safe error; no grant issued | BLOCKED — runtime entitlement enforcement not implemented |
+| API | Invitation-only enrollment exchanges invitation for device credential | One-time invitation consumed; no long-lived invitation reused | BLOCKED — device-auth exchange not implemented |
+| API security | Replay, wrong audience, expired grant, altered device binding | Gateway rejects each attempt | BLOCKED — gateway not implemented |
+| Admin API | Operator lists devices and revokes selected device | Role-checked, account-scoped, audited, idempotent state transition | BLOCKED — admin routes not implemented |
+| Gateway | Revoked device opens a new proxy session | Denied after documented revocation SLA | BLOCKED — gateway not implemented |
+| Gateway | Device revoked during active proxy sessions | All sessions for that device are terminated within SLA | BLOCKED — session registry/event path not implemented |
+| Gateway | Control-plane/introspection unavailable | New sessions fail closed; no local/direct fallback | BLOCKED — gateway not implemented |
+| Gateway | Gateway process or Tor daemon fails | No direct destination egress; health state is degraded | BLOCKED — gateway not implemented |
+| Transport | Inspect Android-to-gateway wire path | Authenticated encryption; no reusable plaintext SOCKS credentials | BLOCKED — secure transport/adapter not selected |
+| Android | Modified/stale local device state attempts to connect | Gateway rejects revoked/expired device independently of app UI | BLOCKED — gateway not implemented |
+| Privacy | Inspect gateway logs and telemetry | No destination history, SOCKS request content, Tor circuit IDs, or traffic payloads | BLOCKED — gateway not implemented |
+| Data plane | IPv4/IPv6/DNS/UDP/QUIC and physical-interface packet capture | Only supported flows traverse gateway-to-Tor; unsupported traffic fails closed | BLOCKED — gateway not implemented |
+
+Do not mark the existing embedded-Tor client as satisfying these server-enforcement gates. The current client implementation and its exact-HEAD CI checks are separate prerequisites.

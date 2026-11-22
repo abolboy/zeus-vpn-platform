@@ -336,8 +336,10 @@ jobs:
           sdk_root="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}}"
           sdkmanager_path="$(find "$sdk_root/cmdline-tools" -type f -name sdkmanager -print -quit)"
           test -n "$sdkmanager_path"
+          tools_directory="$(dirname "$sdkmanager_path")"
           yes | "$sdkmanager_path" --licenses >/dev/null
           "$sdkmanager_path" --install "platform-tools" "platforms;android-37.2" "build-tools;37.0.0" "ndk;27.2.12479018" "emulator" "${{ matrix.system-image }}"
+          echo "$tools_directory" >> "$GITHUB_PATH"
           echo "$sdk_root/platform-tools" >> "$GITHUB_PATH"
           echo "$sdk_root/emulator" >> "$GITHUB_PATH"
       - name: Checkout pinned Hev 2.20.0 source and submodules

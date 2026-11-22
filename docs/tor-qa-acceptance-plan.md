@@ -12,6 +12,11 @@ Status: Tor API, additive schema, shared quota logic, Android Tor enrollment rep
 | API validation | Unknown fields including public_key/user_id/node_id | 400 strict-schema rejection | NOT RUN — test added |
 | API validation | Non-Android platform and invalid client version | 400 validation error | NOT RUN — tests added |
 | API security | Account A reads/revokes account B device | 404; no state change | NOT RUN |
+| API administration | Admin lists and revokes a lost Tor device | Account-scoped audit record; device status becomes revoked | BLOCKED — endpoint not implemented |
+| VPN authorization | Start with locally stored but server-revoked device ID | Service refuses to start; no TUN or Tor worker | NOT RUN — start path has no server-status preflight |
+| VPN authorization | Start with inactive account or expired entitlement | Fail closed before TUN establishment | BLOCKED — entitlement expiry/runtime enforcement not integrated |
+| Invitation management | Invitation-only enrollment reads/revokes device without OIDC | Explicit supported auth contract; no stuck device | BLOCKED — current status/revoke endpoints require OIDC |
+| Revocation propagation | Admin revokes device while tunnel is active | Client stops within documented revocation window; no direct fallback | BLOCKED — admin revoke and propagation policy not implemented |
 | API abuse control | Tor status/revoke over 30 requests per source IP per minute | 429 with Retry-After | NOT RUN — limiter added |
 | API reliability | Same idempotency key and body | Same device, replay header | NOT RUN |
 | API reliability | Same key, changed body | 409 idempotency_conflict | NOT RUN |

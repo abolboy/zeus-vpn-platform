@@ -81,6 +81,23 @@ class TorDaemonControllerTest {
     }
 
     @Test
+    fun bindFailureAfterPartialRegistrationStillReleasesBinding() = runBlocking {
+        val binding = FakeTorServiceBinding(
+            circuitStatus = "0",
+            socksEndpoint = null,
+            bindFailureAfterRegistration = IllegalStateException("bind failed after receiver registration"),
+        )
+        val controller = TorDaemonController(binding, DirectDispatcher)
+
+        val result = runCatching { controller.start() }
+
+        assertTrue(result.isFailure)
+        assertEquals(TorDaemonState.FAILED, controller.state.value)
+        assertEquals(1, binding.bindCalls)
+        assertEquals(1, binding.unbindCalls)
+    }
+
+    @Test
     fun stopDuringStartupReleasesBindingAndEndsStopped() = runBlocking {
         val binding = FakeTorServiceBinding(circuitStatus = "0", socksEndpoint = null)
         val controller = TorDaemonController(binding, DirectDispatcher)
@@ -229,6 +246,7 @@ class TorDaemonControllerTest {
         private val socksEndpoint: String?,
         private var unbindFailuresRemaining: Int = 0,
         private val unbindFailure: Exception? = null,
+        private val bindFailureAfterRegistration: Exception? = null,
     ) : TorServiceBinding {
         val bound = CompletableDeferred<Unit>()
         val socksPollStarted = CompletableDeferred<Unit>()
@@ -253,6 +271,7 @@ class TorDaemonControllerTest {
                 }
             })
             bound.complete(Unit)
+            bindFailureAfterRegistration?.let { throw it }
             return true
         }
 

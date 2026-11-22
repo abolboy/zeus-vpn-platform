@@ -59,7 +59,7 @@ Add Tor as a second, user-selectable transport. Do not run two Android VPN inter
 
 ### Gate B — TUN-to-SOCKS data plane
 - [x] Review Hev upstream source, MIT license, JNI API, Android AAR packaging, and release ABI assets; identify it as the leading candidate.
-- [x] Add `HevTun2SocksRuntime` with process-wide serialization, private config creation, loopback-only SOCKS validation, and retry-safe TUN descriptor ownership; unit/config and CI verification pending.
+- [x] Add `HevTun2SocksRuntime` with process-wide serialization, private config creation, loopback-only SOCKS validation, and fail-closed TUN descriptor retention if native shutdown cannot be confirmed; unit/config and CI verification pending.
 - [x] Static source review confirms Hev terminates UDP sessions when the SOCKS server returns a non-success response; runtime UDP drop/no-egress test remains required.
 - [x] Verify the uploaded Hev 2.20.0 AAR hash, archive, JNI signatures, R8 rule, and all four ELF ABIs; add a checksum-pinned acquisition script and local AAR dependency (CI build verification pending).
 - [ ] Resolve the single-service integration with `GoBackend.VpnService` (or a controlled backend fork/bridge); do not register a second VPN service until Always-on behavior is verified.

@@ -95,7 +95,7 @@ jobs:
           test -n "$sdkmanager_path"
           yes | "$sdkmanager_path" --licenses >/dev/null
           "$sdkmanager_path" --install "platforms;android-37.2" "build-tools;37.0.0"
-      - name: Build Android app and run unit tests
+      - name: Build Android debug APK
         env:
           ZEUS_API_BASE_URL: ${{ vars.ZEUS_API_BASE_URL }}
           ZEUS_OIDC_ISSUER: ${{ vars.ZEUS_OIDC_ISSUER }}
@@ -117,7 +117,30 @@ jobs:
             exit 1
           fi
 
-          ./gradlew --no-daemon :apps:android:assembleDebug :apps:android:testDebugUnitTest "${build_args[@]}"
+          ./gradlew --no-daemon :apps:android:assembleDebug "${build_args[@]}"
+      - name: Run Android unit tests (including Tor SOCKS endpoint regression tests)
+        env:
+          ZEUS_API_BASE_URL: ${{ vars.ZEUS_API_BASE_URL }}
+          ZEUS_OIDC_ISSUER: ${{ vars.ZEUS_OIDC_ISSUER }}
+          ZEUS_OIDC_CLIENT_ID: ${{ vars.ZEUS_OIDC_CLIENT_ID }}
+        run: |
+          build_args=()
+          if [[ -n "$ZEUS_API_BASE_URL" ]]; then build_args+=("-PZEUS_API_BASE_URL=$ZEUS_API_BASE_URL"); fi
+          if [[ -n "$ZEUS_OIDC_ISSUER" ]]; then build_args+=("-PZEUS_OIDC_ISSUER=$ZEUS_OIDC_ISSUER"); fi
+          if [[ -n "$ZEUS_OIDC_CLIENT_ID" ]]; then build_args+=("-PZEUS_OIDC_CLIENT_ID=$ZEUS_OIDC_CLIENT_ID"); fi
+
+          configured_count=0
+          for value in "$ZEUS_API_BASE_URL" "$ZEUS_OIDC_ISSUER" "$ZEUS_OIDC_CLIENT_ID"; do
+            if [[ -n "$value" ]]; then
+              configured_count=$((configured_count + 1))
+            fi
+          done
+          if [[ "$configured_count" -ne 0 && "$configured_count" -ne 3 ]]; then
+            echo "Set all three ZEUS GitHub repository variables together, or leave all three empty."
+            exit 1
+          fi
+
+          ./gradlew --no-daemon :apps:android:testDebugUnitTest "${build_args[@]}"
       - name: Upload debug APK and unit-test report
         if: success()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2

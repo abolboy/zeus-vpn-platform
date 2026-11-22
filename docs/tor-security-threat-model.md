@@ -1,7 +1,7 @@
 # ZEUS Tor-only client security threat model
 
 Scope: Android Tor client, account-bound API, embedded Tor + Hev + Android TUN.
-Status: Design review plus initial account-bound API/schema and Android Tor enrollment repository. No penetration test, disposable-database concurrency proof, Android service/data-plane test, or live-network validation is claimed.
+Status: Design review plus account-bound API/schema, Android Tor enrollment repository, Tor-only dashboard and ZEUS VpnService host. No penetration test, disposable-database concurrency proof, Android service/data-plane test, or live-network validation is claimed.
 
 ## Assets and trust boundaries
 
@@ -19,7 +19,7 @@ Status: Design review plus initial account-bound API/schema and Android Tor enro
 |---|---|---|
 | Direct-network leak when Tor/Hev fails | Traffic bypasses privacy tunnel | Full default routes for supported families; fail closed; test daemon death, DNS failure, network switch and revoke. |
 | SOCKS/control listener bound to LAN | Local peers can access Tor interfaces | Verify effective Tor config and runtime listeners are loopback only; reject wildcard bind. |
-| Tor app socket loops into its TUN | Tor cannot bootstrap | Protect every Tor upstream socket via VpnService.protect if integration permits. UID exclusion is a temporary compromise and must be disclosed. |
+| Tor app socket loops into its TUN | Tor cannot bootstrap | Protect every Tor upstream socket via VpnService.protect if integration permits. UID exclusion is currently applied by the registered VpnService and disclosed in the Tor-only dashboard; it remains a temporary compromise until socket protection is verified. |
 | IPv6 bypass | IPv6 leaks outside tunnel | Route IPv6 default into TUN; prove Hev and Tor SOCKS IPv6. If unsupported, block inside TUN, never omit route. |
 | UDP bypass | UDP/QUIC exits physical interface | Tor SOCKS5 UDP relay is unsupported; fail inside TUN. Verify with packet capture. |
 | DNS leak/rebinding | Queries reveal destinations or map to hostile addresses | Route DNS through TUN/Hev mapdns; test A/AAAA, synthetic range, cache expiry and no system fallback. |

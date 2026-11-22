@@ -84,7 +84,7 @@ Add tor_client_devices:
 - status constrained to active/revoked;
 - created_at, updated_at, nullable revoked_at;
 - unique (user_id, device_ref);
-- index (user_id, status, created_at).
+- index (user_id, status).
 
 Add the separate `tor_client_enrollment_codes` table; reuse `client_device_idempotency_records` with route `POST:/v1/client/tor/devices`. Do not store Tor IDs in the WireGuard-only invitation FK.
 
@@ -119,8 +119,8 @@ Use existing safe error envelope and request ID. Never return SQL, stack traces,
 1. Additive migration 0008 and initial API/store implementation are in the feature branch; validate migration and quota concurrency against disposable PostgreSQL. No production migration in this branch.
 2. Add new endpoints alongside existing WireGuard routes.
 3. Add contract tests for OIDC, invitation, idempotency, quotas, ownership.
-4. Add Android Tor enrollment without changing existing UI until compile/test gates pass.
-5. Switch Android UI to Tor-only after VpnService + Hev data-plane tests pass.
+4. Android Tor enrollment repository, Tor-only dashboard, and ZEUS-owned VpnService host are present on the draft branch; they are not release-ready.
+5. Verify the VpnService + Hev data plane, SOCKS exit probe, and leak tests before any release or user-facing Connected state.
 6. Remove Android WireGuard dependency only after no references remain and merged manifest/build checks pass.
 7. Keep server-side WireGuard support until separately deprecated.
 

@@ -41,6 +41,12 @@ class TorStartupException(message: String, cause: Throwable? = null) : Exception
  * This class exposes a local SOCKS endpoint. It does not route Android device
  * traffic through Tor and must not be presented as a connected VPN by itself.
  */
+internal fun parseTorSocksPort(value: String?): Int {
+    val listener = value?.trim()?.removeSurrounding("\\\"") ?: return -1
+    val port = listener.substringAfterLast(':').toIntOrNull() ?: return -1
+    return port.takeIf { it in 1..65_535 } ?: -1
+}
+
 class TorDaemonController(context: Context) {
     private val appContext = context.applicationContext
     private val operationMutex = Mutex()

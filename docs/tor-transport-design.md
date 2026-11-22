@@ -23,11 +23,12 @@ Add Tor as a second, user-selectable transport. Do not run two Android VPN inter
 
 ## Routing and leak-prevention requirements
 
-- Tor supports TCP streams, not arbitrary UDP forwarding. Do not silently send unsupported UDP traffic outside the tunnel.
-- DNS requests must be resolved through Tor (remote SOCKS hostname resolution or a reviewed DNS-over-TCP design); local resolver fallback is forbidden in Tor mode.
+- Tor supports TCP streams, not arbitrary UDP forwarding. Tor SOCKS5 does not implement UDP ASSOCIATE or IPv6 CONNECT; unsupported UDP and IPv6 must be dropped inside the tunnel, never sent directly.
+- DNS requests must be resolved through Tor (remote hostname resolution after a controlled fake-DNS mapping, or another reviewed design); local resolver fallback is forbidden in Tor mode. Verify that the chosen adapter never sends DNS to the device's physical resolver.
 - IPv4 and IPv6 policy must be explicit. Until IPv6 is supported through the Tor path, block IPv6 inside Tor mode rather than allowing direct egress.
 - The TUN adapter must have bounded queues, clean cancellation, descriptor ownership, and deterministic shutdown.
-- On startup failure, adapter crash, Tor circuit loss, or transport switch, fail closed: remove/close the TUN and do not restore direct connectivity while Tor mode is selected.
+- On startup failure, adapter crash, Tor circuit loss, or transport switch, fail closed: keep the TUN/service in a drop-only state until teardown is coordinated; never fall back to direct forwarding while Tor mode is selected.
+- A process/service crash can make Android remove the VPN and resume the underlying network unless system lockdown is enabled. For a strict no-leak Tor mode, require Android Always-on VPN with **Block connections without VPN** (lockdown); verify `VpnService.isLockdownEnabled()` on API 29+ and guide the user through system Settings. Do not claim crash-resilient fail-closed protection when lockdown is off.
 - Per-app include/exclude policy must be implemented and tested for Tor separately; do not assume WireGuard profile directives apply to the Tor engine.
 - Do not expose the SOCKS or control port on LAN interfaces. Bind to loopback only.
 
@@ -36,7 +37,7 @@ Add Tor as a second, user-selectable transport. Do not run two Android VPN inter
 - Guardian Project's `tor-android` provides the native Tor daemon and Android `TorService`; it does not by itself implement device-wide VPN routing.
 - The current Maven Central artifact metadata reports `info.guardianproject:tor-android:0.4.9.17`. Pinning and ABI packaging must be verified in CI before adoption.
 - Orbot uses `hev-socks5-tunnel` as a native TUN-to-SOCKS component. Upstream Hev is MIT-licensed and its 2.20.0 release publishes Android ABI artifacts and an AAR with a JNI wrapper. This is the leading candidate, but it is not yet added to ZEUS.
-- Hev supports UDP relay through SOCKS5 UDP ASSOCIATE (UDP-over-UDP or UDP-over-TCP). Tor's SOCKS interface does not support UDP ASSOCIATE, so ZEUS must not copy Orbot's UDP configuration blindly. Before adopting Hev, implement and test a fail-closed UDP policy (including a SOCKS guard that rejects UDP ASSOCIATE or a reviewed native UDP-drop patch), while preserving DNS handling through a controlled fake-DNS/remote-resolution path.
+- Hev supports UDP relay through SOCKS5 UDP ASSOCIATE (UDP-over-UDP or a Hev-specific UDP-over-TCP extension); its documented `socks5.udp` setting selects a relay mode and does not expose a documented `off` value. Tor's SOCKS interface does not support UDP ASSOCIATE, so ZEUS must not copy Orbot's UDP configuration blindly. Before adopting Hev, prove from pinned source and tests that a local SOCKS guard rejecting UDP ASSOCIATE with `REP=0x07` causes Hev to drop those flows without fallback, or maintain a reviewed native UDP-drop patch. Keep MapDNS/fake-DNS inside the tunnel and verify remote hostname resolution; no external DNS fallback is allowed.
 - Do not copy Orbot's VPN service or assume its app-level integration is reusable as a library.
 
 ## Delivery sequence and acceptance gates
@@ -46,15 +47,16 @@ Add Tor as a second, user-selectable transport. Do not run two Android VPN inter
 - [x] Bind to the embedded TorService and wait for its first-circuit-ready status plus a valid loopback SOCKS port.
 - [x] Handle startup timeout, startup error, unexpected service stop, binding loss, and stop-during-start at the controller level.
 - [ ] Verify resolved AAR contents and release ABI packaging in an actual Android build.
+- [x] Remove the readiness race by waiting for Tor's first-circuit event and polling the live ControlPort `GETINFO net/listeners/socks` value under the startup deadline (static review; build/runtime retest pending).
 - [ ] Test start, first-circuit readiness, stop-during-start, repeated start/stop, process recreation, and bounded native shutdown on an emulator/device.
 - Keep this gate explicitly labelled **local Tor proxy only**; no VPN-connected claim. The controller cannot independently observe completion of native Tor shutdown after unbinding.
 
 ### Gate B — TUN-to-SOCKS data plane
 - [x] Review Hev upstream source, MIT license, JNI API, Android AAR packaging, and release ABI assets; identify it as the leading candidate.
-- [ ] Implement a fail-closed UDP policy compatible with Tor SOCKS (Tor does not support UDP ASSOCIATE); do not enable Hev UDP relay directly to Tor.
+- [ ] Prove Hev's behavior when a local SOCKS guard rejects UDP ASSOCIATE; if it does not reliably drop the flow, patch or replace the adapter before integration.
 - [ ] Pin and integrate the selected TUN-to-SOCKS artifact after artifact hash, ABI, JNI and R8 verification.
 - [ ] Integrate one TUN owner with the existing Android VPN consent and foreground-service lifecycle.
-- [ ] Test TCP forwarding, DNS through Tor, UDP blocking, IPv4/IPv6 leak resistance, adapter crash, cancellation, and network handover.
+- [ ] Test TCP forwarding, MapDNS/remote resolution, UDP blocking, IPv4/IPv6 leak resistance, adapter crash, cancellation, network handover, and Android lockdown behavior.
 
 ### Gate C — transport coordinator and UI
 - Add WireGuard / Tor selection, persisted preference, truthful state, and serialized switching.

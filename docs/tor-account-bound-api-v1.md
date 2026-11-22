@@ -1,7 +1,7 @@
 # ZEUS Tor device API contract v1
 
 Decision: Account-bound device registration; Tor transport is independent of WireGuard peer provisioning.
-Status: Initial API/database implementation added on the feature branch; CI and disposable-database verification pending. Android client integration is not implemented.
+Status: Initial API/database implementation and Android Tor enrollment repository are on the feature branch. UI/service integration, CI and disposable-database verification remain pending.
 
 ## Invariants
 

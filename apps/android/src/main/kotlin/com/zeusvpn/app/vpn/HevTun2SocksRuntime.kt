@@ -80,39 +80,64 @@ object HevTun2SocksRuntime {
     private var shutdownUnconfirmed = false
 
     /**
-     * Transfers descriptor lifecycle ownership to this object only on success.
-     * If this method throws, the caller remains responsible for closing [tun].
+     * Takes ownership of [tun] immediately when called. The caller must not close or
+     * reuse it after invocation, including when this suspend call is cancelled.
+     *
+     * On a failure before entering JNI, this runtime closes the descriptor. If the
+     * JNI call throws before returning, native startup state is unknown: retain both
+     * the descriptor and config until process exit rather than risk closing resources
+     * still referenced by a native worker. On a normal false return, JNI confirms
+     * that no worker was created, so the descriptor can be closed safely.
      */
     suspend fun start(
         context: Context,
         tun: ParcelFileDescriptor,
         endpoint: TorSocksEndpoint,
-    ) = withContext(Dispatchers.IO) {
+    ) = withContext(NonCancellable + Dispatchers.IO) {
         mutex.withLock {
-            check(!shutdownUnconfirmed) {
-                "A previous Hev shutdown was not confirmed; restart the app before another TUN session"
-            }
-            check(activeTun == null) { "A Hev TUN session is already owned by ZEUS" }
-            check(tun.fileDescriptor.valid()) { "The supplied TUN descriptor is invalid" }
-            check(!TProxyService.TProxyIsRunning()) {
-                "The process-wide Hev native tunnel is already running"
-            }
+            val descriptorAlreadyOwned = activeTun === tun
+            var config: File? = null
+            var nativeCallEntered = false
+            var nativeCallReturned = false
 
-            val config = writeConfig(context.applicationContext, endpoint)
-            val started = try {
-                TProxyService.TProxyStartService(config.absolutePath, tun.fd)
+            try {
+                check(!shutdownUnconfirmed) {
+                    "A previous Hev shutdown was not confirmed; restart the app before another TUN session"
+                }
+                check(activeTun == null) { "A Hev TUN session is already owned by ZEUS" }
+                check(tun.fileDescriptor.valid()) { "The supplied TUN descriptor is invalid" }
+                check(!TProxyService.TProxyIsRunning()) {
+                    "The process-wide Hev native tunnel is already running"
+                }
+
+                config = writeConfig(context.applicationContext, endpoint)
+                val configPath = config.absolutePath
+                val tunFd = tun.fd
+                nativeCallEntered = true
+                val started = TProxyService.TProxyStartService(configPath, tunFd)
+                nativeCallReturned = true
+
+                if (!started) {
+                    throw IllegalStateException("Hev refused to start its native worker")
+                }
+
+                activeTun = tun
+                activeConfig = config
             } catch (error: Throwable) {
-                config.delete()
+                if (shouldRetainTunDescriptorAfterStartFailure(nativeCallEntered, nativeCallReturned)) {
+                    // JNI may have created a worker before throwing. Keep every resource
+                    // it could reference and block further starts until process exit.
+                    activeTun = tun
+                    activeConfig = config
+                    shutdownUnconfirmed = true
+                } else {
+                    config?.delete()
+                    if (!descriptorAlreadyOwned) {
+                        runCatching { tun.close() }.onFailure(error::addSuppressed)
+                    }
+                }
                 throw error
             }
-
-            if (!started) {
-                config.delete()
-                throw IllegalStateException("Hev refused to start its native worker")
-            }
-
-            activeTun = tun
-            activeConfig = config
         }
     }
 
@@ -122,7 +147,7 @@ object HevTun2SocksRuntime {
  * this process: upstream JNI clears its joinable flag even when pthread_join
  * fails, so a second stop call cannot prove that the native worker has exited.
      */
-    suspend fun stop() = withContext(Dispatchers.IO) {
+    suspend fun stop() = withContext(NonCancellable + Dispatchers.IO) {
         mutex.withLock {
             check(!shutdownUnconfirmed) {
                 "Hev shutdown is unconfirmed; the TUN descriptor must remain open until process exit"
@@ -175,3 +200,10 @@ object HevTun2SocksRuntime {
         return file
     }
 }
+
+
+/** True only when JNI was entered but did not return a definitive start result. */
+internal fun shouldRetainTunDescriptorAfterStartFailure(
+    nativeCallEntered: Boolean,
+    nativeCallReturned: Boolean,
+): Boolean = nativeCallEntered && !nativeCallReturned

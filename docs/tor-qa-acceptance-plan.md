@@ -1,15 +1,15 @@
 # ZEUS Tor-only migration QA acceptance plan
 
-Status: Acceptance plan; execution pending implementation.
+Status: Tor API, additive schema, shared quota logic, and API validation tests are now present on the feature branch. CI and disposable PostgreSQL verification are pending; runtime and Android VPN tests remain unrun.
 
 | Gate | Test | Expected result | Status |
 |---|---|---|---|
-| API | Valid signed OIDC Tor enrollment | 201, transport=tor, no peer object | NOT RUN |
-| API | Wrong issuer/audience, expired token, unverified email | 401 safe error | NOT RUN |
+| API | Valid signed OIDC Tor enrollment | 201, transport=tor, no peer object | NOT RUN — implementation added; test execution pending |
+| API | Wrong issuer/audience, expired token, unverified email | 401 safe error | NOT RUN |\n| API validation | Unknown fields including public_key/user_id/node_id | 400 strict-schema rejection | NOT RUN — test added |\n| API validation | Non-Android platform and invalid client version | 400 validation error | NOT RUN — tests added |
 | API security | Account A reads/revokes account B device | 404; no state change | NOT RUN |
 | API reliability | Same idempotency key and body | Same device, replay header | NOT RUN |
 | API reliability | Same key, changed body | 409 idempotency_conflict | NOT RUN |
-| API concurrency | Parallel enrollment at max_devices | Never exceed quota across Tor + WG | NOT RUN |
+| API concurrency | Parallel enrollment at max_devices | Never exceed quota across Tor + WG, with shared account-row lock | NOT RUN — SQL implemented; DB test pending |
 | Invitation | Valid one-time Tor invitation | One device only; hash stored | NOT RUN |
 | Invitation | Expired/revoked/replayed invitation | Rejected | NOT RUN |
 | Android storage | Inspect pending record | No WG keys; tokens encrypted | NOT RUN |
@@ -27,7 +27,7 @@ Status: Acceptance plan; execution pending implementation.
 
 Existing evidence is not proof of a Tor VPN: previous Hev native compatibility checks established JNI load and an idle native call only. Existing Kotlin tests are unit-level, not VpnService or physical-network tests.
 
-Required commands when implementation is ready:
+Required commands (not yet executed for the current API changes):
 - Android: ./gradlew :apps:android:testDebugUnitTest :apps:android:assembleDebug
 - Android instrumentation: ./gradlew :apps:android:connectedDebugAndroidTest on recorded emulator/device.
 - Control plane: go test ./... from services/control-plane.

@@ -11,16 +11,17 @@ Add Tor as a second, user-selectable transport. Do not run two Android VPN inter
 - WireGuard mode continues to use the existing official `GoBackend`.
 - Tor mode runs an embedded Tor daemon and exposes a loopback SOCKS5 endpoint.
 - A dedicated, audited TUN-to-SOCKS adapter is required to route Android app traffic into that SOCKS endpoint. The Tor daemon alone is only a local proxy; it does not transparently tunnel all device traffic.
-- The Tor adapter must be integrated into ZEUS's single VPN-service lifecycle, not by starting Orbot's independent VPN service alongside WireGuard.
+- The Tor adapter must be integrated into ZEUS's single VPN-service lifecycle, not by starting Orbot's independent VPN service alongside WireGuard. The current WireGuard AAR contributes `GoBackend.VpnService`, and `GoBackend` explicitly starts that nested service class. Do not add a second `android.net.VpnService` component until Always-on resolution and lifecycle ownership are proven. The TUN milestone requires one shared service host (or a controlled WireGuard backend fork/bridge) that can hand the single TUN descriptor to exactly one engine at a time; a simple subclass alone does not redirect GoBackend's explicit service intent.
 - Guardian Project's embedded `TorService` has no `VpnService.protect()` integration. Because it runs under the ZEUS app UID, the Tor VPN builder must exclude the ZEUS package from its TUN (or omit it from an allowlist) so Tor's own outbound sockets reach the physical network instead of looping into the TUN. This also means ZEUS app/control-plane traffic itself bypasses Tor by design. If product requirements later demand tunneling ZEUS's own app traffic, a reviewed per-socket protection hook in Tor's native layer is required.
 
 ## Android component boundaries
 
 1. `TransportCoordinator`: serializes connect, switch, disconnect, and recovery; stops and verifies the current owner before starting another.
-2. `TorDaemonController`: owns the embedded Tor daemon lifecycle, readiness, SOCKS endpoint discovery, error propagation, and bounded shutdown.
-3. `TorVpnEngine`: owns the Android TUN descriptor and the TUN-to-SOCKS native adapter. It must not claim connected until Tor has a usable circuit and the adapter is forwarding.
-4. `WireGuardEngine`: remains the existing implementation and is called through the coordinator.
-5. UI state: `DISCONNECTED / STARTING / CONNECTED / STOPPING / FAILED`, with transport identity and a user-visible failure reason. Never infer internet reachability from daemon startup alone.
+2. `VpnServiceHost`: the single manifest-declared Android VPN service; it owns consent/Always-on lifecycle and hands one TUN descriptor to either the WireGuard backend or Tor adapter. Its integration with the current `GoBackend.VpnService` is an unresolved design gate, not yet implemented.
+3. `TorDaemonController`: owns the embedded Tor daemon lifecycle, readiness, SOCKS endpoint discovery, error propagation, and bounded shutdown.
+4. `TorVpnEngine`: owns the TUN-to-SOCKS native adapter after `VpnServiceHost` transfers the TUN descriptor. It must not claim connected until Tor has a usable circuit and the adapter is forwarding.
+5. `WireGuardEngine`: remains the existing implementation and is called through the coordinator.
+6. UI state: `DISCONNECTED / STARTING / CONNECTED / STOPPING / FAILED`, with transport identity and a user-visible failure reason. Never infer internet reachability from daemon startup alone.
 
 ## Routing and leak-prevention requirements
 
@@ -57,6 +58,7 @@ Add Tor as a second, user-selectable transport. Do not run two Android VPN inter
 - [x] Review Hev upstream source, MIT license, JNI API, Android AAR packaging, and release ABI assets; identify it as the leading candidate.
 - [x] Static source review confirms Hev terminates UDP sessions when the SOCKS server returns a non-success response; runtime UDP drop/no-egress test remains required.
 - [ ] Pin and integrate the selected TUN-to-SOCKS artifact after artifact hash, ABI, JNI and R8 verification.
+- [ ] Resolve the single-service integration with `GoBackend.VpnService` (or a controlled backend fork/bridge); do not register a second VPN service until Always-on behavior is verified.
 - [ ] Integrate one TUN owner with the existing Android VPN consent and foreground-service lifecycle.
 - [ ] Exclude the ZEUS app package from the Tor TUN and verify Tor bootstrap works while Android lockdown is enabled; verify other apps remain inside the TUN.
 - [ ] Test TCP forwarding, MapDNS/remote hostname resolution, UDP ASSOCIATE rejection with no egress, IPv4/IPv6 leak resistance, adapter crash, cancellation, network handover, and Android lockdown behavior.

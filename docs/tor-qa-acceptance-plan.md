@@ -20,6 +20,8 @@ Status: Acceptance plan; execution pending implementation.
 | Data plane | UDP/QUIC | Fails closed; no direct egress | NOT RUN |
 | DNS | A/AAAA lookup and DNS failure | DNS stays in tunnel; no fallback | NOT RUN |
 | UI | Tor ready but TUN/Hev not ready | Not Connected | NOT RUN |
+| Connectivity | Probe through Tor SOCKS using remote-domain SOCKS5 request | Proves Tor path; app UID bypass cannot satisfy the check | NOT RUN |
+| Connectivity negative | Physical-network HTTPS probe while ZEUS UID is excluded | Must not be accepted as Tor connectivity evidence | NOT RUN |
 | Build | Remove Android WG AAR after migration | Debug/release build; one ZEUS VPN service | NOT RUN |
 | Compatibility | API 24, 28, 29 and target API 36/37 | Build/runtime matrix passes | NOT RUN |
 

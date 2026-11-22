@@ -50,12 +50,9 @@ The current Android client also requires the enrollment response to contain a `p
 
 The Tor-only Android transport must not fabricate a WireGuard key, request a WireGuard peer, or wait for WireGuard peer state merely to establish a Tor circuit.
 
-Before changing the enrollment implementation, decide which product contract applies:
+**Decision selected: account-bound Tor transport.** The Android app will retain ZEUS OIDC identity, account status, device limits, invitation onboarding, and revocation. Tor transport registration will be a separate resource and must never trigger WireGuard peer provisioning. This avoids an accountless bypass of subscription/device controls while keeping Tor networking independent from WireGuard.
 
-1. **Accountless Tor transport:** Tor connectivity is independent of customer enrollment. OIDC and device registration remain optional account features; no control-plane schema change is required for the transport itself.
-2. **Account-bound Tor transport:** Introduce a transport-neutral device registration/entitlement contract that records device identity and authorization without requiring a WireGuard key or peer. The existing WireGuard peer provisioning path remains available to server-side/legacy clients but is not called by the Tor Android client.
-
-If option 2 is selected, design a new versioned contract first. It must define:
+The concrete contract is specified in [Tor device API contract v1](tor-account-bound-api-v1.md). The implementation must define:
 - transport identifier (for example, `tor`) and supported client/platform versions;
 - authentication using the existing verified customer OIDC identity or one-time activation code;
 - device ownership and device-limit enforcement;
@@ -79,5 +76,5 @@ Do not repurpose the existing peer-provisioning endpoints or silently make the `
 - A Tor-only Android enrollment path does not generate or persist WireGuard private keys.
 - A Tor-only Android enrollment path does not call Wireguard profile builders or require a `peer` response.
 - Account/device lifecycle tests prove ownership isolation, idempotency, activation expiry, revocation, and bounded retries.
-- The Tor VPN connection can be started and stopped independently of account enrollment if accountless transport is selected.
+- Tor VPN connection lifecycle is independent of device registration state after the account/device entitlement check; revocation must stop or prevent future Tor sessions.
 - No client status says VPN connected until the TUN is established, Hev is active, and an independent end-to-end traffic check passes.

@@ -310,6 +310,105 @@ jobs:
           if-no-files-found: ignore
           retention-days: 7
 
+  android-hev-api-compatibility:
+    name: Hev native compatibility (Android API ${{ matrix.api-level }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - api-level: 24
+            system-image: system-images;android-24;default;x86
+          - api-level: 28
+            system-image: system-images;android-28;default;x86_64
+          - api-level: 29
+            system-image: system-images;android-29;default;x86_64
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-java@77dd5b2ce225ea11469928ac317850245a74ae78 # v6.2.0
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: gradle
+      - name: Install Android SDK, NDK r27d, and API ${{ matrix.api-level }} emulator
+        run: |
+          sdk_root="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}}"
+          sdkmanager_path="$(find "$sdk_root/cmdline-tools" -type f -name sdkmanager -print -quit)"
+          test -n "$sdkmanager_path"
+          yes | "$sdkmanager_path" --licenses >/dev/null
+          "$sdkmanager_path" --install "platform-tools" "platforms;android-37.2" "build-tools;37.0.0" "ndk;27.2.12479018" "emulator" "${{ matrix.system-image }}"
+          echo "$sdk_root/platform-tools" >> "$GITHUB_PATH"
+          echo "$sdk_root/emulator" >> "$GITHUB_PATH"
+      - name: Checkout pinned Hev 2.20.0 source and submodules
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: heiher/hev-socks5-tunnel
+          ref: 75dbc1e9ace6c70d3d1b94df7c283efe1de7effc
+          path: .cache/hev-socks5-tunnel
+          submodules: recursive
+          fetch-depth: 1
+      - name: Build and audit Hev 2.20.0 for Android API 24
+        run: |
+          HEV_SOURCE_DIR="$GITHUB_WORKSPACE/.cache/hev-socks5-tunnel" \
+          ANDROID_NDK_HOME="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}}/ndk/27.2.12479018" \
+          bash scripts/build-hev-aar-api24.sh
+      - name: Grant runner access to KVM
+        run: |
+          if [[ ! -c /dev/kvm ]]; then
+            echo "::error::GitHub runner does not expose KVM for the Android emulator."
+            exit 1
+          fi
+          sudo chown "$USER" /dev/kvm
+          test -r /dev/kvm
+          test -w /dev/kvm
+      - name: Create and boot Android API ${{ matrix.api-level }} emulator
+        run: |
+          export ANDROID_HOME="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}}"
+          export ANDROID_SDK_ROOT="$ANDROID_HOME"
+          export ANDROID_AVD_HOME="$HOME/.android/avd"
+          mkdir -p "$ANDROID_AVD_HOME"
+          avdmanager create avd --force -n "zeus-api${{ matrix.api-level }}" -k "${{ matrix.system-image }}" --device "pixel_2"
+          emulator -avd "zeus-api${{ matrix.api-level }}" -no-window -no-audio -no-boot-anim -gpu swiftshader_indirect -no-snapshot-save > "zeus-emulator-api${{ matrix.api-level }}.log" 2>&1 &
+          timeout 180s adb wait-for-device
+          boot_completed=""
+          for attempt in $(seq 1 60); do
+            if boot_completed="$(timeout 2s adb shell getprop sys.boot_completed | tr -d '\\r')" && [[ "$boot_completed" == "1" ]]; then
+              break
+            fi
+            sleep 3
+          done
+          test "$boot_completed" = "1"
+          adb shell settings put global window_animation_scale 0
+          adb shell settings put global transition_animation_scale 0
+          adb shell settings put global animator_duration_scale 0
+      - name: Build APK and native compatibility instrumentation
+        run: |
+          ./gradlew --no-daemon :apps:android:assembleDebug :apps:android:assembleDebugAndroidTest
+      - name: Install app and instrumentation APKs
+        run: |
+          target_apk="$(find apps/android/build/outputs/apk/debug -maxdepth 1 -type f -name '*.apk' -print -quit)"
+          test_apk="$(find apps/android/build/outputs/apk/androidTest/debug -maxdepth 1 -type f -name '*.apk' -print -quit)"
+          test -n "$target_apk"
+          test -n "$test_apk"
+          adb install -r "$target_apk"
+          adb install -r "$test_apk"
+      - name: Verify Hev JNI loads on API ${{ matrix.api-level }}
+        run: |
+          set -o pipefail
+          adb shell am instrument -w -e class com.zeusvpn.app.vpn.HevNativeCompatibilityInstrumentedTest com.zeusvpn.app.diagnostics.test/androidx.test.runner.AndroidJUnitRunner | tee "hev-native-api${{ matrix.api-level }}.log"
+          grep -Fq 'OK (1 test)' "hev-native-api${{ matrix.api-level }}.log"
+      - name: Upload emulator diagnostics on failure
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: zeus-hev-api${{ matrix.api-level }}-diagnostics
+          path: |
+            zeus-emulator-api${{ matrix.api-level }}.log
+            hev-native-api${{ matrix.api-level }}.log
+          if-no-files-found: ignore
+          retention-days: 7
+
   vpn-node:
     name: VPN node agent and executor tests
     runs-on: ubuntu-latest

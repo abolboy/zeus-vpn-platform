@@ -1,9 +1,12 @@
 package com.zeusvpn.app.vpn
 
+import android.content.BroadcastReceiver
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.content.ServiceConnection
+import android.os.Build
 import android.os.IBinder
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
@@ -44,6 +47,8 @@ internal interface TorServiceBinding {
         fun onDisconnected()
         fun onBindingDied()
         fun onNullBinding()
+        fun onError(message: String)
+        fun onServiceStopped(status: String)
     }
 
     fun bind(listener: Listener): Boolean
@@ -53,9 +58,40 @@ internal interface TorServiceBinding {
 private class AndroidTorServiceBinding(context: Context) : TorServiceBinding {
     private val appContext = context.applicationContext
     private var serviceConnection: ServiceConnection? = null
+    private var statusReceiver: BroadcastReceiver? = null
 
     override fun bind(listener: TorServiceBinding.Listener): Boolean {
         check(serviceConnection == null) { "Tor service is already bound" }
+        check(statusReceiver == null) { "Tor service receiver is already registered" }
+
+        val receiver = object : BroadcastReceiver() {
+            override fun onReceive(context: Context?, intent: Intent?) {
+                if (intent == null ||
+                    intent.getStringExtra(TorService.EXTRA_SERVICE_PACKAGE_NAME) != appContext.packageName
+                ) {
+                    return
+                }
+
+                when (intent.action) {
+                    TorService.ACTION_ERROR -> {
+                        listener.onError(
+                            intent.getStringExtra(Intent.EXTRA_TEXT)
+                                ?: "Tor service reported an unspecified error",
+                        )
+                    }
+                    TorService.ACTION_STATUS -> {
+                        val status = intent.getStringExtra(TorService.EXTRA_STATUS) ?: return
+                        if (status == TorService.STATUS_STOPPING || status == TorService.STATUS_OFF) {
+                            listener.onServiceStopped(status)
+                        }
+                    }
+                }
+            }
+        }
+        val filter = IntentFilter().apply {
+            addAction(TorService.ACTION_ERROR)
+            addAction(TorService.ACTION_STATUS)
+        }
 
         val connection = object : ServiceConnection {
             override fun onServiceConnected(name: ComponentName, binder: IBinder) {
@@ -82,25 +118,51 @@ private class AndroidTorServiceBinding(context: Context) : TorServiceBinding {
             }
         }
 
-        serviceConnection = connection
         return try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                appContext.registerReceiver(receiver, filter, Context.RECEIVER_NOT_EXPORTED)
+            } else {
+                @Suppress("DEPRECATION")
+                appContext.registerReceiver(receiver, filter)
+            }
+            statusReceiver = receiver
+            serviceConnection = connection
+
             appContext.bindService(
                 Intent(appContext, TorService::class.java),
                 connection,
                 Context.BIND_AUTO_CREATE,
             ).also { bound ->
-                if (!bound) serviceConnection = null
+                if (!bound) {
+                    serviceConnection = null
+                    unregisterStatusReceiver()
+                }
             }
         } catch (error: Exception) {
             serviceConnection = null
+            try {
+                unregisterStatusReceiver()
+            } catch (cleanupError: Exception) {
+                error.addSuppressed(cleanupError)
+            }
             throw error
         }
     }
 
     override fun unbind() {
-        val connection = serviceConnection ?: return
+        val connection = serviceConnection
         serviceConnection = null
-        appContext.unbindService(connection)
+        try {
+            if (connection != null) appContext.unbindService(connection)
+        } finally {
+            unregisterStatusReceiver()
+        }
+    }
+
+    private fun unregisterStatusReceiver() {
+        val receiver = statusReceiver ?: return
+        statusReceiver = null
+        appContext.unregisterReceiver(receiver)
     }
 }
 
@@ -277,6 +339,22 @@ class TorDaemonController internal constructor(
                     mutableState.value = TorDaemonState.FAILED
                 }
                 startup?.completeExceptionally(TorStartupException("Tor service returned a null binding"))
+            }
+
+            override fun onError(message: String) {
+                if (mutableState.value == TorDaemonState.STARTING || mutableState.value == TorDaemonState.READY) {
+                    mutableState.value = TorDaemonState.FAILED
+                }
+                startup?.completeExceptionally(TorStartupException(message))
+            }
+
+            override fun onServiceStopped(status: String) {
+                if (mutableState.value == TorDaemonState.STARTING || mutableState.value == TorDaemonState.READY) {
+                    mutableState.value = TorDaemonState.FAILED
+                }
+                startup?.completeExceptionally(
+                    TorStartupException("Tor service entered terminal status: $status"),
+                )
             }
         })
         if (!isBound) {

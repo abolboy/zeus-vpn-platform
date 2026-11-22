@@ -88,6 +88,13 @@ jobs:
           distribution: temurin
           java-version: '17'
           cache: gradle
+      - name: Install Android SDK API 37.2
+        run: |
+          sdk_root="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}}"
+          sdkmanager_path="$(find "$sdk_root/cmdline-tools" -type f -name sdkmanager -print -quit)"
+          test -n "$sdkmanager_path"
+          yes | "$sdkmanager_path" --licenses >/dev/null
+          "$sdkmanager_path" --install "platforms;android-37.2" "build-tools;37.0.0"
       - name: Build Android app and run unit tests
         env:
           ZEUS_API_BASE_URL: ${{ vars.ZEUS_API_BASE_URL }}
@@ -145,7 +152,7 @@ jobs:
           echo "$ANDROID_HOME/emulator" >> "$GITHUB_PATH"
           export PATH="$tools_directory:$ANDROID_HOME/platform-tools:$ANDROID_HOME/emulator:$PATH"
           yes | "$sdkmanager_path" --licenses >/dev/null
-          "$sdkmanager_path" --install "platform-tools" "platforms;android-36" "build-tools;36.0.0" "emulator" "system-images;android-35;google_apis;x86_64"
+          "$sdkmanager_path" --install "platform-tools" "platforms;android-37.2" "build-tools;37.0.0" "emulator" "system-images;android-35;google_apis;x86_64"
       - name: Grant runner access to KVM
         run: |
           sdk_root="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}}"

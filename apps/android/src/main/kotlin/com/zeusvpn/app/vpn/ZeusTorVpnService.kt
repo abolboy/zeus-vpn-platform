@@ -180,6 +180,7 @@ class ZeusTorVpnService : VpnService() {
 
             torController = null
             TorVpnServiceStatus.set(TorVpnServiceState.STOPPED)
+            TorVpnServiceStatus.clearRestartRequirement()
             stopForeground(STOP_FOREGROUND_REMOVE)
             stopSelf(startId)
         }

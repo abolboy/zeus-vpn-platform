@@ -158,10 +158,11 @@ class TorDaemonControllerTest {
     }
 
     @Test
-    fun stopFailureDoesNotReportStopped() = runBlocking {
+    fun stopRetriesTransientBindingCleanupFailure() = runBlocking {
         val binding = FakeTorServiceBinding(
             circuitStatus = "1",
             socksEndpoint = "\"127.0.0.1:9050\"",
+            unbindFailuresRemaining = 1,
             unbindFailure = IllegalStateException("unbind failed"),
         )
         val controller = TorDaemonController(binding, DirectDispatcher)
@@ -174,6 +175,11 @@ class TorDaemonControllerTest {
         assertEquals("unbind failed", error?.cause?.message)
         assertEquals(TorDaemonState.FAILED, controller.state.value)
         assertEquals(1, binding.unbindCalls)
+
+        controller.stop()
+
+        assertEquals(2, binding.unbindCalls)
+        assertEquals(TorDaemonState.STOPPED, controller.state.value)
     }
 
     @Test
@@ -196,6 +202,7 @@ class TorDaemonControllerTest {
     private class FakeTorServiceBinding(
         private val circuitStatus: String,
         private val socksEndpoint: String?,
+        private var unbindFailuresRemaining: Int = 0,
         private val unbindFailure: Exception? = null,
     ) : TorServiceBinding {
         val bound = CompletableDeferred<Unit>()
@@ -226,7 +233,10 @@ class TorDaemonControllerTest {
 
         override fun unbind() {
             unbindCalls += 1
-            unbindFailure?.let { throw it }
+            if (unbindFailuresRemaining > 0) {
+                unbindFailuresRemaining -= 1
+                throw unbindFailure ?: IllegalStateException("unbind failed")
+            }
         }
 
         fun emitError(message: String) {

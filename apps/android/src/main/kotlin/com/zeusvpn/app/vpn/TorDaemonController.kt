@@ -330,6 +330,9 @@ class TorDaemonController internal constructor(
     }
 
     private fun bindTorService() {
+        // bind() may allocate a receiver/connection and then throw before returning.
+        // Mark it as potentially owned first so the startup failure path retries cleanup.
+        isBound = true
         isBound = serviceBinding.bind(object : TorServiceBinding.Listener {
             override fun onConnected(service: TorServiceApi) {
                 torService = service

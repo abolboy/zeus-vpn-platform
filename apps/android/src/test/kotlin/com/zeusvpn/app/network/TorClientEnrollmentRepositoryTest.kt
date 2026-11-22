@@ -8,7 +8,7 @@ class TorClientEnrollmentRepositoryTest {
     @Test
     fun acceptsOnlyFortyThreeCharacterBase64UrlInvitationCodes() {
         assertTrue(isTorInvitationCodeShapeValid("A".repeat(43)))
-        assertTrue(isTorInvitationCodeShapeValid("abcdefghijklmnopqrstuvwxyzABCDEFG-0123456789"))
+        assertTrue(isTorInvitationCodeShapeValid("abcdefghijklmnopqrstuvwxyzABCDEFG-012345678"))
         assertFalse(isTorInvitationCodeShapeValid("A".repeat(42)))
         assertFalse(isTorInvitationCodeShapeValid("A".repeat(44)))
         assertFalse(isTorInvitationCodeShapeValid("A".repeat(42) + "="))

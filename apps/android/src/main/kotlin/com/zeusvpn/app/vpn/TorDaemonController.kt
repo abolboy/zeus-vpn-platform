@@ -102,12 +102,16 @@ class TorDaemonController(context: Context) {
      * service binding was released, not that native shutdown was independently
      * observed to completion.
      */
-    suspend fun stop() = withContext(Dispatchers.IO) {
-        operationMutex.withLock {
-            mutableState.value = TorDaemonState.STOPPING
-            startup?.completeExceptionally(TorStartupException("Tor startup was stopped"))
-            withContext(Dispatchers.Main.immediate) { cleanupBinding() }
-            mutableState.value = TorDaemonState.STOPPED
+    suspend fun stop() {
+        // Complete outside the mutex so stop can interrupt a start() waiting for
+        // the first circuit instead of waiting for the startup timeout.
+        startup?.completeExceptionally(TorStartupException("Tor startup was stopped"))
+        withContext(Dispatchers.IO) {
+            operationMutex.withLock {
+                mutableState.value = TorDaemonState.STOPPING
+                withContext(Dispatchers.Main.immediate) { cleanupBinding() }
+                mutableState.value = TorDaemonState.STOPPED
+            }
         }
     }
 
@@ -130,10 +134,12 @@ class TorDaemonController(context: Context) {
                                 completeStartupIfReady()
                             }
                             TorService.STATUS_STOPPING, TorService.STATUS_OFF -> {
-                                if (mutableState.value == TorDaemonState.STARTING) {
-                                    startup?.completeExceptionally(
+                                when (mutableState.value) {
+                                    TorDaemonState.STARTING -> startup?.completeExceptionally(
                                         TorStartupException("Tor stopped before a usable circuit was established"),
                                     )
+                                    TorDaemonState.READY -> mutableState.value = TorDaemonState.FAILED
+                                    else -> Unit
                                 }
                             }
                         }
@@ -142,9 +148,12 @@ class TorDaemonController(context: Context) {
                         val detail = intent.getStringExtra(Intent.EXTRA_TEXT)
                             ?.take(MAX_ERROR_MESSAGE_LENGTH)
                             ?.takeIf(String::isNotBlank)
-                        startup?.completeExceptionally(
-                            TorStartupException(detail ?: "Tor reported a startup error"),
-                        )
+                        val message = detail ?: "Tor reported an error"
+                        if (mutableState.value == TorDaemonState.READY) {
+                            mutableState.value = TorDaemonState.FAILED
+                        } else {
+                            startup?.completeExceptionally(TorStartupException(message))
+                        }
                     }
                 }
             }
@@ -173,8 +182,12 @@ class TorDaemonController(context: Context) {
 
             override fun onServiceDisconnected(name: ComponentName) {
                 torService = null
-                if (mutableState.value == TorDaemonState.STARTING) {
-                    startup?.completeExceptionally(TorStartupException("Tor service disconnected during startup"))
+                when (mutableState.value) {
+                    TorDaemonState.STARTING -> startup?.completeExceptionally(
+                        TorStartupException("Tor service disconnected during startup"),
+                    )
+                    TorDaemonState.READY -> mutableState.value = TorDaemonState.FAILED
+                    else -> Unit
                 }
             }
 

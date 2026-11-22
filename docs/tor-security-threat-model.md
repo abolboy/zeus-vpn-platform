@@ -41,7 +41,7 @@ High: IPv6 SOCKS behavior and UDP fail-closed behavior are not verified. Configu
 
 High: remote Tor-device revocation and account suspension are not enforced by the VPN service. The API exposes customer OIDC self-revoke but no administrator Tor-device revoke/list route; the service start path checks only the locally stored device ID and does not fetch current server status. Invitation-only enrollment cannot use status/revoke endpoints because those require OIDC. Treat remote revocation, inactive-account enforcement and entitlement expiry as NOT IMPLEMENTED until a server-backed policy is designed and tested.
 
-High: the Tor-specific account/device API, additive schema, and Android repository client are implemented in the feature branch, but UI/service integration, CI and database verification are pending. Existing /v1/client/enroll remains WireGuard-specific; never send dummy keys or weaken public-key validation.
+High: the Tor-specific account/device API, additive schema, Android repository, Tor-only dashboard and ZEUS-owned VpnService host are present on the feature branch. Exact-HEAD CI and disposable-database verification are pending, and the actual TUN-to-SOCKS data plane remains unverified. Existing /v1/client/enroll remains WireGuard-specific; never send dummy keys or weaken public-key validation.
 
 ## Security retest
 

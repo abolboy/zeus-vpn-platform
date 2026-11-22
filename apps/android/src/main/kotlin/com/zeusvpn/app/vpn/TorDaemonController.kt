@@ -149,6 +149,7 @@ class TorDaemonController internal constructor(
     @Volatile private var torService: TorServiceApi? = null
     private var isBound = false
     @Volatile private var startup: CompletableDeferred<Unit>? = null
+    @Volatile private var stopRequested = false
 
     suspend fun start(timeoutMillis: Long = DEFAULT_START_TIMEOUT_MILLIS): TorSocksEndpoint =
         withContext(Dispatchers.IO) {
@@ -165,6 +166,7 @@ class TorDaemonController internal constructor(
                     withContext(mainDispatcher) { cleanupBinding() }
                 }
 
+                stopRequested = false
                 mutableState.value = TorDaemonState.STARTING
                 val ready = CompletableDeferred<Unit>()
                 startup = ready
@@ -192,6 +194,9 @@ class TorDaemonController internal constructor(
                         ready.await()
 
                         while (true) {
+                            if (stopRequested) {
+                                throw TorStartupException("Tor startup was stopped")
+                            }
                             if (mutableState.value == TorDaemonState.FAILED) {
                                 throw TorStartupException("Tor failed before its SOCKS endpoint became available")
                             }
@@ -228,6 +233,7 @@ class TorDaemonController internal constructor(
      */
     suspend fun stop() {
         // Complete outside the mutex so stop can interrupt start() while it waits for a circuit.
+        stopRequested = true
         startup?.completeExceptionally(TorStartupException("Tor startup was stopped"))
         withContext(Dispatchers.IO) {
             operationMutex.withLock {

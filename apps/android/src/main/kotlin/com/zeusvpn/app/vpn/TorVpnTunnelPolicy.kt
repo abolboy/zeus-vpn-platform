@@ -4,7 +4,7 @@ import android.net.VpnService
 
 /**
  * Single source of truth for the addresses and routes shared by Android's TUN
- * and Hev. This policy is applied by the future ZEUS-owned VpnService host.
+ * and Hev. This policy is applied by the ZEUS-owned VpnService host.
  *
  * Both IP families are routed into TUN. If Tor/Hev cannot carry a destination,
  * the flow must fail inside the tunnel; the OS must not receive a direct route

@@ -1,6 +1,6 @@
 # ZEUS Tor-only migration DevOps and rollout plan
 
-Status: Additive migration 0008 and Tor API persistence are committed to the feature branch. CI and disposable-PostgreSQL migration checks are pending. No deployment authorized or performed.
+Status: Additive migration 0008, Tor API persistence, and Android enrollment repository are committed to the feature branch. CI and disposable-PostgreSQL migration checks are pending. No deployment authorized or performed.
 Delivery target: Draft PR #28, branch feat/android-tor-transport-pr27.
 
 ## Environment boundary

@@ -42,7 +42,7 @@ class TorStartupException(message: String, cause: Throwable? = null) : Exception
  * traffic through Tor and must not be presented as a connected VPN by itself.
  */
 internal fun parseTorSocksPort(value: String?): Int {
-    val listener = value?.trim()?.removeSurrounding("\\\"") ?: return -1
+    val listener = value?.trim()?.trim('"') ?: return -1
     val port = listener.substringAfterLast(':').toIntOrNull() ?: return -1
     return port.takeIf { it in 1..65_535 } ?: -1
 }

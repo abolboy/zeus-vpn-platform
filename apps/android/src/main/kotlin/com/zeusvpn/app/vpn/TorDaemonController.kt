@@ -98,9 +98,8 @@ class TorDaemonController(context: Context) {
                     }
 
                     val endpoint = withTimeoutOrNull(timeoutMillis) {
-                        // The status broadcast is not replayed to a newly bound
-                        // controller. Query ControlPort as well so rebinding to an
-                        // already-running Tor daemon can become ready safely.
+                        // Readiness is established exclusively from the live
+                        // ControlPort response; Android broadcasts are not trusted.
                         while (!ready.isCompleted) {
                             if (mutableState.value == TorDaemonState.FAILED) {
                                 throw TorStartupException("Tor failed before establishing its first circuit")

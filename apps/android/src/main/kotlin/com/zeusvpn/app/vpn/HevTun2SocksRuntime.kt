@@ -61,12 +61,14 @@ internal object HevTorTunnelConfig {
 }
 
 /**
- * Owns the TUN ParcelFileDescriptor only after native Hev startup succeeds.
+ * Owns the TUN ParcelFileDescriptor from the moment start() is invoked.
  *
  * Hev's Android JNI receives a borrowed descriptor: upstream tunnel_fini()
  * explicitly leaves externally supplied descriptors to the caller. Therefore
  * this runtime keeps the descriptor open until TProxyStopService() has joined
- * the native worker successfully, then closes it.
+ * the native worker successfully, then closes it. If JNI start throws after
+ * entry, native state is uncertain and the descriptor/config are retained
+ * fail-closed until process exit.
  *
  * A successful start means only that Hev created its worker thread. It does
  * not prove that configuration parsing succeeded or traffic is forwarding.

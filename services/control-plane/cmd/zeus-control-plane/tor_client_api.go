@@ -161,18 +161,19 @@ func (a *API) handleTorClientEnrollment(w http.ResponseWriter, r *http.Request) 
 			return
 		}
 		invitationHash = hash[:]
-		userID, err = store.FindTorEnrollmentCodeUser(r.Context(), invitationHash)
+		resolvedUserID, lookupErr := store.FindTorEnrollmentCodeUser(r.Context(), invitationHash)
+		userID = resolvedUserID
 		switch {
-		case errors.Is(err, ErrEnrollmentCodeExpired):
+		case errors.Is(lookupErr, ErrEnrollmentCodeExpired):
 			writeError(w, http.StatusGone, "enrollment_code_expired", "مهلت دعوت‌نامه پایان یافته است", requestID)
 			return
-		case errors.Is(err, ErrEnrollmentCodeUsed):
+		case errors.Is(lookupErr, ErrEnrollmentCodeUsed):
 			writeError(w, http.StatusConflict, "enrollment_code_used", "این دعوت‌نامه قبلاً مصرف شده است", requestID)
 			return
-		case errors.Is(err, ErrEnrollmentCodeInvalid):
+		case errors.Is(lookupErr, ErrEnrollmentCodeInvalid):
 			writeError(w, http.StatusUnauthorized, "enrollment_code_invalid", "دعوت‌نامه Tor معتبر نیست", requestID)
 			return
-		case err != nil:
+		case lookupErr != nil:
 			a.logger.Error("Tor invitation lookup failed", "request_id", requestID)
 			writeError(w, http.StatusInternalServerError, "enrollment_unavailable", "بررسی دعوت‌نامه انجام نشد", requestID)
 			return

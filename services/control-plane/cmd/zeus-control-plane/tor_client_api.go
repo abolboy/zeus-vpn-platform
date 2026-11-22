@@ -14,9 +14,9 @@ import (
 )
 
 type torClientEnrollmentRequest struct {
-	DeviceRef    string `json:"device_ref"`
-	DeviceName   string `json:"device_name"`
-	Platform     string `json:"platform"`
+	DeviceRef     string `json:"device_ref"`
+	DeviceName    string `json:"device_name"`
+	Platform      string `json:"platform"`
 	ClientVersion string `json:"client_version"`
 }
 

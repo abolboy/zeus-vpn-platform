@@ -133,6 +133,10 @@ func (a *API) handleTorClientEnrollment(w http.ResponseWriter, r *http.Request) 
 		writeError(w, http.StatusUnauthorized, "customer_identity_invalid", "نشست یا دعوت‌نامه معتبر نیست", requestID)
 		return
 	}
+	if strings.EqualFold(scheme, "Bearer") && a.customerVerifier == nil {
+		writeError(w, http.StatusServiceUnavailable, "customer_identity_not_configured", "ورود مشتری هنوز پیکربندی نشده است", requestID)
+		return
+	}
 
 	var userID string
 	var invitationHash []byte

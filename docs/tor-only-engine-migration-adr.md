@@ -126,3 +126,18 @@ This is not a shortcut around VPN engineering. ZEUS must still correctly impleme
 PR #28 currently contains the Tor daemon controller, Hev config/runtime wrapper, and regression tests. It does **not** contain a ZEUS-owned VPN service or a working TUN-to-SOCKS data plane. The latest observed Android build and unit-test job passed, as did Hev JNI compatibility jobs on API 24, 28, and 29. The Package Visibility emulator job was still running at the last check. Therefore the WireGuard Android dependency has **not** been removed, and Tor is **not** yet a functioning VPN mode.
 
 No merge, release, deployment, or production/server-side change is authorized by this ADR.
+
+
+## Addendum — server-enforced ZEUS access (2026-11-22)
+
+The earlier packet-path section describes the **initial local-Tor prototype**, not the final authorization architecture. The accepted security decision is now a mandatory ZEUS-controlled Tor egress gateway as specified in [tor-server-enforced-access-architecture.md](tor-server-enforced-access-architecture.md).
+
+Consequences:
+- Embedded local Tor is not an acceptable security fallback for managed ZEUS access.
+- Hev may remain as the Android TUN-to-SOCKS component only if its upstream can be securely connected to a gateway through an authenticated encrypted local adapter.
+- The official Hev SOCKS5 configuration exposes optional username/password fields, but SOCKS5 authentication alone does not encrypt the network transport. A plaintext remote SOCKS5 connection with reusable credentials is prohibited.
+- The gateway must enforce device/account status independently of APK behavior, terminate active sessions on revocation, and forward only through ZEUS-controlled Tor.
+- This architecture cannot prevent independent use of public Tor or third-party proxies outside ZEUS.
+- Gateway code, grant/admin APIs, Android secure transport adapter, hosting choice, and end-to-end tests remain unimplemented. No deployment is authorized.
+
+The server-enforced gateway ADR supersedes any implication in this document that local embedded Tor alone provides remote revocation or modified-client resistance.

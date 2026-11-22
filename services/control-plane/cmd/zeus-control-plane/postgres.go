@@ -774,6 +774,8 @@ func (s *PostgresStore) createVPNDeviceTx(ctx context.Context, tx pgx.Tx, actorI
 			SELECT EXISTS (
 				SELECT 1 FROM vpn_devices WHERE user_id = $1::uuid AND device_ref = $2
 			) OR EXISTS (
+				SELECT 1 FROM tor_client_devices WHERE user_id = $1::uuid AND device_ref = $2
+			) OR EXISTS (
 				SELECT 1 FROM wireguard_peers WHERE public_key = $3
 			)
 		`, userID, input.DeviceRef, input.PublicKey).Scan(&exists); err != nil {

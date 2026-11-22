@@ -98,3 +98,13 @@ Add Tor as a second, user-selectable transport. Do not run two Android VPN inter
 - Claiming anonymity against global traffic correlation or a compromised endpoint.
 - Supporting arbitrary UDP in Tor mode.
 - Changing AWS, databases, VPN nodes, firewall rules, DNS, customer state, or WireGuard peers.
+
+
+#### Hev 2.20.0 Android minimum SDK compatibility
+
+- **CONFIRMED / HIGH / build blocker:** the pinned Hev 2.20.0 AAR declares `uses-sdk android:minSdkVersion="29"`. The ZEUS Android module currently declares `minSdk = 24`. GitHub Actions fails at `:apps:android:processDebugMainManifest` because 24 is lower than the AAR's 29 requirement. The Android unit-test step is skipped because the build step fails; the package-visibility job also fails during the same app build before instrumentation is run.
+- This is not merely a stale manifest label: the upstream Hev 2.20.0 `Application.mk` also sets `APP_PLATFORM := android-29`, and the upstream Android CI writes `minSdkVersion="29"` into the AAR manifest. Therefore `tools:overrideLibrary` or manually lowering only the manifest would bypass an upstream native API-level contract without proving that the binary runs on API 24–28.
+- Evidence: [upstream Hev 2.20.0 Application.mk](https://github.com/heiher/hev-socks5-tunnel/blob/2.20.0/Application.mk), [upstream Hev 2.20.0 Android CI AAR packaging](https://github.com/heiher/hev-socks5-tunnel/blob/2.20.0/.github/workflows/ci.yml), [upstream Hev 2.20.0 JNI binding](https://github.com/heiher/hev-socks5-tunnel/blob/2.20.0/android/hev/htproxy/TProxyService.java).
+- **Resolution choices:** (A) raise ZEUS `minSdk` to 29, explicitly dropping Android 7–9 support; or (B) maintain a ZEUS-built Hev native artifact compiled with `APP_PLATFORM := android-24`, regenerate the AAR manifest accordingly, audit its undefined native symbols against API 24, and pass API 24/28/29 emulator/device tests. Option B is a maintained native fork/build pipeline and must not be treated as safe merely because it compiles.
+- **Decision gate:** keep the existing ZEUS `minSdk = 24` unchanged until product support for Android 7–9 is explicitly resolved. Do not use `tools:overrideLibrary`, do not alter the minimum SDK silently, and do not claim Android tests passed while this blocker remains.
+- **CI results for commit `0dcc36346d763e94dc8b9acf5bde8ab224f536b2`:** Android debug build and unit tests = FAIL at manifest merge; Android Package Visibility emulator test = FAIL at the same manifest merge before instrumentation; Web Admin, Go control plane, repository structure, and VPN node tests = PASS. The two Android failures are the same dependency/API-level incompatibility, not independent product-test failures.

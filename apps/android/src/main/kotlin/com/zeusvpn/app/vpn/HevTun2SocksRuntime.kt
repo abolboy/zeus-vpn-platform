@@ -77,6 +77,7 @@ object HevTun2SocksRuntime {
 
     private var activeTun: ParcelFileDescriptor? = null
     private var activeConfig: File? = null
+    private var shutdownUnconfirmed = false
 
     /**
      * Transfers descriptor lifecycle ownership to this object only on success.
@@ -88,6 +89,9 @@ object HevTun2SocksRuntime {
         endpoint: TorSocksEndpoint,
     ) = withContext(Dispatchers.IO) {
         mutex.withLock {
+            check(!shutdownUnconfirmed) {
+                "A previous Hev shutdown was not confirmed; restart the app before another TUN session"
+            }
             check(activeTun == null) { "A Hev TUN session is already owned by ZEUS" }
             check(tun.fileDescriptor.valid()) { "The supplied TUN descriptor is invalid" }
             check(!TProxyService.TProxyIsRunning()) {
@@ -114,10 +118,15 @@ object HevTun2SocksRuntime {
 
     /**
      * Stops and joins the native worker before releasing the caller-owned TUN fd.
-     * On failure, the descriptor reference is retained so a later stop can retry.
+     * If the native join fails, descriptor ownership is retained permanently for
+ * this process: upstream JNI clears its joinable flag even when pthread_join
+ * fails, so a second stop call cannot prove that the native worker has exited.
      */
     suspend fun stop() = withContext(Dispatchers.IO) {
         mutex.withLock {
+            check(!shutdownUnconfirmed) {
+                "Hev shutdown is unconfirmed; the TUN descriptor must remain open until process exit"
+            }
             val tun = activeTun
             if (tun == null) {
                 check(!TProxyService.TProxyIsRunning()) {
@@ -126,8 +135,13 @@ object HevTun2SocksRuntime {
                 return@withLock
             }
 
-            check(TProxyService.TProxyStopService()) {
-                "Hev did not confirm native worker shutdown; TUN descriptor retained"
+            if (!TProxyService.TProxyStopService()) {
+                // Upstream JNI clears its joinable flag even if pthread_join fails.
+                // Do not call stop again or close the descriptor on an unconfirmed join.
+                shutdownUnconfirmed = true
+                throw IllegalStateException(
+                    "Hev native shutdown could not be confirmed; TUN descriptor retained until process exit",
+                )
             }
 
             tun.close()

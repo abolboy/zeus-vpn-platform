@@ -72,6 +72,17 @@ POST /v1/client/tor/devices/{deviceID}/revoke
 - Idempotent; already-revoked device returns 200.
 - Revoked device cannot be reactivated by replaying old idempotency key or invitation.
 
+## Current revocation and entitlement gap
+
+The current implementation is not yet a complete remote device-revocation control:
+
+- The Tor API has customer OIDC status and self-revoke routes, but no administrator Tor-device list or revoke route.
+- The Android VPN start path checks for a locally stored device ID; it does not verify current server-side device status or account entitlement before starting Tor.
+- Invitation-code enrollment is supported, but status and revoke require OIDC. An invitation-only installation cannot currently perform those account operations until it signs in with OIDC.
+- `entitlement.status` is currently returned as `active` with `expires_at: null`; subscription expiry and runtime entitlement enforcement are not integrated.
+
+Therefore, admin-initiated revocation of a lost device, immediate enforcement of account suspension, and expiry-based disconnect are NOT IMPLEMENTED. Do not describe these as supported controls. Before release, define an authenticated admin revoke/list contract, a client policy for status refresh and fail-closed behavior, and—if resistance to a modified client is required—a server-controlled data-plane enforcement point. A client-only status check is not a security boundary against a modified APK.
+
 ## Administrator invitation
 
 POST /v1/users/{userID}/tor-enrollment-code

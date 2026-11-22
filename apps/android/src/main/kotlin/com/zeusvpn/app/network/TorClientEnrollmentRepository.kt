@@ -14,6 +14,15 @@ import java.net.URI
 import java.util.UUID
 import javax.net.ssl.HttpsURLConnection
 
+internal fun isTorInvitationCodeShapeValid(value: String): Boolean =
+    value.length == 43 && value.all {
+        it in 'A'..'Z' || it in 'a'..'z' || it in '0'..'9' || it == '-' || it == '_'
+    }
+
+internal fun isTorDeviceIdentifierValid(value: String): Boolean = runCatching {
+    UUID.fromString(value).toString().equals(value, ignoreCase = true)
+}.getOrDefault(false)
+
 data class TorClientEnrollmentResult(
     val deviceId: String,
     val deviceRef: String,
@@ -54,7 +63,7 @@ class TorClientEnrollmentRepository(context: Context) {
         deviceName: String = Build.MODEL.orEmpty(),
     ): TorClientEnrollmentResult = withContext(Dispatchers.IO) {
         val cleanInvitation = invitationCode.orEmpty().trim()
-        if (cleanInvitation.isNotEmpty() && !isInvitationCodeShapeValid(cleanInvitation)) {
+        if (cleanInvitation.isNotEmpty() && !isTorInvitationCodeShapeValid(cleanInvitation)) {
             throw TorClientEnrollmentException(
                 "enrollment_code_invalid",
                 "کد دعوت Tor معتبر نیست.",
@@ -115,7 +124,7 @@ class TorClientEnrollmentRepository(context: Context) {
         val deviceId = response.optString("id")
         val transport = response.optString("transport")
         val status = response.optString("status")
-        if (!deviceId.matches(DEVICE_ID_PATTERN) || transport != "tor" || status != "active") {
+        if (!isTorDeviceIdentifierValid(deviceId) || transport != "tor" || status != "active") {
             throw IOException("The ZEUS API returned an invalid Tor device enrollment response.")
         }
 
@@ -124,7 +133,7 @@ class TorClientEnrollmentRepository(context: Context) {
     }
 
     suspend fun getDeviceStatus(deviceId: String): JSONObject = withContext(Dispatchers.IO) {
-        require(deviceId.matches(DEVICE_ID_PATTERN)) { "Invalid Tor device identifier." }
+        require(isTorDeviceIdentifierValid(deviceId)) { "Invalid Tor device identifier." }
         val token = identityRepository.freshIdToken()
         request(
             method = "GET",
@@ -213,8 +222,8 @@ class TorClientEnrollmentRepository(context: Context) {
                 clientVersion = json.getString("client_version"),
                 idempotencyKey = json.getString("idempotency_key"),
             ).also { pending ->
-                require(pending.deviceRef.matches(DEVICE_REF_PATTERN))
-                require(pending.idempotencyKey.matches(IDEMPOTENCY_PATTERN))
+                require(isTorDeviceIdentifierValid(pending.deviceRef))
+                require(isTorDeviceIdentifierValid(pending.idempotencyKey))
                 require(pending.deviceName.length in 1..80)
                 require(pending.clientVersion.length in 1..64)
             }
@@ -238,11 +247,6 @@ class TorClientEnrollmentRepository(context: Context) {
         encryptedStore.savePendingTorEnrollment(bytes)
     }
 
-    private fun isInvitationCodeShapeValid(value: String): Boolean =
-        value.length == INVITATION_CODE_LENGTH && value.all {
-            it in 'A'..'Z' || it in 'a'..'z' || it in '0'..'9' || it == '-' || it == '_'
-        }
-
     private data class PendingTorEnrollment(
         val invitationCode: String,
         val deviceRef: String,
@@ -252,10 +256,6 @@ class TorClientEnrollmentRepository(context: Context) {
     )
 
     private companion object {
-        val DEVICE_ID_PATTERN = Regex("^[0-9a-fA-F-]{36}$")
-        val DEVICE_REF_PATTERN = Regex("^[0-9a-fA-F-]{36}$")
-        val IDEMPOTENCY_PATTERN = Regex("^[0-9a-fA-F-]{36}$")
-        const val INVITATION_CODE_LENGTH = 43
         const val CONNECT_TIMEOUT_MS = 10_000
         const val READ_TIMEOUT_MS = 20_000
         const val MAX_RESPONSE_BYTES = 32 * 1024

@@ -265,7 +265,26 @@ func (a *API) customerVPNUserFromBearer(w http.ResponseWriter, r *http.Request) 
 	return user, true
 }
 
+func (a *API) allowTorCustomerRequest(w http.ResponseWriter, r *http.Request) bool {
+	requestID := requestIDFrom(r)
+	ip := remoteIP(r.RemoteAddr)
+	limiterKey := "unknown"
+	if ip != nil {
+		limiterKey = *ip
+	}
+	if a.customerStatusLimiter == nil ||
+		!a.customerStatusLimiter.allowWindow(limiterKey, time.Now(), 30, time.Minute) {
+		w.Header().Set("Retry-After", "60")
+		writeError(w, http.StatusTooManyRequests, "rate_limited", "درخواست‌های دستگاه Tor بیش از حد مجاز است", requestID)
+		return false
+	}
+	return true
+}
+
 func (a *API) handleTorClientDeviceStatus(w http.ResponseWriter, r *http.Request) {
+	if !a.allowTorCustomerRequest(w, r) {
+		return
+	}
 	deviceID := r.PathValue("deviceID")
 	if !uuidPattern.MatchString(deviceID) {
 		writeError(w, http.StatusBadRequest, "invalid_device_id", "شناسه دستگاه معتبر نیست", requestIDFrom(r))
@@ -294,6 +313,9 @@ func (a *API) handleTorClientDeviceStatus(w http.ResponseWriter, r *http.Request
 }
 
 func (a *API) handleTorClientDeviceRevoke(w http.ResponseWriter, r *http.Request) {
+	if !a.allowTorCustomerRequest(w, r) {
+		return
+	}
 	deviceID := r.PathValue("deviceID")
 	if !uuidPattern.MatchString(deviceID) {
 		writeError(w, http.StatusBadRequest, "invalid_device_id", "شناسه دستگاه معتبر نیست", requestIDFrom(r))

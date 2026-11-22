@@ -5,7 +5,12 @@ Status: Tor API, additive schema, shared quota logic, Android Tor enrollment rep
 | Gate | Test | Expected result | Status |
 |---|---|---|---|
 | API | Valid signed OIDC Tor enrollment | 201, transport=tor, no peer object | NOT RUN — implementation added; test execution pending |
-| API | Wrong issuer/audience, expired token, unverified email | 401 safe error | NOT RUN |\n| API validation | Unknown fields including public_key/user_id/node_id | 400 strict-schema rejection | NOT RUN — test added |\n| API validation | Non-Android platform and invalid client version | 400 validation error | NOT RUN — tests added |
+| API | Wrong issuer/audience, expired token, unverified email | 401 safe error | NOT RUN |
+| API readiness | Missing customer OIDC verifier | 503 fail-closed response | NOT RUN — test added |
+| Android client | OIDC/invitation enrollment, status and revoke routes | Tor endpoints only; no WG key or profile | NOT RUN — repository added, UI wiring pending |
+| Android storage | Pending Tor device ref and idempotency survive process death | Dedicated Keystore AES-GCM record; no ID token persisted | NOT RUN — implementation added |
+| API validation | Unknown fields including public_key/user_id/node_id | 400 strict-schema rejection | NOT RUN — test added |
+| API validation | Non-Android platform and invalid client version | 400 validation error | NOT RUN — tests added |
 | API security | Account A reads/revokes account B device | 404; no state change | NOT RUN |
 | API reliability | Same idempotency key and body | Same device, replay header | NOT RUN |
 | API reliability | Same key, changed body | 409 idempotency_conflict | NOT RUN |

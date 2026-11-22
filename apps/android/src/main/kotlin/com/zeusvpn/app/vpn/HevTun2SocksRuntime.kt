@@ -20,6 +20,9 @@ import java.io.IOException
  * configure a VpnService and is not, by itself, a complete Tor VPN.
  */
 internal object HevTorTunnelConfig {
+    // Keep this address identical to the IPv4 address configured on the
+    // Android VpnService.Builder TUN interface by the shared VPN host.
+    const val TUNNEL_IPV4_ADDRESS = "198.18.0.1"
     const val MAP_DNS_ADDRESS = "198.18.0.2"
     const val MAP_DNS_NETWORK = "100.64.0.0"
     const val MAP_DNS_NETMASK = "255.192.0.0"
@@ -39,6 +42,7 @@ internal object HevTorTunnelConfig {
         return """
             tunnel:
               mtu: 1500
+              ipv4: '$TUNNEL_IPV4_ADDRESS'
               icmp: 'off'
             socks5:
               address: '${endpoint.host}'

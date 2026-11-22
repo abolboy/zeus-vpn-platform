@@ -1,6 +1,6 @@
 # ADR: Tor as the sole Android VPN engine
 
-**Status:** Product decision confirmed; implementation in progress and not yet complete.  
+**Status:** Product decisions confirmed; implementation in progress and not yet complete.  
 **Date:** 2026-11-22  
 **Repository:** `abolboy/zeus-vpn-platform`  
 **Branch:** `feat/android-tor-transport-pr27`  

@@ -12,6 +12,7 @@ Add Tor as a second, user-selectable transport. Do not run two Android VPN inter
 - Tor mode runs an embedded Tor daemon and exposes a loopback SOCKS5 endpoint.
 - A dedicated, audited TUN-to-SOCKS adapter is required to route Android app traffic into that SOCKS endpoint. The Tor daemon alone is only a local proxy; it does not transparently tunnel all device traffic.
 - The Tor adapter must be integrated into ZEUS's single VPN-service lifecycle, not by starting Orbot's independent VPN service alongside WireGuard.
+- Guardian Project's embedded `TorService` has no `VpnService.protect()` integration. Because it runs under the ZEUS app UID, the Tor VPN builder must exclude the ZEUS package from its TUN (or omit it from an allowlist) so Tor's own outbound sockets reach the physical network instead of looping into the TUN. This also means ZEUS app/control-plane traffic itself bypasses Tor by design. If product requirements later demand tunneling ZEUS's own app traffic, a reviewed per-socket protection hook in Tor's native layer is required.
 
 ## Android component boundaries
 
@@ -28,8 +29,8 @@ Add Tor as a second, user-selectable transport. Do not run two Android VPN inter
 - IPv4 and IPv6 policy must be explicit. Until IPv6 is supported through the Tor path, block IPv6 inside Tor mode rather than allowing direct egress.
 - The TUN adapter must have bounded queues, clean cancellation, descriptor ownership, and deterministic shutdown.
 - On startup failure, adapter crash, Tor circuit loss, or transport switch, fail closed: keep the TUN/service in a drop-only state until teardown is coordinated; never fall back to direct forwarding while Tor mode is selected.
-- A process/service crash can make Android remove the VPN and resume the underlying network unless system lockdown is enabled. For a strict no-leak Tor mode, require Android Always-on VPN with **Block connections without VPN** (lockdown); verify `VpnService.isLockdownEnabled()` on API 29+ and guide the user through system Settings. Do not claim crash-resilient fail-closed protection when lockdown is off.
-- Per-app include/exclude policy must be implemented and tested for Tor separately; do not assume WireGuard profile directives apply to the Tor engine.
+- A process/service crash can make Android remove the VPN and resume the underlying network unless system lockdown is enabled. For a strict no-leak Tor mode, require Android Always-on VPN with **Block connections without VPN** (lockdown); verify `VpnService.isLockdownEnabled()` on API 29+ and guide the user through system Settings. Android's framework exempts the VPN provider package from lockdown's blocked-UID set; Tor mode still must explicitly exclude the ZEUS package from the TUN so Tor's own sockets do not loop. Verify this interaction on supported Android/OEM versions before claiming crash-resilient fail-closed protection.
+- Per-app include/exclude policy must be implemented and tested for Tor separately; do not assume WireGuard profile directives apply to the Tor engine. Never allow the ZEUS package itself into the Tor TUN: in include-only mode omit it, and in full/exclude mode add it to the disallowed set. This is required for Tor's outbound sockets and means ZEUS app traffic is outside Tor.
 - Do not expose the SOCKS or control port on LAN interfaces. Bind to loopback only.
 
 ## Dependency research
@@ -57,6 +58,7 @@ Add Tor as a second, user-selectable transport. Do not run two Android VPN inter
 - [x] Static source review confirms Hev terminates UDP sessions when the SOCKS server returns a non-success response; runtime UDP drop/no-egress test remains required.
 - [ ] Pin and integrate the selected TUN-to-SOCKS artifact after artifact hash, ABI, JNI and R8 verification.
 - [ ] Integrate one TUN owner with the existing Android VPN consent and foreground-service lifecycle.
+- [ ] Exclude the ZEUS app package from the Tor TUN and verify Tor bootstrap works while Android lockdown is enabled; verify other apps remain inside the TUN.
 - [ ] Test TCP forwarding, MapDNS/remote hostname resolution, UDP ASSOCIATE rejection with no egress, IPv4/IPv6 leak resistance, adapter crash, cancellation, network handover, and Android lockdown behavior.
 
 ### Gate C — transport coordinator and UI

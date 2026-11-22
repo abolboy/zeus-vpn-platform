@@ -52,6 +52,7 @@ fun TorOnlyDashboard() {
     val enrollment = remember(context) { TorClientEnrollmentRepository(context) }
     val settings = remember(context) { SettingsRepository(context) }
     val serviceState by TorVpnServiceStatus.state.collectAsState()
+    val restartRequired by TorVpnServiceStatus.restartRequired.collectAsState()
 
     var signedIn by remember { mutableStateOf(identity.hasStoredSession()) }
     var deviceId by remember { mutableStateOf<String?>(null) }
@@ -238,7 +239,7 @@ fun TorOnlyDashboard() {
                             if (consent == null) TorVpnService.start(context)
                             else vpnConsentLauncher.launch(consent)
                         },
-                        enabled = !busy && deviceId != null &&
+                        enabled = !busy && deviceId != null && !restartRequired &&
                             serviceState in setOf(TorVpnServiceState.STOPPED, TorVpnServiceState.FAILED),
                         modifier = Modifier.fillMaxWidth(),
                     ) { Text("راه‌اندازی موتور Tor") }
@@ -247,6 +248,13 @@ fun TorOnlyDashboard() {
                         enabled = serviceState != TorVpnServiceState.STOPPED,
                         modifier = Modifier.fillMaxWidth(),
                     ) { Text("توقف موتور") }
+                    if (restartRequired) {
+                        Text(
+                            "راه‌اندازی مجدد تا بسته‌شدن کامل فرایند برنامه مسدود است؛ این محدودیت برای جلوگیری از آزادسازی ناامن فایل TUN اعمال شده است.",
+                            color = MaterialTheme.colorScheme.error,
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                    }
                     Text(
                         "محدودیت فعلی: ترافیک خود برنامهٔ ZEUS از TUN مستثنا است تا سوکت‌های Tor به حلقهٔ تونل وارد نشوند. بنابراین هنوز نمی‌توان ادعای پوشش کامل ترافیک خود برنامه یا اتصال کاملاً تأییدشده داشت.",
                         style = MaterialTheme.typography.bodySmall,

@@ -61,8 +61,12 @@ grep -Fq -- "-Wl,--no-undefined" "$build_log" || {
   exit 1
 }
 
-llvm_readelf="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-readelf"
+ndk_host_tag="linux-x86_64"
+ndk_toolchain="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/$ndk_host_tag"
+llvm_readelf="$ndk_toolchain/bin/llvm-readelf"
+llvm_sysroot="$ndk_toolchain/sysroot"
 [[ -x "$llvm_readelf" ]] || { echo "llvm-readelf not found in NDK" >&2; exit 1; }
+[[ -d "$llvm_sysroot/usr/lib" ]] || { echo "NDK LLVM sysroot libraries not found at $llvm_sysroot/usr/lib" >&2; exit 1; }
 declare -A triples=(
   [armeabi-v7a]=arm-linux-androideabi
   [arm64-v8a]=aarch64-linux-android
@@ -79,7 +83,7 @@ for abi in "${ABIS[@]}"; do
   [[ -n "$needed_libs" ]] || { echo "No DT_NEEDED entries found for $abi; refusing incomplete audit" >&2; exit 1; }
   while IFS= read -r needed; do
     [[ -n "$needed" ]] || continue
-    stub="$ANDROID_NDK_HOME/sysroot/usr/lib/${triples[$abi]}/24/$needed"
+    stub="$llvm_sysroot/usr/lib/${triples[$abi]}/24/$needed"
     [[ -f "$stub" ]] || {
       echo "Dependency $needed for $abi has no Android API 24 NDK stub at $stub" >&2
       exit 1

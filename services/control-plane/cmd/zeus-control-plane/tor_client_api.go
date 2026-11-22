@@ -138,6 +138,10 @@ func (a *API) handleTorClientEnrollment(w http.ResponseWriter, r *http.Request) 
 	var invitationHash []byte
 	switch {
 	case strings.EqualFold(scheme, "Bearer"):
+		if a.customerVerifier == nil {
+			writeError(w, http.StatusServiceUnavailable, "customer_identity_not_configured", "ورود مشتری هنوز پیکربندی نشده است", requestID)
+			return
+		}
 		claims, externalRef, err := a.verifyCustomerIdentity(r.Context(), authorization)
 		if err != nil {
 			writeError(w, http.StatusUnauthorized, "customer_identity_invalid", "نشست مشتری معتبر یا تأییدشده نیست", requestID)
@@ -229,6 +233,10 @@ func (a *API) customerVPNUserFromBearer(w http.ResponseWriter, r *http.Request) 
 	authorization := strings.TrimSpace(r.Header.Get("Authorization"))
 	if !strings.HasPrefix(strings.ToLower(authorization), "bearer ") {
 		writeError(w, http.StatusUnauthorized, "customer_identity_invalid", "نشست مشتری معتبر نیست", requestIDFrom(r))
+		return VPNUser{}, false
+	}
+	if a.customerVerifier == nil {
+		writeError(w, http.StatusServiceUnavailable, "customer_identity_not_configured", "ورود مشتری هنوز پیکربندی نشده است", requestIDFrom(r))
 		return VPNUser{}, false
 	}
 	claims, externalRef, err := a.verifyCustomerIdentity(r.Context(), authorization)

@@ -1,6 +1,6 @@
-# ADR: Tor-only Android VPN engine as the fallback to the WireGuard backend
+# ADR: Tor as the sole Android VPN engine
 
-**Status:** Approved direction for implementation planning; not yet implemented.  
+**Status:** Product decision confirmed; implementation in progress and not yet complete.  
 **Date:** 2026-11-22  
 **Repository:** `abolboy/zeus-vpn-platform`  
 **Branch:** `feat/android-tor-transport-pr27`  
@@ -8,7 +8,7 @@
 
 ## User decision
 
-If the pinned WireGuard Android backend blocks a reliable single-owner VPN architecture, ZEUS may remove the WireGuard Android backend from the client and make Tor the primary and only Android VPN transport.
+ZEUS will use Tor as the primary and only Android VPN transport. The Android WireGuard backend is to be removed from the final client; it is not a fallback, selectable mode, or parallel engine.
 
 This authorization applies to the **Android client engine and its packaged dependencies only**. It does not authorize deleting server-side WireGuard node support, changing VPS configuration, deleting peers, changing AWS resources, or altering production services.
 

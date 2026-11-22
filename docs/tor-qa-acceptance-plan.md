@@ -1,6 +1,6 @@
 # ZEUS Tor-only migration QA acceptance plan
 
-Status: Tor API, additive schema, shared quota logic, and API validation tests are now present on the feature branch. CI and disposable PostgreSQL verification are pending; runtime and Android VPN tests remain unrun.
+Status: Tor API, additive schema, shared quota logic, Android Tor enrollment repository, encrypted retry record, and validation tests are present on the feature branch. CI and disposable PostgreSQL verification are pending; UI/service and VPN data-plane tests remain unrun.
 
 | Gate | Test | Expected result | Status |
 |---|---|---|---|

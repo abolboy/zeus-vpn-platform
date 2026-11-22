@@ -111,29 +111,29 @@ type VPNDevice struct {
 
 
 type CreateTorClientDeviceInput struct {
-	DeviceRef string `json:"device_ref"`
-	DeviceName string `json:"device_name"`
-	Platform string `json:"platform"`
+	DeviceRef     string `json:"device_ref"`
+	DeviceName    string `json:"device_name"`
+	Platform      string `json:"platform"`
 	ClientVersion string `json:"client_version"`
 }
 
 type TorClientEntitlement struct {
-	Status string `json:"status"`
+	Status    string     `json:"status"`
 	ExpiresAt *time.Time `json:"expires_at"`
 }
 
 type TorClientDevice struct {
-	ID string `json:"id"`
-	UserID string `json:"-"`
-	DeviceRef string `json:"device_ref"`
-	DeviceName string `json:"device_name"`
-	Platform string `json:"platform"`
-	ClientVersion string `json:"-"`
-	Transport string `json:"transport"`
-	Status string `json:"status"`
-	CreatedAt time.Time `json:"created_at"`
-	UpdatedAt time.Time `json:"-"`
-	RevokedAt *time.Time `json:"-"`
+	ID          string               `json:"id"`
+	UserID      string               `json:"-"`
+	DeviceRef   string               `json:"device_ref"`
+	DeviceName  string               `json:"device_name"`
+	Platform    string               `json:"platform"`
+	ClientVersion string             `json:"-"`
+	Transport   string               `json:"transport"`
+	Status      string               `json:"status"`
+	CreatedAt   time.Time            `json:"created_at"`
+	UpdatedAt   time.Time            `json:"-"`
+	RevokedAt   *time.Time           `json:"-"`
 	Entitlement TorClientEntitlement `json:"entitlement"`
 }
 

@@ -28,12 +28,30 @@ class EncryptedWireGuardConfigStore(context: android.content.Context) {
     private val profileFile = AtomicFile(File(appContext.noBackupFilesDir, PROFILE_FILE_NAME))
     private val pendingFile = AtomicFile(File(appContext.noBackupFilesDir, PENDING_FILE_NAME))
     private val customerSessionFile = AtomicFile(File(appContext.noBackupFilesDir, CUSTOMER_SESSION_FILE_NAME))
+    private val torPendingFile = AtomicFile(File(appContext.noBackupFilesDir, TOR_PENDING_FILE_NAME))
 
     fun hasProfile(): Boolean = profileFile.baseFile.isFile
 
     fun hasPendingEnrollment(): Boolean = pendingFile.baseFile.isFile
 
     fun hasCustomerSession(): Boolean = customerSessionFile.baseFile.isFile
+
+    fun hasPendingTorEnrollment(): Boolean = torPendingFile.baseFile.isFile
+
+    fun savePendingTorEnrollment(payload: ByteArray) {
+        saveEncrypted(torPendingFile, payload, TOR_PENDING_KEY_ALIAS, TOR_PENDING_AAD,
+            TOR_PENDING_MAGIC, MAX_TOR_PENDING_BYTES)
+    }
+
+    fun readPendingTorEnrollment(): ByteArray? = readEncrypted(
+        torPendingFile, TOR_PENDING_KEY_ALIAS, TOR_PENDING_AAD,
+        TOR_PENDING_MAGIC, MAX_TOR_PENDING_BYTES,
+    )
+
+    fun clearPendingTorEnrollment() {
+        torPendingFile.delete()
+        deleteKey(TOR_PENDING_KEY_ALIAS)
+    }
 
     fun saveCustomerSession(payload: ByteArray) {
         saveEncrypted(customerSessionFile, payload, CUSTOMER_SESSION_KEY_ALIAS, CUSTOMER_SESSION_AAD,
@@ -106,6 +124,7 @@ class EncryptedWireGuardConfigStore(context: android.content.Context) {
         clearProfile()
         clearPendingEnrollment()
         clearCustomerSession()
+        clearPendingTorEnrollment()
     }
 
     private fun saveEncrypted(
@@ -245,14 +264,17 @@ class EncryptedWireGuardConfigStore(context: android.content.Context) {
         const val PROFILE_FILE_NAME = "wireguard-profile.aesgcm"
         const val PENDING_FILE_NAME = "client-enrollment.pending"
         const val CUSTOMER_SESSION_FILE_NAME = "customer-auth-state.aesgcm"
+        const val TOR_PENDING_FILE_NAME = "tor-client-enrollment.pending"
         const val ANDROID_KEY_STORE = "AndroidKeyStore"
         const val PROFILE_KEY_ALIAS = "com.zeusvpn.app.wireguard-profile.v1"
         const val PENDING_KEY_ALIAS = "com.zeusvpn.app.client-enrollment.v1"
         const val CUSTOMER_SESSION_KEY_ALIAS = "com.zeusvpn.app.customer-auth.v1"
+        const val TOR_PENDING_KEY_ALIAS = "com.zeusvpn.app.tor-enrollment.v1"
         const val TRANSFORMATION = "AES/GCM/NoPadding"
         const val PROFILE_MAGIC = 0x5A575031 // ZWP1
         const val PENDING_MAGIC = 0x5A574531 // ZWE1
         const val CUSTOMER_SESSION_MAGIC = 0x5A574131 // ZWA1
+        const val TOR_PENDING_MAGIC = 0x5A545031 // ZTP1
         const val GCM_IV_LENGTH = 12
         const val GCM_TAG_BITS = 128
         const val GCM_TAG_BYTES = GCM_TAG_BITS / 8
@@ -261,8 +283,10 @@ class EncryptedWireGuardConfigStore(context: android.content.Context) {
         const val MAX_PROFILE_BYTES = 64 * 1024
         const val MAX_PENDING_BYTES = 8 * 1024
         const val MAX_CUSTOMER_SESSION_BYTES = 64 * 1024
+        const val MAX_TOR_PENDING_BYTES = 4 * 1024
         val PROFILE_AAD = "ZEUS-WIREGUARD-PROFILE-V1".toByteArray(Charsets.UTF_8)
         val PENDING_AAD = "ZEUS-CLIENT-ENROLLMENT-V1".toByteArray(Charsets.UTF_8)
         val CUSTOMER_SESSION_AAD = "ZEUS-CUSTOMER-AUTH-STATE-V1".toByteArray(Charsets.UTF_8)
+        val TOR_PENDING_AAD = "ZEUS-TOR-CLIENT-ENROLLMENT-V1".toByteArray(Charsets.UTF_8)
     }
 }

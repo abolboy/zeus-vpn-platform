@@ -16,7 +16,7 @@ class TorDaemonControllerTest {
     @Test
     fun recognizesEstablishedTorCircuitStatus() {
         assertEquals(true, isTorCircuitEstablished("1"))
-        assertEquals(true, isTorCircuitEstablished("\\"1\\""))
+        assertEquals(true, isTorCircuitEstablished("\"1\""))
     }
 
     @Test
@@ -30,7 +30,7 @@ class TorDaemonControllerTest {
     fun parsesQuotedIpv4LoopbackListener() {
         assertEquals(
             TorSocksEndpoint("127.0.0.1", 9050),
-            parseTorSocksEndpoint("\\"127.0.0.1:9050\\""),
+            parseTorSocksEndpoint("\"127.0.0.1:9050\""),
         )
     }
 
@@ -38,24 +38,24 @@ class TorDaemonControllerTest {
     fun parsesBracketedIpv6LoopbackListener() {
         assertEquals(
             TorSocksEndpoint("::1", 9150),
-            parseTorSocksEndpoint("\\"[::1]:9150\\""),
+            parseTorSocksEndpoint("\"[::1]:9150\""),
         )
     }
 
     @Test
     fun rejectsNonLoopbackListenerAddresses() {
-        assertNull(parseTorSocksEndpoint("\\"0.0.0.0:9050\\""))
-        assertNull(parseTorSocksEndpoint("\\"192.168.1.20:9050\\""))
+        assertNull(parseTorSocksEndpoint("\"0.0.0.0:9050\""))
+        assertNull(parseTorSocksEndpoint("\"192.168.1.20:9050\""))
     }
 
     @Test
     fun rejectsMissingMalformedAndOutOfRangePorts() {
         assertNull(parseTorSocksEndpoint(null))
         assertNull(parseTorSocksEndpoint(""))
-        assertNull(parseTorSocksEndpoint("\\"127.0.0.1\\""))
-        assertNull(parseTorSocksEndpoint("\\"127.0.0.1:0\\""))
-        assertNull(parseTorSocksEndpoint("\\"127.0.0.1:65536\\""))
-        assertNull(parseTorSocksEndpoint("\\"127.0.0.1:not-a-port\\""))
+        assertNull(parseTorSocksEndpoint("\"127.0.0.1\""))
+        assertNull(parseTorSocksEndpoint("\"127.0.0.1:0\""))
+        assertNull(parseTorSocksEndpoint("\"127.0.0.1:65536\""))
+        assertNull(parseTorSocksEndpoint("\"127.0.0.1:not-a-port\""))
     }
 
     @Test
@@ -146,7 +146,7 @@ class TorDaemonControllerTest {
 
     @Test
     fun unexpectedTorServiceStopAfterReadinessMarksControllerFailed() = runBlocking {
-        val binding = FakeTorServiceBinding(circuitStatus = "1", socksEndpoint = "\\"127.0.0.1:9050\\"")
+        val binding = FakeTorServiceBinding(circuitStatus = "1", socksEndpoint = "\"127.0.0.1:9050\"")
         val controller = TorDaemonController(binding, DirectDispatcher)
 
         assertEquals(TorSocksEndpoint("127.0.0.1", 9050), controller.start())
@@ -161,7 +161,7 @@ class TorDaemonControllerTest {
     fun stopFailureDoesNotReportStopped() = runBlocking {
         val binding = FakeTorServiceBinding(
             circuitStatus = "1",
-            socksEndpoint = "\\"127.0.0.1:9050\\"",
+            socksEndpoint = "\"127.0.0.1:9050\"",
             unbindFailure = IllegalStateException("unbind failed"),
         )
         val controller = TorDaemonController(binding, DirectDispatcher)
@@ -178,7 +178,7 @@ class TorDaemonControllerTest {
 
     @Test
     fun repeatedStartAndStopRebindsExactlyOncePerSession() = runBlocking {
-        val binding = FakeTorServiceBinding(circuitStatus = "1", socksEndpoint = "\\"127.0.0.1:9050\\"")
+        val binding = FakeTorServiceBinding(circuitStatus = "1", socksEndpoint = "\"127.0.0.1:9050\"")
         val controller = TorDaemonController(binding, DirectDispatcher)
         val expected = TorSocksEndpoint("127.0.0.1", 9050)
 

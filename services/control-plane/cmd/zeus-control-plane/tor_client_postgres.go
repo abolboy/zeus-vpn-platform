@@ -69,26 +69,15 @@ func (s *PostgresStore) FindTorEnrollmentCodeUser(ctx context.Context, tokenHash
 		return "", ErrEnrollmentCodeInvalid
 	}
 	var userID string
-	var expiresAt time.Time
-	var consumedAt, revokedAt *time.Time
 	err := s.pool.QueryRow(ctx, `
-		SELECT user_id::text, expires_at, consumed_at, revoked_at
+		SELECT user_id::text
 		FROM tor_client_enrollment_codes
 		WHERE token_hash = $1
-	`, tokenHash).Scan(&userID, &expiresAt, &consumedAt, &revokedAt)
-	if errors.Is(err, pgx.ErrNoRows) || revokedAt != nil {
+	`, tokenHash).Scan(&userID)
+	if errors.Is(err, pgx.ErrNoRows) {
 		return "", ErrEnrollmentCodeInvalid
 	}
-	if err != nil {
-		return "", err
-	}
-	if consumedAt != nil {
-		return "", ErrEnrollmentCodeUsed
-	}
-	if !expiresAt.After(time.Now().UTC()) {
-		return "", ErrEnrollmentCodeExpired
-	}
-	return userID, nil
+	return userID, err
 }
 
 func (s *PostgresStore) EnrollTorClientDevice(

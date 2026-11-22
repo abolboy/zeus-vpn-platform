@@ -10,7 +10,11 @@ val zeusOidcRedirectUri = providers.gradleProperty("ZEUS_OIDC_REDIRECT_URI").orE
 
 android {
     namespace = "com.zeusvpn.app"
-    compileSdk = 36
+    compileSdk {
+        version = release(37) {
+            minorApiLevel = 2
+        }
+    }
     defaultConfig {
         applicationId = "com.zeusvpn.app"
         minSdk = 24
@@ -44,7 +48,7 @@ android {
     packaging { resources { excludes += "/META-INF/{AL2.0,LGPL2.1}" } }
 }
 dependencies {
-    // Stable Compose 1.11.4 line, compatible with the stable Android API 36 build target.
+    // Stable Compose 1.11.4 line. The app compiles against Android API 37.2 but targets API 36.
     val composeBom = platform("androidx.compose:compose-bom:2026.06.01")
     implementation(composeBom)
     androidTestImplementation(composeBom)
@@ -53,6 +57,13 @@ dependencies {
     implementation("androidx.compose.material:material-icons-extended")
     // Official embeddable WireGuard userspace tunnel backend.
     implementation("com.wireguard.android:tunnel:1.0.20260102")
+    // Guardian Project's embedded Tor daemon. This is a local SOCKS proxy only;
+    // device-wide VPN routing is implemented in a separate, reviewed data-plane layer.
+    implementation("info.guardianproject:tor-android:0.4.9.17")
+    // Consume Guardian Project TorService's in-process-only status and error events.
+    implementation("androidx.localbroadcastmanager:localbroadcastmanager:1.1.0")
+    // Hev 2.20.0 is fetched by scripts/fetch-hev-aar.sh and SHA-256 verified.
+    implementation(files("libs/hev-socks5-tunnel-2.20.0-api24.aar"))
     coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.0.3")
     implementation("androidx.compose.foundation:foundation")
     implementation("androidx.compose.material3:material3")

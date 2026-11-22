@@ -1,7 +1,7 @@
 # ZEUS Tor-only client security threat model
 
 Scope: Android Tor client, account-bound API, embedded Tor + Hev + Android TUN.
-Status: Design review only; no penetration test or live-network validation claimed.
+Status: Design review plus initial account-bound API/schema implementation. No penetration test, disposable-database concurrency proof, Android data-plane test, or live-network validation is claimed.
 
 ## Assets and trust boundaries
 
@@ -39,7 +39,7 @@ High: the existing TunnelConnectivityChecker uses Proxy.NO_PROXY and makes HTTPS
 
 High: IPv6 SOCKS behavior and UDP fail-closed behavior are not verified. Configuration alone is insufficient.
 
-High: current enrollment endpoint provisions WireGuard peers. Use the Tor-specific API; never send dummy keys or weaken public-key validation.
+High: the Tor-specific account/device API and additive schema are now implemented in the feature branch, but CI and database verification are pending. Existing /v1/client/enroll remains WireGuard-specific; never send dummy keys or weaken public-key validation.
 
 ## Security retest
 

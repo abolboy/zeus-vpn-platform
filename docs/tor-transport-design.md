@@ -37,7 +37,7 @@ Add Tor as a second, user-selectable transport. Do not run two Android VPN inter
 - Guardian Project's `tor-android` provides the native Tor daemon and Android `TorService`; it does not by itself implement device-wide VPN routing.
 - The current Maven Central artifact metadata reports `info.guardianproject:tor-android:0.4.9.17`. Pinning and ABI packaging must be verified in CI before adoption.
 - Orbot uses `hev-socks5-tunnel` as a native TUN-to-SOCKS component. Upstream Hev is MIT-licensed and its 2.20.0 release publishes Android ABI artifacts and an AAR with a JNI wrapper. This is the leading candidate, but it is not yet added to ZEUS.
-- Hev supports UDP relay through SOCKS5 UDP ASSOCIATE (UDP-over-UDP or a Hev-specific UDP-over-TCP extension); its documented `socks5.udp` setting selects a relay mode and does not expose a documented `off` value. Tor's SOCKS interface does not support UDP ASSOCIATE, so ZEUS must not copy Orbot's UDP configuration blindly. Before adopting Hev, prove from pinned source and tests that a local SOCKS guard rejecting UDP ASSOCIATE with `REP=0x07` causes Hev to drop those flows without fallback, or maintain a reviewed native UDP-drop patch. Keep MapDNS/fake-DNS inside the tunnel and verify remote hostname resolution; no external DNS fallback is allowed.
+- Hev supports UDP relay through SOCKS5 UDP ASSOCIATE or its own UDP-over-TCP `FWD_UDP` extension; its `socks5.udp` setting selects a relay mode and has no documented `off` value. For Tor, configure the standard `udp: 'udp'` mode only: Tor rejects UDP ASSOCIATE, and the Hev source returns a handshake error for every non-success SOCKS reply; the session runner then exits and the UDP-session destructor frees queued datagrams/removes the PCB. Do not enable Hev's UDP-over-TCP extension. This is source-level fail-closed evidence, not runtime proof; add an integration test with a SOCKS endpoint returning `REP=0x07` and verify no direct egress. Hev's MapDNS handler answers DNS packets addressed to its configured fake-DNS IP/port with synthetic A records; verify that subsequent fake-IP TCP connections are sent to Tor by hostname and that no physical-resolver fallback occurs.
 - Do not copy Orbot's VPN service or assume its app-level integration is reusable as a library.
 
 ## Delivery sequence and acceptance gates
@@ -54,10 +54,10 @@ Add Tor as a second, user-selectable transport. Do not run two Android VPN inter
 
 ### Gate B — TUN-to-SOCKS data plane
 - [x] Review Hev upstream source, MIT license, JNI API, Android AAR packaging, and release ABI assets; identify it as the leading candidate.
-- [ ] Prove Hev's behavior when a local SOCKS guard rejects UDP ASSOCIATE; if it does not reliably drop the flow, patch or replace the adapter before integration.
+- [x] Static source review confirms Hev terminates UDP sessions when the SOCKS server returns a non-success response; runtime UDP drop/no-egress test remains required.
 - [ ] Pin and integrate the selected TUN-to-SOCKS artifact after artifact hash, ABI, JNI and R8 verification.
 - [ ] Integrate one TUN owner with the existing Android VPN consent and foreground-service lifecycle.
-- [ ] Test TCP forwarding, MapDNS/remote resolution, UDP blocking, IPv4/IPv6 leak resistance, adapter crash, cancellation, network handover, and Android lockdown behavior.
+- [ ] Test TCP forwarding, MapDNS/remote hostname resolution, UDP ASSOCIATE rejection with no egress, IPv4/IPv6 leak resistance, adapter crash, cancellation, network handover, and Android lockdown behavior.
 
 ### Gate C — transport coordinator and UI
 - Add WireGuard / Tor selection, persisted preference, truthful state, and serialized switching.

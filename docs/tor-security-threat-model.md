@@ -54,3 +54,22 @@ High: the Tor-specific account/device API, additive schema, Android repository, 
 - Test API 24 through API 36/37, VPN consent denial, process death and service revocation.
 
 No production AWS/VPS, firewall, DNS, WireGuard peer, database or customer record changed.
+
+
+## Selected server-enforcement architecture
+
+The accepted target is a mandatory ZEUS-controlled Tor egress gateway. The current embedded local Tor path is not server-enforced: a modified client can bypass local checks and use public Tor independently. The gateway can enforce access to ZEUS's managed Tor service only; it cannot prevent independent access to public Tor or third-party proxies.
+
+Required controls before implementation/release:
+- Short-lived, device-bound, gateway-audience grants; invitation codes are exchanged once and never reused as long-lived gateway credentials.
+- Authenticated encrypted Android-to-gateway transport. Hev's optional SOCKS5 username/password fields are authentication only, not transport encryption; plaintext public SOCKS credentials are prohibited.
+- Online authorization per new proxy session, or a bounded authorization cache with authenticated invalidation and a documented revocation SLA.
+- Gateway tracks active sessions by device and closes them on device revocation, account suspension, or entitlement expiry.
+- No direct-egress fallback. Gateway egress must be constrained to the intended Tor daemon path.
+- Destination history, SOCKS request content, circuit IDs, and traffic payloads must not be persisted in logs or telemetry.
+
+A signed JWT with a long expiry is insufficient for immediate revocation. A client-side preflight is defense-in-depth only and cannot be treated as the security boundary.
+
+Proposed API routes for review (NOT IMPLEMENTED): `POST /v1/client/tor/devices/{deviceID}/gateway-grants`, `GET /v1/admin/tor/devices`, and `POST /v1/admin/tor/devices/{deviceID}/revoke`.
+
+See [tor-server-enforced-access-architecture.md](tor-server-enforced-access-architecture.md) for the full design and acceptance gates.

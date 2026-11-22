@@ -41,6 +41,9 @@ class TorStartupException(message: String, cause: Throwable? = null) : Exception
  * This class exposes a local SOCKS endpoint. It does not route Android device
  * traffic through Tor and must not be presented as a connected VPN by itself.
  */
+internal fun isTorCircuitEstablished(value: String?): Boolean =
+    value?.trim()?.trim('"') == "1"
+
 internal fun parseTorSocksEndpoint(value: String?): TorSocksEndpoint? {
     val listener = value?.trim()?.trim('"') ?: return null
     val separator = listener.lastIndexOf(':')
@@ -100,7 +103,25 @@ class TorDaemonController(context: Context) {
                     }
 
                     val endpoint = withTimeoutOrNull(timeoutMillis) {
+                        // The status broadcast is not replayed to a newly bound
+                        // controller. Query ControlPort as well so rebinding to an
+                        // already-running Tor daemon can become ready safely.
+                        while (!ready.isCompleted) {
+                            if (mutableState.value == TorDaemonState.FAILED) {
+                                throw TorStartupException("Tor failed before establishing its first circuit")
+                            }
+                            val service = torService
+                            if (service != null &&
+                                isTorCircuitEstablished(service.getInfo("status/circuit-established"))
+                            ) {
+                                circuitReadyReceived = true
+                                ready.complete(Unit)
+                            } else {
+                                delay(CIRCUIT_STATUS_POLL_INTERVAL_MILLIS)
+                            }
+                        }
                         ready.await()
+
                         while (true) {
                             if (mutableState.value == TorDaemonState.FAILED) {
                                 throw TorStartupException("Tor failed before its SOCKS endpoint became available")
@@ -286,6 +307,7 @@ class TorDaemonController(context: Context) {
         const val MIN_START_TIMEOUT_MILLIS = 15_000L
         const val MAX_START_TIMEOUT_MILLIS = 300_000L
         const val MAX_ERROR_MESSAGE_LENGTH = 240
+        const val CIRCUIT_STATUS_POLL_INTERVAL_MILLIS = 500L
         const val SOCKS_PORT_POLL_INTERVAL_MILLIS = 100L
     }
 }

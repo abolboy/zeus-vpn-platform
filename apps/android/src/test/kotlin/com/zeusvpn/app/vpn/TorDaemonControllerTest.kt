@@ -7,12 +7,34 @@ import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import kotlin.coroutines.CoroutineContext
 
 class TorDaemonControllerTest {
+    @Test
+    fun recognizesOnlyPackagedTorNativeAbis() {
+        assertTrue(isTorNativeAbiSupported(arrayOf("arm64-v8a")))
+        assertTrue(isTorNativeAbiSupported(arrayOf("armeabi-v7a")))
+        assertTrue(isTorNativeAbiSupported(arrayOf("x86_64")))
+        assertFalse(isTorNativeAbiSupported(arrayOf("x86")))
+        assertFalse(isTorNativeAbiSupported(emptyArray()))
+    }
+
+    @Test
+    fun unsupportedAbiFailsBeforeBindingTorService() = runBlocking {
+        val binding = FakeTorServiceBinding(circuitStatus = "1", socksEndpoint = "\"127.0.0.1:9050\"")
+        val controller = TorDaemonController(binding, DirectDispatcher, nativeAbiSupported = false)
+
+        val error = runCatching { controller.start() }.exceptionOrNull()
+
+        assertTrue(error is TorStartupException)
+        assertEquals("Tor is not supported on this device ABI", error?.message)
+        assertEquals(0, binding.bindCalls)
+        assertEquals(TorDaemonState.STOPPED, controller.state.value)
+    }
     @Test
     fun recognizesEstablishedTorCircuitStatus() {
         assertEquals(true, isTorCircuitEstablished("1"))

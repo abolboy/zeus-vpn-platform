@@ -138,8 +138,30 @@ func (s *PostgresStore) EnrollTorClientDevice(
 		if len(responseBody) == 0 || responseStatus == nil {
 			return TorClientDevice{}, false, errors.New("Tor idempotency record is incomplete")
 		}
-		var device TorClientDevice
-		if err := json.Unmarshal(responseBody, &device); err != nil {
+		var replay TorClientDevice
+		if err := json.Unmarshal(responseBody, &replay); err != nil {
+			return TorClientDevice{}, false, err
+		}
+		// Return current persisted state, not a stale enrollment snapshot. A later
+		// revocation must never be hidden by replaying an old successful response.
+		device := TorClientDevice{
+			Transport: "tor",
+			Entitlement: TorClientEntitlement{Status: "active"},
+		}
+		err = tx.QueryRow(ctx, `
+			SELECT id::text, user_id::text, device_ref, device_name, platform,
+			       client_version, status, created_at, updated_at, revoked_at
+			FROM tor_client_devices
+			WHERE user_id = $1::uuid AND id = $2::uuid
+		`, userID, replay.ID).Scan(
+			&device.ID, &device.UserID, &device.DeviceRef, &device.DeviceName,
+			&device.Platform, &device.ClientVersion, &device.Status,
+			&device.CreatedAt, &device.UpdatedAt, &device.RevokedAt,
+		)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return TorClientDevice{}, false, ErrDeviceNotFound
+		}
+		if err != nil {
 			return TorClientDevice{}, false, err
 		}
 		if err := tx.Commit(ctx); err != nil {

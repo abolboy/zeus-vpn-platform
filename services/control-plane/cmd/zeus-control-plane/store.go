@@ -109,6 +109,35 @@ type VPNDevice struct {
 	Peer VPNPeerProfile "json:\"peer\""
 }
 
+
+type CreateTorClientDeviceInput struct {
+	DeviceRef string `json:"device_ref"`
+	DeviceName string `json:"device_name"`
+	Platform string `json:"platform"`
+	ClientVersion string `json:"client_version"`
+}
+
+type TorClientDevice struct {
+	ID string `json:"id"`
+	UserID string `json:"user_id"`
+	DeviceRef string `json:"device_ref"`
+	DeviceName string `json:"device_name"`
+	Platform string `json:"platform"`
+	ClientVersion string `json:"client_version"`
+	Status string `json:"status"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
+	RevokedAt *time.Time `json:"revoked_at,omitempty"`
+}
+
+type TorClientStore interface {
+	CreateTorEnrollmentCode(context.Context, string, string, []byte, time.Time, string, *string) error
+	FindTorEnrollmentCodeUser(context.Context, []byte) (string, error)
+	EnrollTorClientDevice(context.Context, string, []byte, string, []byte, CreateTorClientDeviceInput, string, *string) (TorClientDevice, bool, error)
+	GetTorClientDevice(context.Context, string, string) (TorClientDevice, error)
+	RevokeTorClientDevice(context.Context, string, string, string, *string) (TorClientDevice, error)
+}
+
 type NodeIdentity struct {
 	ID string
 }

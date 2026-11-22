@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 )
 
 func (s *PostgresStore) CreateTorEnrollmentCode(
@@ -68,16 +69,26 @@ func (s *PostgresStore) FindTorEnrollmentCodeUser(ctx context.Context, tokenHash
 		return "", ErrEnrollmentCodeInvalid
 	}
 	var userID string
+	var expiresAt time.Time
+	var consumedAt, revokedAt *time.Time
 	err := s.pool.QueryRow(ctx, `
-		SELECT user_id::text
+		SELECT user_id::text, expires_at, consumed_at, revoked_at
 		FROM tor_client_enrollment_codes
-		WHERE token_hash = $1 AND revoked_at IS NULL
-		  AND consumed_at IS NULL AND expires_at > now()
-	`, tokenHash).Scan(&userID)
-	if errors.Is(err, pgx.ErrNoRows) {
+		WHERE token_hash = $1
+	`, tokenHash).Scan(&userID, &expiresAt, &consumedAt, &revokedAt)
+	if errors.Is(err, pgx.ErrNoRows) || revokedAt != nil {
 		return "", ErrEnrollmentCodeInvalid
 	}
-	return userID, err
+	if err != nil {
+		return "", err
+	}
+	if consumedAt != nil {
+		return "", ErrEnrollmentCodeUsed
+	}
+	if !expiresAt.After(time.Now().UTC()) {
+		return "", ErrEnrollmentCodeExpired
+	}
+	return userID, nil
 }
 
 func (s *PostgresStore) EnrollTorClientDevice(

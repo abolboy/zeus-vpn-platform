@@ -131,6 +131,7 @@ type TorClientDevice struct {
 }
 
 type TorClientStore interface {
+	EnsureExternalVPNUser(context.Context, string, string) (VPNUser, error)
 	CreateTorEnrollmentCode(context.Context, string, string, []byte, time.Time, string, *string) error
 	FindTorEnrollmentCodeUser(context.Context, []byte) (string, error)
 	EnrollTorClientDevice(context.Context, string, []byte, string, []byte, CreateTorClientDeviceInput, string, *string) (TorClientDevice, bool, error)

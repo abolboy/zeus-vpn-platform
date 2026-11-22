@@ -40,10 +40,12 @@ Add Tor as a second, user-selectable transport. Do not run two Android VPN inter
 ## Delivery sequence and acceptance gates
 
 ### Gate A — Tor daemon only
-- Add a pinned Tor Android dependency and a lifecycle wrapper.
-- Verify supported ABIs include the ZEUS release ABI and minSdk 24.
-- Test start, first-circuit readiness, stop-during-start, repeated start/stop, process recreation, and bounded shutdown.
-- Keep this gate explicitly labelled **local Tor proxy only**; no VPN-connected claim.
+- [x] Add a pinned Tor Android dependency and an initial lifecycle wrapper.
+- [x] Bind to the embedded TorService and wait for its first-circuit-ready status plus a valid loopback SOCKS port.
+- [x] Handle startup timeout, startup error, unexpected service stop, binding loss, and stop-during-start at the controller level.
+- [ ] Verify resolved AAR contents and release ABI packaging in an actual Android build.
+- [ ] Test start, first-circuit readiness, stop-during-start, repeated start/stop, process recreation, and bounded native shutdown on an emulator/device.
+- Keep this gate explicitly labelled **local Tor proxy only**; no VPN-connected claim. The controller cannot independently observe completion of native Tor shutdown after unbinding.
 
 ### Gate B — TUN-to-SOCKS data plane
 - Select and pin a maintained TUN-to-SOCKS implementation after source/license/API review.

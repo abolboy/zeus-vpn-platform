@@ -368,7 +368,11 @@ jobs:
           export ANDROID_SDK_ROOT="$ANDROID_HOME"
           export ANDROID_AVD_HOME="$HOME/.android/avd"
           mkdir -p "$ANDROID_AVD_HOME"
-          avdmanager create avd --force -n "zeus-api${{ matrix.api-level }}" -k "${{ matrix.system-image }}" --device "pixel_2"
+          if ! printf "no\\n" | timeout 90s avdmanager --verbose create avd --force -n "zeus-api${{ matrix.api-level }}" -k "${{ matrix.system-image }}" --device "pixel_2" > "zeus-avdmanager-api${{ matrix.api-level }}.log" 2>&1; then
+            cat "zeus-avdmanager-api${{ matrix.api-level }}.log"
+            exit 1
+          fi
+          test -f "$ANDROID_AVD_HOME/zeus-api${{ matrix.api-level }}.avd/config.ini"
           emulator -avd "zeus-api${{ matrix.api-level }}" -no-window -no-audio -no-boot-anim -gpu swiftshader_indirect -no-snapshot-save > "zeus-emulator-api${{ matrix.api-level }}.log" 2>&1 &
           timeout 180s adb wait-for-device
           boot_completed=""
@@ -404,6 +408,7 @@ jobs:
         with:
           name: zeus-hev-api${{ matrix.api-level }}-diagnostics
           path: |
+            zeus-avdmanager-api${{ matrix.api-level }}.log
             zeus-emulator-api${{ matrix.api-level }}.log
             hev-native-api${{ matrix.api-level }}.log
           if-no-files-found: ignore

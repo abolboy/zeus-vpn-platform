@@ -62,6 +62,8 @@ dependencies {
     implementation("info.guardianproject:tor-android:0.4.9.17")
     // Consume Guardian Project TorService's in-process-only status and error events.
     implementation("androidx.localbroadcastmanager:localbroadcastmanager:1.1.0")
+    // Hev 2.20.0 is fetched by scripts/fetch-hev-aar.sh and SHA-256 verified.
+    implementation(files("libs/hev-socks5-tunnel-2.20.0.aar"))
     coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.0.3")
     implementation("androidx.compose.foundation:foundation")
     implementation("androidx.compose.material3:material3")

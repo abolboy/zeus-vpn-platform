@@ -53,3 +53,12 @@ Before provisioning any gateway:
 - Build and test the service in CI and an isolated environment before any host provisioning.
 
 No AWS/VPS resource, DNS record, security group, firewall, database, Tor node, or production service was created or modified. Hosting target is currently **UNSELECTED / NEEDS USER DECISION**. The detailed contract and gates are in [tor-server-enforced-access-architecture.md](tor-server-enforced-access-architecture.md).
+
+
+## AWS hosting choice (2026-11-22)
+
+AWS is now the user-selected target platform. The exact EC2 placement is still unverified because no live AWS account/region/instance/VPC/security-group inventory is available in this workflow.
+
+Preferred low-operations option: co-locate Tor Gateway as isolated systemd services on the existing WireGuard EC2 host only if read-only capacity, network topology, and blast-radius checks pass. Keep separate service users, units, directories, resource limits, and private-only Tor SOCKS/control listeners. Do not modify WireGuard interfaces, keys, peers, AllowedIPs, routes, ports, firewall rules, or systemd unit. If co-location fails those checks, use a separate EC2 instance.
+
+See [tor-aws-gateway-deployment.md](tor-aws-gateway-deployment.md) for preflight, isolation, network, cost, deployment, and rollback gates. AWS resource changes remain unapproved and unperformed.

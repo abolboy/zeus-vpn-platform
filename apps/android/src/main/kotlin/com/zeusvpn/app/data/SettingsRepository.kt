@@ -49,6 +49,19 @@ class SettingsRepository(context: Context) {
         store.edit { it[TUNNEL_DESIRED] = desired }
     }
 
+    /** Device UUID is an identifier, not a credential; account tokens remain Keystore-encrypted. */
+    suspend fun saveTorDeviceId(deviceId: String) {
+        require(deviceId.matches(Regex("^[0-9a-fA-F-]{36}$"))) { "Invalid Tor device ID" }
+        store.edit { it[TOR_DEVICE_ID] = deviceId }
+    }
+
+    suspend fun loadTorDeviceId(): String? =
+        store.data.first()[TOR_DEVICE_ID]?.takeIf { it.matches(Regex("^[0-9a-fA-F-]{36}$")) }
+
+    suspend fun clearTorDeviceId() {
+        store.edit { it.remove(TOR_DEVICE_ID) }
+    }
+
     private fun Preferences.toSplitTunnelPolicy(): SplitTunnelPolicy {
         val mode = runCatching {
             SplitTunnelMode.valueOf(this[SPLIT_TUNNEL_MODE] ?: SplitTunnelMode.ALL.name)
@@ -62,6 +75,7 @@ class SettingsRepository(context: Context) {
     private companion object {
         val AUTO_RECONNECT = booleanPreferencesKey("auto_reconnect_enabled")
         val TUNNEL_DESIRED = booleanPreferencesKey("tunnel_desired")
+        val TOR_DEVICE_ID = stringPreferencesKey("tor_device_id")
         val SPLIT_TUNNEL_MODE = stringPreferencesKey("split_tunnel_mode")
         val SPLIT_TUNNEL_PACKAGES = stringSetPreferencesKey("split_tunnel_packages")
     }

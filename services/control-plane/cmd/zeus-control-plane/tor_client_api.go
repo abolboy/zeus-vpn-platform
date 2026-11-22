@@ -121,12 +121,6 @@ func (a *API) handleTorClientEnrollment(w http.ResponseWriter, r *http.Request) 
 		writeError(w, http.StatusBadRequest, "idempotency_key_required", "کلید یکتای درخواست معتبر نیست", requestID)
 		return
 	}
-	store, ok := a.store.(TorClientStore)
-	if !ok {
-		writeError(w, http.StatusServiceUnavailable, "not_ready", "ثبت‌نام دستگاه Tor آماده نیست", requestID)
-		return
-	}
-
 	authorization := strings.TrimSpace(r.Header.Get("Authorization"))
 	scheme, credential, hasCredential := strings.Cut(authorization, " ")
 	if !hasCredential || credential == "" || strings.ContainsAny(credential, " \t\r\n") {
@@ -135,6 +129,11 @@ func (a *API) handleTorClientEnrollment(w http.ResponseWriter, r *http.Request) 
 	}
 	if strings.EqualFold(scheme, "Bearer") && a.customerVerifier == nil {
 		writeError(w, http.StatusServiceUnavailable, "customer_identity_not_configured", "ورود مشتری هنوز پیکربندی نشده است", requestID)
+		return
+	}
+	store, ok := a.store.(TorClientStore)
+	if !ok {
+		writeError(w, http.StatusServiceUnavailable, "not_ready", "ثبت‌نام دستگاه Tor آماده نیست", requestID)
 		return
 	}
 

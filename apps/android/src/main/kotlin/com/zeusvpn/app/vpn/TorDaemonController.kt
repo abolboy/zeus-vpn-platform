@@ -6,6 +6,7 @@ import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.content.ServiceConnection
+import android.os.Build
 import android.os.IBinder
 import androidx.localbroadcastmanager.content.LocalBroadcastManager
 import kotlinx.coroutines.CancellationException
@@ -169,6 +170,11 @@ private class AndroidTorServiceBinding(context: Context) : TorServiceBinding {
  * This class exposes a local SOCKS endpoint. It does not route Android device
  * traffic through Tor and must not be presented as a connected VPN by itself.
  */
+private val TOR_NATIVE_SUPPORTED_ABIS = setOf("arm64-v8a", "armeabi-v7a", "x86_64")
+
+internal fun isTorNativeAbiSupported(supportedAbis: Array<String>): Boolean =
+    supportedAbis.any { it in TOR_NATIVE_SUPPORTED_ABIS }
+
 internal fun isTorCircuitEstablished(value: String?): Boolean =
     value?.trim()?.trim('"') == "1"
 
@@ -193,10 +199,12 @@ internal fun parseTorSocksEndpoint(value: String?): TorSocksEndpoint? {
 class TorDaemonController internal constructor(
     private val serviceBinding: TorServiceBinding,
     private val mainDispatcher: CoroutineDispatcher,
+    private val nativeAbiSupported: Boolean = true,
 ) {
     constructor(context: Context) : this(
         AndroidTorServiceBinding(context.applicationContext),
         Dispatchers.Main.immediate,
+        isTorNativeAbiSupported(Build.SUPPORTED_ABIS),
     )
 
     private val operationMutex = Mutex()
@@ -211,6 +219,9 @@ class TorDaemonController internal constructor(
 
     suspend fun start(timeoutMillis: Long = DEFAULT_START_TIMEOUT_MILLIS): TorSocksEndpoint =
         withContext(Dispatchers.IO) {
+            if (!nativeAbiSupported) {
+                throw TorStartupException("Tor is not supported on this device ABI")
+            }
             require(timeoutMillis in MIN_START_TIMEOUT_MILLIS..MAX_START_TIMEOUT_MILLIS) {
                 "Tor startup timeout is outside the supported range"
             }

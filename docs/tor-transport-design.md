@@ -25,7 +25,7 @@ Add Tor as a second, user-selectable transport. Do not run two Android VPN inter
 
 ## Routing and leak-prevention requirements
 
-- Tor supports TCP streams, not arbitrary UDP forwarding. Tor SOCKS5 does not implement UDP ASSOCIATE or IPv6 CONNECT; unsupported UDP and IPv6 must be dropped inside the tunnel, never sent directly.
+- Tor supports TCP streams, not arbitrary UDP forwarding; SOCKS5 UDP ASSOCIATE is unsupported. Current Tor specifications do support IPv6 address forms in SOCKS5, but IPv6 exit traffic is controlled by the `IPv6Traffic` flag on `SocksPort`. The embedded TorService's effective `torrc` has not yet been verified to enable that flag, so the first Tor VPN milestone must block IPv6 inside the TUN until explicit configuration and runtime tests prove it works; never allow IPv6 direct egress.
 - DNS requests must be resolved through Tor (remote hostname resolution after a controlled fake-DNS mapping, or another reviewed design); local resolver fallback is forbidden in Tor mode. Verify that the chosen adapter never sends DNS to the device's physical resolver.
 - IPv4 and IPv6 policy must be explicit. Until IPv6 is supported through the Tor path, block IPv6 inside Tor mode rather than allowing direct egress.
 - The TUN adapter must have bounded queues, clean cancellation, descriptor ownership, and deterministic shutdown.

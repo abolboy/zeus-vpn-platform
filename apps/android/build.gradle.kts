@@ -10,7 +10,11 @@ val zeusOidcRedirectUri = providers.gradleProperty("ZEUS_OIDC_REDIRECT_URI").orE
 
 android {
     namespace = "com.zeusvpn.app"
-    compileSdk = 36
+    compileSdk {
+        version = release(37) {
+            minorApiLevel = 2
+        }
+    }
     defaultConfig {
         applicationId = "com.zeusvpn.app"
         minSdk = 24

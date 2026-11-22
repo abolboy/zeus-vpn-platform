@@ -49,8 +49,8 @@ build_log="$tmp_dir/ndk-build.log"
     exit 1
   fi
 )
-for target in armv7a-linux-androideabi24 aarch64-linux-android24 i686-linux-android24 x86_64-linux-android24; do
-  grep -Fq -- "--target=$target" "$build_log" || {
+for target in armv7-none-linux-androideabi24 aarch64-none-linux-android24 i686-none-linux-android24 x86_64-none-linux-android24; do
+  grep -Fq -- "-target $target" "$build_log" || {
     echo "The native build did not prove the API 24 compiler target: $target" >&2
     tail -n 120 "$build_log" >&2
     exit 1

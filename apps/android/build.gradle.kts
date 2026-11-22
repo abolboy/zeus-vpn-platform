@@ -53,6 +53,9 @@ dependencies {
     implementation("androidx.compose.material:material-icons-extended")
     // Official embeddable WireGuard userspace tunnel backend.
     implementation("com.wireguard.android:tunnel:1.0.20260102")
+    // Guardian Project's embedded Tor daemon. This is a local SOCKS proxy only;
+    // device-wide VPN routing is implemented in a separate, reviewed data-plane layer.
+    implementation("info.guardianproject:tor-android:0.4.9.17")
     coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.0.3")
     implementation("androidx.compose.foundation:foundation")
     implementation("androidx.compose.material3:material3")

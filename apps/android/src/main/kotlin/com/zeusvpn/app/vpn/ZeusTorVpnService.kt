@@ -174,7 +174,7 @@ class ZeusTorVpnService : VpnService() {
                 TorVpnServiceStatus.requireProcessRestart()
                 updateNotification("تونل بسته شد؛ برای بازیابی برنامه را کامل ببندید و دوباره اجرا کنید")
                 stopForeground(STOP_FOREGROUND_REMOVE)
-                stopSelf(startId)
+                stopServiceInstance(startId)
                 return
             }
 
@@ -182,8 +182,12 @@ class ZeusTorVpnService : VpnService() {
             TorVpnServiceStatus.set(TorVpnServiceState.STOPPED)
             TorVpnServiceStatus.clearRestartRequirement()
             stopForeground(STOP_FOREGROUND_REMOVE)
-            stopSelf(startId)
+            stopServiceInstance(startId)
         }
+    }
+
+    private fun stopServiceInstance(startId: Int) {
+        if (startId > 0) stopSelf(startId) else stopSelf()
     }
 
     private fun startForegroundCompat(notification: Notification) {

@@ -158,8 +158,10 @@ private class AndroidTorServiceBinding(context: Context) : TorServiceBinding {
 
     private fun unregisterStatusReceiver() {
         val receiver = statusReceiver ?: return
-        statusReceiver = null
+        // Keep the reference until Android confirms unregister succeeded so a
+        // later cleanup attempt can retry after a transient failure.
         localBroadcastManager.unregisterReceiver(receiver)
+        statusReceiver = null
     }
 }
 

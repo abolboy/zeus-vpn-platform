@@ -6,6 +6,19 @@ import org.junit.Test
 
 class TorDaemonControllerTest {
     @Test
+    fun recognizesEstablishedTorCircuitStatus() {
+        assertEquals(true, isTorCircuitEstablished("1"))
+        assertEquals(true, isTorCircuitEstablished("\"1\""))
+    }
+
+    @Test
+    fun rejectsUnestablishedOrUnknownTorCircuitStatus() {
+        assertEquals(false, isTorCircuitEstablished("0"))
+        assertEquals(false, isTorCircuitEstablished(null))
+        assertEquals(false, isTorCircuitEstablished("unknown"))
+    }
+
+    @Test
     fun parsesQuotedIpv4LoopbackListener() {
         assertEquals(
             TorSocksEndpoint("127.0.0.1", 9050),

@@ -38,3 +38,18 @@ Delivery target: Draft PR #28, branch feat/android-tor-transport-pr27.
 ## Monitoring
 
 Track registration outcomes, rate limits, revocations, Tor bootstrap stage, service restart counts, Hev failures and anonymized connectivity outcomes. Never log OIDC tokens, invitation codes, SOCKS/control credentials, destination domains, DNS query contents or traffic payloads.
+
+
+## Addendum — gateway-based server enforcement (2026-11-22)
+
+The accepted target architecture now includes a mandatory ZEUS-controlled Tor egress gateway. This is a new service boundary and is not covered by the original Android-only rollout sequence.
+
+Before provisioning any gateway:
+- Select and verify the hosting target, account/project, region, network path, and owner.
+- Complete a capacity/bandwidth and cost estimate, ingress exposure review, egress restrictions, TLS identity/rotation plan, and rollback design.
+- Confirm the gateway can reach only its intended Tor daemon path for destination traffic; there must be no direct-egress fallback.
+- Define the control-plane authorization protocol, online-check/cache behavior, revocation propagation SLA, active-session termination, and fail-closed behavior.
+- Define observability that excludes destination history, DNS query content, traffic payloads, and reusable credentials.
+- Build and test the service in CI and an isolated environment before any host provisioning.
+
+No AWS/VPS resource, DNS record, security group, firewall, database, Tor node, or production service was created or modified. Hosting target is currently **UNSELECTED / NEEDS USER DECISION**. The detailed contract and gates are in [tor-server-enforced-access-architecture.md](tor-server-enforced-access-architecture.md).

@@ -250,16 +250,8 @@ class TorDaemonController(context: Context) {
         }
     }
 
-    private fun readLiveSocksPort(service: TorService): Int {
-        val listener = service.getInfo("net/listeners/socks")
-            ?.trim()
-            ?.removeSurrounding("\"")
-            ?: return -1
-        return listener.substringAfterLast(':')
-            .trimEnd('"', ']')
-            .toIntOrNull()
-            ?: -1
-    }
+    private fun readLiveSocksEndpoint(service: TorService): TorSocksEndpoint? =
+        parseTorSocksEndpoint(service.getInfo("net/listeners/socks"))
 
     private fun completeStartupIfReady() {
         if (circuitReadyReceived) {

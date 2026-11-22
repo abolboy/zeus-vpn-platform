@@ -26,7 +26,7 @@ Headers:
 - Content-Type: application/json
 - Accept: application/json
 
-Request, maximum 16 KiB:
+Request, maximum 8 KiB:
 {
   "device_ref": "random-installation-uuid",
   "device_name": "Android device",
@@ -56,7 +56,7 @@ Response:
   "entitlement": { "status": "active", "expires_at": null }
 }
 
-Entitlement is derived from authoritative account state. Null expiry means no fixed expiry is configured; client input cannot set entitlement.
+The handler requires an active account. Current response entitlement is `active` with null expiry; subscription/expiry policy is not yet integrated. Client input cannot set entitlement.
 
 ## Read and revoke
 
@@ -86,20 +86,20 @@ Add tor_client_devices:
 - unique (user_id, device_ref);
 - index (user_id, status, created_at).
 
-Add Tor-specific invitation and idempotency records, or generalize existing records only with migration/backward-compatibility tests. Do not store Tor IDs in the WireGuard-only invitation FK.
+Add the separate `tor_client_enrollment_codes` table; reuse `client_device_idempotency_records` with route `POST:/v1/client/tor/devices`. Do not store Tor IDs in the WireGuard-only invitation FK.
 
 Shared device quota must be transactional:
 - lock vpn_users row;
 - verify account active;
-- count non-revoked Tor devices plus WireGuard devices in slot-reserving states: provisioning, active, revoking, error;
+- count active Tor devices plus WireGuard devices in slot-reserving states: provisioning, active, revoking, error;
 - compare max_devices;
 - insert device, consume invitation if used, persist idempotent response, write audit event in one transaction.
 
-Existing WireGuard createVPNDeviceTx must also count active Tor devices under the same account lock, or parallel cross-transport enrollments can exceed quota.
+Existing WireGuard createVPNDeviceTx also counts active Tor devices under the same account lock, preventing parallel cross-transport enrollments from exceeding quota.
 
 ## Stable errors
 
-customer_identity_invalid, customer_account_inactive, activation_code_invalid, activation_code_expired, activation_code_used, activation_code_revoked, invalid_device_ref, invalid_device_name, invalid_platform, invalid_client_version, device_limit_reached, device_conflict, idempotency_key_required, idempotency_conflict, device_not_found, rate_limited.
+customer_identity_invalid, customer_identity_not_configured, customer_account_inactive, enrollment_code_invalid, enrollment_code_expired, enrollment_code_used, invalid_device_ref, invalid_device_name, invalid_client, device_limit_reached, device_conflict, idempotency_key_required, idempotency_conflict, device_not_found, rate_limited.
 
 Use existing safe error envelope and request ID. Never return SQL, stack traces, topology, token hashes, or raw invitation codes.
 
@@ -110,7 +110,7 @@ Use existing safe error envelope and request ID. Never return SQL, stack traces,
 - Scope every read/write to authenticated account in SQL.
 - Use per-account idempotency request hashes and lock account row before quota check.
 - Hash invitation codes at rest; redact Authorization headers; never log tokens/codes.
-- Bound body size, strict content type/JSON decoding, endpoint-specific rate limits, and audit events.
+- Enrollment body is capped at 8 KiB and decoded with strict JSON validation; enrollment requests are rate-limited by source IP and audit events are recorded.
 - Revocation is atomic; replay cannot restore revoked state.
 - Tor SOCKS/control ports remain loopback-only.
 

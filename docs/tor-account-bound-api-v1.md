@@ -138,3 +138,23 @@ Use existing safe error envelope and request ID. Never return SQL, stack traces,
 7. Keep server-side WireGuard support until separately deprecated.
 
 Non-goals: server-side Tor relay, AWS/VPS/firewall/DNS/node-agent changes, production database changes.
+
+
+## Server-enforced gateway access — accepted architecture, not yet implemented
+
+The selected security model is a mandatory ZEUS-controlled Tor egress gateway. The Android app is not an authorization boundary. A modified APK may bypass client checks; only a gateway that every ZEUS-managed session must traverse can enforce ZEUS account/device access.
+
+The gateway protects access to ZEUS's managed Tor service. It cannot prevent a user or modified APK from independently connecting to public Tor or unrelated third-party proxies outside ZEUS.
+
+See [tor-server-enforced-access-architecture.md](tor-server-enforced-access-architecture.md) for the target data path, threat model, operational requirements, and release gates.
+
+Proposed future API surface (NOT IMPLEMENTED):
+- `POST /v1/client/tor/devices/{deviceID}/gateway-grants`: issue a short-lived, device-bound, gateway-audience grant after account/device/entitlement checks.
+- `GET /v1/admin/tor/devices`: operator-authorized, paginated device inventory.
+- `POST /v1/admin/tor/devices/{deviceID}/revoke`: operator-authorized, audited, idempotent revocation.
+
+A signed token by itself does not provide immediate revocation. The gateway must check online authorization for each new proxy session or use a bounded cache with authenticated invalidation and a documented maximum revocation delay. Active sessions must be tracked and terminated after revocation. Control-plane or authorization uncertainty must fail closed.
+
+Invitation enrollment must exchange the one-time invitation for a device-bound credential; the invitation must never become a long-lived gateway secret. Gateway credentials must be returned once, scoped to one device and audience, encrypted in transit, and never logged or persisted in plaintext.
+
+Hev upstream SOCKS5 username/password support does not encrypt the SOCKS5 transport. Do not connect Hev directly to a public plaintext SOCKS5 gateway with reusable credentials. A maintained authenticated encrypted transport/adapter is a prerequisite and remains an implementation decision.

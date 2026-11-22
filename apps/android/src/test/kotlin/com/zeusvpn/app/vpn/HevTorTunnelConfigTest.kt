@@ -13,6 +13,7 @@ class HevTorTunnelConfigTest {
 
         assertTrue(config.contains("address: '127.0.0.1'"))
         assertTrue(config.contains("port: 9050"))
+        assertTrue(config.contains("ipv4: '${HevTorTunnelConfig.TUNNEL_IPV4_ADDRESS}'"))
         assertTrue(config.contains("udp: 'udp'"))
         assertTrue(config.contains("address: ${HevTorTunnelConfig.MAP_DNS_ADDRESS}"))
         assertTrue(config.contains("network: ${HevTorTunnelConfig.MAP_DNS_NETWORK}"))

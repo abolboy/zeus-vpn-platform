@@ -74,6 +74,22 @@ class TorDaemonControllerTest {
     }
 
     @Test
+    fun stopAfterCircuitEstablishedButBeforeSocksEndpointReleasesBinding() = runBlocking {
+        val binding = FakeTorServiceBinding(circuitStatus = "1", socksEndpoint = null)
+        val controller = TorDaemonController(binding, DirectDispatcher)
+        val starting = async { runCatching { controller.start() } }
+
+        withTimeout(2_000) { binding.bound.await() }
+        withTimeout(2_000) { binding.socksPollStarted.await() }
+        controller.stop()
+
+        assertTrue(starting.await().isFailure)
+        assertEquals(TorDaemonState.STOPPED, controller.state.value)
+        assertEquals(1, binding.bindCalls)
+        assertEquals(1, binding.unbindCalls)
+    }
+
+    @Test
     fun cancellationDuringStartupReleasesBinding() = runBlocking {
         val binding = FakeTorServiceBinding(circuitStatus = "0", socksEndpoint = null)
         val controller = TorDaemonController(binding, DirectDispatcher)
@@ -122,6 +138,7 @@ class TorDaemonControllerTest {
         private val socksEndpoint: String?,
     ) : TorServiceBinding {
         val bound = CompletableDeferred<Unit>()
+        val socksPollStarted = CompletableDeferred<Unit>()
         var bindCalls = 0
             private set
         var unbindCalls = 0
@@ -135,7 +152,10 @@ class TorDaemonControllerTest {
             listener.onConnected(object : TorServiceApi {
                 override fun getInfo(key: String): String? = when (key) {
                     "status/circuit-established" -> circuitStatus
-                    "net/listeners/socks" -> socksEndpoint
+                    "net/listeners/socks" -> {
+                        socksPollStarted.complete(Unit)
+                        socksEndpoint
+                    }
                     else -> null
                 }
             })

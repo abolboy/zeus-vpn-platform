@@ -87,7 +87,7 @@ class TorDaemonController(context: Context) {
                             if (mutableState.value == TorDaemonState.FAILED) {
                                 throw TorStartupException("Tor failed before its SOCKS endpoint became available")
                             }
-                            val port = torService?.socksPort ?: -1
+                            val port = torService?.let(::readLiveSocksPort) ?: -1
                             if (port in VALID_SOCKS_PORT_RANGE) {
                                 return@withTimeoutOrNull TorSocksEndpoint(LOOPBACK_HOST, port)
                             }
@@ -230,6 +230,17 @@ class TorDaemonController(context: Context) {
             serviceConnection = null
             throw TorStartupException("Android refused to bind the embedded Tor service")
         }
+    }
+
+    private fun readLiveSocksPort(service: TorService): Int {
+        val listener = service.getInfo("net/listeners/socks")
+            ?.trim()
+            ?.removeSurrounding("\\\"")
+            ?: return -1
+        return listener.substringAfterLast(':')
+            .trimEnd('\\\"', ']')
+            .toIntOrNull()
+            ?: -1
     }
 
     private fun completeStartupIfReady() {

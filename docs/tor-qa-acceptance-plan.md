@@ -1,13 +1,13 @@
 # ZEUS Tor-only migration QA acceptance plan
 
-Status: Tor API, additive schema, shared quota logic, Android Tor enrollment repository, encrypted retry record, and validation tests are present on the feature branch. CI and disposable PostgreSQL verification are pending; UI/service and VPN data-plane tests remain unrun.
+Status: Tor API, additive schema, shared quota logic, Android Tor enrollment repository, encrypted retry record, Tor-only dashboard, VpnService host, and validation tests are present on the feature branch. CI and disposable PostgreSQL verification are pending; Android service and VPN data-plane tests remain unrun.
 
 | Gate | Test | Expected result | Status |
 |---|---|---|---|
 | API | Valid signed OIDC Tor enrollment | 201, transport=tor, no peer object | NOT RUN — implementation added; test execution pending |
 | API | Wrong issuer/audience, expired token, unverified email | 401 safe error | NOT RUN |
 | API readiness | Missing customer OIDC verifier | 503 fail-closed response | NOT RUN — test added |
-| Android client | OIDC/invitation enrollment, status and revoke routes | Tor endpoints only; no WG key or profile | NOT RUN — repository added, UI wiring pending |
+| Android client | OIDC/invitation enrollment, status and revoke routes | Tor endpoints only; no WG key or profile | NOT RUN — repository and dashboard added |
 | Android storage | Pending Tor device ref and idempotency survive process death | Dedicated Keystore AES-GCM record; no ID token persisted | NOT RUN — implementation added |
 | API validation | Unknown fields including public_key/user_id/node_id | 400 strict-schema rejection | NOT RUN — test added |
 | API validation | Non-Android platform and invalid client version | 400 validation error | NOT RUN — tests added |
@@ -18,13 +18,14 @@ Status: Tor API, additive schema, shared quota logic, Android Tor enrollment rep
 | Invitation | Valid one-time Tor invitation | One device only; hash stored | NOT RUN |
 | Invitation | Expired/revoked/replayed invitation | Rejected | NOT RUN |
 | Android storage | Inspect pending record | No WG keys; tokens encrypted | NOT RUN |
-| Android service | VPN consent denied | No false Connected state; cleanup | NOT RUN |
-| Android service | Start/stop/revoke/process death | Deterministic cleanup; no stale worker | NOT RUN |
+| Android service | VPN consent denied | No false Connected state; cleanup | NOT RUN — service host added |
+| Android service | Foreground service start on API 24/28/29/34+ | Correct foreground type and notification lifecycle | NOT RUN — manifest/service added |
+| Android service | Start/stop/revoke/process death | Deterministic cleanup; no stale worker | NOT RUN — lifecycle host added |
 | Data plane | IPv4 TCP request | Tor exit only; no physical direct egress | NOT RUN |
 | Data plane | IPv6 request | Tor if supported; otherwise blocked in TUN | NOT RUN |
 | Data plane | UDP/QUIC | Fails closed; no direct egress | NOT RUN |
 | DNS | A/AAAA lookup and DNS failure | DNS stays in tunnel; no fallback | NOT RUN |
-| UI | Tor ready but TUN/Hev not ready | Not Connected | NOT RUN |
+| UI | Tor ready but TUN/Hev not ready | Not Connected | NOT RUN — Tor-only dashboard added; runtime test pending |
 | Connectivity | Probe through Tor SOCKS using remote-domain SOCKS5 request | Proves Tor path; app UID bypass cannot satisfy the check | NOT RUN |
 | Connectivity negative | Physical-network HTTPS probe while ZEUS UID is excluded | Must not be accepted as Tor connectivity evidence | NOT RUN |
 | Build | Remove Android WG AAR after migration | Debug/release build; one ZEUS VPN service | NOT RUN |

@@ -1174,19 +1174,19 @@ func selectProvisioningNode(ctx context.Context, tx pgx.Tx) (provisioningNode, e
 			return provisioningNode{}, err
 		}
 		node.ipv4Pool, err = netip.ParsePrefix(ipv4PoolText)
-		if err != nil || !node.ipv4Pool.Addr().Is4() || node.ipv4Pool.Bits() < 16 || node.ipv4Pool.Bits() > 30 {
+		if err != nil || !validNodeAddressPool(node.ipv4Pool, true) {
 			continue
 		}
 		node.ipv6Pool, err = netip.ParsePrefix(ipv6PoolText)
-		if err != nil || !node.ipv6Pool.Addr().Is6() || node.ipv6Pool.Bits() < 48 || node.ipv6Pool.Bits() > 120 {
+		if err != nil || !validNodeAddressPool(node.ipv6Pool, false) {
 			continue
 		}
 		node.interfaceIPv4, err = netip.ParseAddr(interfaceIPv4Text)
-		if err != nil || !node.ipv4Pool.Contains(node.interfaceIPv4) {
+		if err != nil || !node.interfaceIPv4.Is4() || !node.ipv4Pool.Contains(node.interfaceIPv4) {
 			continue
 		}
 		node.interfaceIPv6, err = netip.ParseAddr(interfaceIPv6Text)
-		if err != nil || !node.ipv6Pool.Contains(node.interfaceIPv6) {
+		if err != nil || !node.interfaceIPv6.Is6() || node.interfaceIPv6.Is4In6() || !node.ipv6Pool.Contains(node.interfaceIPv6) {
 			continue
 		}
 		if !validWireGuardPublicKey(node.serverPublicKey) || strings.TrimSpace(node.endpointHost) == "" || node.endpointPort < 1 || node.endpointPort > 65535 {
@@ -1200,9 +1200,31 @@ func selectProvisioningNode(ctx context.Context, tx pgx.Tx) (provisioningNode, e
 	return provisioningNode{}, ErrNoProvisioningNode
 }
 
+func validNodeAddressPool(prefix netip.Prefix, ipv4 bool) bool {
+	if !prefix.IsValid() {
+		return false
+	}
+	prefix = prefix.Masked()
+	network := prefix.Addr()
+	if ipv4 {
+		if !network.Is4() || prefix.Bits() < 16 || prefix.Bits() > 30 {
+			return false
+		}
+	} else if !network.Is6() || network.Is4In6() || prefix.Bits() < 48 || prefix.Bits() > 120 {
+		return false
+	}
+	return network.IsGlobalUnicast() && !network.IsLinkLocalUnicast()
+}
+
 func allocateNodeAddress(prefix netip.Prefix, used map[netip.Addr]struct{}, ipv4 bool) (netip.Addr, error) {
-	candidate := prefix.Masked().Addr().Next()
-	for probes := 0; probes < 65536 && candidate.IsValid() && prefix.Contains(candidate); probes++ {
+	if !validNodeAddressPool(prefix, ipv4) {
+		return netip.Addr{}, ErrAddressPoolExhausted
+	}
+	prefix = prefix.Masked()
+	candidate := prefix.Addr().Next()
+	// Every rejected candidate is either in used or the single IPv4 broadcast address.
+	// This bound still permits pools with more than 65,536 allocated IPv6 addresses.
+	for probes, maxProbes := 0, len(used)+2; probes < maxProbes && candidate.IsValid() && prefix.Contains(candidate); probes++ {
 		_, occupied := used[candidate]
 		if !occupied && candidate.IsGlobalUnicast() && !candidate.IsLinkLocalUnicast() &&
 			(!ipv4 || !isIPv4Broadcast(candidate, prefix)) {
